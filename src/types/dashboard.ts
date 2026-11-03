@@ -1,0 +1,108 @@
+export type ViewMode = 'ejecutiva' | 'operativa';
+export type NavSection = 'Inicio' | 'Dashboard' | 'Órdenes' | 'Seguimiento' | 'Eficiencia' | 'Experiencia (CSAT)';
+
+export interface KpiData {
+  total_ordenes: number;
+  whs_enviados: number;
+  whs_leidos: number;
+  whs_sent: number;
+  whs_delivered: number;
+  whs_failed: number;
+  whs_no_enviado: number;
+  ingreso_tracking: number;
+  reprogramaciones: number;
+  encuestas_respondidas: number;
+  csat_avg?: number;
+  leidos_sin_ingreso: number;
+  av_total: number;
+  av_enviados: number;
+  av_leidos: number;
+  av_tracking: number;
+  pref_total: number;
+  pref_enviados: number;
+  pref_leidos: number;
+  pref_tracking: number;
+}
+
+export interface EvolutionPoint {
+  fecha: string;
+  total: number;
+  enviados: number;
+  leidos: number;
+  tracking: number;
+}
+
+export interface RealOrder {
+  orden_id: number;
+  ticket: string;
+  cliente: string;
+  telefono: string;
+  producto: string;
+  servicio_tipo: string;
+  tipo_trabajo: string;
+  estado_ot: string;
+  fecha_solicitud_fmt: string;
+  sector_operativo: string;
+  distrito: string;
+  partner: string;
+  cuadrilla: string;
+  se_envio_wsp: string;
+  estado_wsp: string;
+  ingreso_tracking: string;
+  link_tracking: string;
+  reprogramo?: string;
+  respondio_encuesta?: string;
+  [key: string]: any;
+}
+
+export interface PartnerRankItem {
+  rank: number;
+  name: string;
+  surveys: number;
+  score: string;
+  csat: string;
+}
+
+export interface GeoPoint {
+  id: string;
+  kind: 'cliente' | 'tecnico' | 'cto';
+  label: string;
+  detail?: string;
+  lat: number;
+  lng: number;
+}
+
+export interface CalculatedMetrics {
+  ordenes: string;
+  whsEnviados: string;
+  whsPct: string;
+  leidos: string;
+  readPct: string;
+  tracking: string;
+  trackPct: string;
+  trackOverReadPct: string;
+  reprog: string;
+  csatCount: string;
+  sent: string;
+  sentPct: string;
+  delivered: string;
+  deliveredPct: string;
+  failed: string;
+  failedPct: string;
+  noEnviado: string;
+  noEnviadoPct: string;
+  leidosSinIngreso: string;
+  leidosSinIngresoPct: string;
+  avTotalFmt: string;
+  avEnviadosFmt: string;
+  avTrackingFmt: string;
+  avPct: string;
+  avOverReadPct: string;
+  avBarWidth: number;
+  prefTotalFmt: string;
+  prefEnviadosFmt: string;
+  prefTrackingFmt: string;
+  prefPct: string;
+  prefOverReadPct: string;
+  prefBarWidth: number;
+}
