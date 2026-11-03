@@ -20,8 +20,11 @@ export default function App() {
   const todayStr = new Date().toLocaleDateString('en-CA');
   const [startDate, setStartDate] = useState<string>(todayStr);
   const [endDate, setEndDate] = useState<string>(todayStr);
-  const [service, setService] = useState<string>('Todos los servicios');
-  const [zone, setZone] = useState<string>('Todas las zonas');
+  const [selectedServices, setSelectedServices] = useState<string[]>([]);
+  const [globalSearch, setGlobalSearch] = useState<string>('');
+  const [ignoreDates, setIgnoreDates] = useState<boolean>(false);
+  const service = selectedServices.length > 0 ? selectedServices.join(',') : 'Todos los servicios';
+  const zone = 'Todas las zonas';
 
   const [serviceOptions, setServiceOptions] = useState<string[]>([]);
   const [zoneOptions, setZoneOptions] = useState<string[]>([]);
@@ -191,14 +194,15 @@ export default function App() {
           dbOnline={dbOnline}
           startDate={startDate}
           endDate={endDate}
-          service={service}
-          zone={zone}
+          selectedServices={selectedServices}
           serviceOptions={serviceOptions}
-          zoneOptions={zoneOptions}
+          globalSearch={globalSearch}
+          ignoreDates={ignoreDates}
           setStartDate={setStartDate}
           setEndDate={setEndDate}
-          setService={setService}
-          setZone={setZone}
+          setSelectedServices={setSelectedServices}
+          setGlobalSearch={setGlobalSearch}
+          setIgnoreDates={setIgnoreDates}
           onConsult={() => fetchDashboardData(startDate, endDate, service, zone, true)}
         />
 
@@ -254,7 +258,8 @@ export default function App() {
             startDate={startDate}
             endDate={endDate}
             service={service}
-            zone={zone}
+            globalSearch={globalSearch}
+            ignoreDates={ignoreDates}
             onSelectOrder={setSelectedOrder}
           />
         )}
@@ -264,7 +269,8 @@ export default function App() {
             startDate={startDate}
             endDate={endDate}
             service={service}
-            zone={zone}
+            globalSearch={globalSearch}
+            ignoreDates={ignoreDates}
             onSelectOrder={setSelectedOrder}
           />
         )}

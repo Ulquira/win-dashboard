@@ -1,7 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
-  Layers, Search, Filter, ChevronDown, User,
-  ChevronLeft, ChevronRight, RefreshCw, Globe
+  Filter, ChevronDown, User, ChevronLeft, ChevronRight, RefreshCw, Check
 } from 'lucide-react';
 import { RealOrder } from '../types/dashboard';
 
@@ -10,7 +9,8 @@ interface OrdersViewProps {
   startDate: string;
   endDate: string;
   service: string;
-  zone: string;
+  globalSearch: string;
+  ignoreDates: boolean;
   onSelectOrder: (order: RealOrder) => void;
 }
 
@@ -19,12 +19,11 @@ export function OrdersView({
   startDate,
   endDate,
   service,
-  zone,
+  globalSearch,
+  ignoreDates,
   onSelectOrder,
 }: OrdersViewProps) {
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [debouncedQuery, setDebouncedQuery] = useState<string>('');
-  const [ignoreDates, setIgnoreDates] = useState<boolean>(false);
+  const [debouncedQuery, setDebouncedQuery] = useState<string>(globalSearch);
 
   const [page, setPage] = useState<number>(1);
   const pageSize = 50;
@@ -40,67 +39,83 @@ export function OrdersView({
     col: 'orden',
     dir: 'desc',
   });
-  const [colFilters, setColFilters] = useState({
+
+  // Filtros de cabecera con soporte Multiselección (arrays)
+  const [colFilters, setColFilters] = useState<{
+    orden: string;
+    cliente: string;
+    operacion: string[];
+    sector: string[];
+    partner: string[];
+    estadoOt: string[];
+    wsp: string[];
+    tracking: string[];
+  }>({
     orden: '',
-    fecha: 'Todos',
     cliente: '',
-    operacion: 'Todos',
-    sector: 'Todos',
-    partner: 'Todos',
-    estadoOt: 'Todos',
-    wsp: 'Todos',
-    tracking: 'Todos',
+    operacion: [],
+    sector: [],
+    partner: [],
+    estadoOt: [],
+    wsp: [],
+    tracking: [],
   });
 
+  const toggleMultiFilter = (
+    key: 'operacion' | 'sector' | 'partner' | 'estadoOt' | 'wsp' | 'tracking',
+    val: string
+  ) => {
+    setColFilters((prev) => {
+      const arr = prev[key];
+      const next = arr.includes(val) ? arr.filter((x) => x !== val) : [...arr, val];
+      return { ...prev, [key]: next };
+    });
+  };
+
   const activeColFilterCount = useMemo(() => {
-    return Object.entries(colFilters).filter(([_, val]) => val !== '' && val !== 'Todos').length;
+    let count = 0;
+    if (colFilters.orden.trim()) count++;
+    if (colFilters.cliente.trim()) count++;
+    count +=
+      colFilters.operacion.length +
+      colFilters.sector.length +
+      colFilters.partner.length +
+      colFilters.estadoOt.length +
+      colFilters.wsp.length +
+      colFilters.tracking.length;
+    return count;
   }, [colFilters]);
 
-  // Sincronizar lote inicial apenas llega de App.tsx
-  useEffect(() => {
-    if (
-      initialOrders.length > 0 &&
-      serverOrders.length === 0 &&
-      !debouncedQuery &&
-      activeColFilterCount === 0
-    ) {
-      setServerOrders(initialOrders.slice(0, pageSize));
-      setTotalRecords(initialOrders.length);
-      setTotalPages(Math.max(1, Math.ceil(initialOrders.length / pageSize)));
-    }
-  }, [initialOrders, serverOrders.length, debouncedQuery, activeColFilterCount]);
-
-  // Debounce de 350ms para disparar consulta SQL al escribir DNI, teléfono, orden, etc.
   useEffect(() => {
     const timer = setTimeout(() => {
-      setDebouncedQuery(searchQuery);
+      setDebouncedQuery(globalSearch);
       setPage(1);
     }, 350);
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [globalSearch]);
 
-  // Reiniciar a página 1 cuando cambian los filtros de columna o fechas
   useEffect(() => {
     setPage(1);
-  }, [colFilters, startDate, endDate, service, zone, ignoreDates]);
+  }, [colFilters, startDate, endDate, service, ignoreDates]);
 
   const fetchPaginatedOrders = useCallback(() => {
     setLoadingPage(true);
+    const serializeArr = (arr: string[]) => (arr.length > 0 ? arr.join(',') : 'Todos');
+
     const params = new URLSearchParams({
       startDate,
       endDate,
       service,
-      zone,
       q: debouncedQuery,
       ignoreDates: ignoreDates ? 'true' : 'false',
       orden: colFilters.orden,
       cliente: colFilters.cliente,
-      operacion: colFilters.operacion,
-      sector: colFilters.sector,
-      partner: colFilters.partner,
-      estadoOt: colFilters.estadoOt,
-      wsp: colFilters.wsp,
-      tracking: colFilters.tracking,
+      operacion: serializeArr(colFilters.operacion),
+      sector: serializeArr(colFilters.sector),
+      partner: serializeArr(colFilters.partner),
+      estadoOt: serializeArr(colFilters.estadoOt),
+      wsp: serializeArr(colFilters.wsp),
+      tracking: serializeArr(colFilters.tracking),
       page: String(page),
       pageSize: String(pageSize),
     });
@@ -116,26 +131,22 @@ export function OrdersView({
       })
       .catch((err) => console.error('Error buscando órdenes en BD:', err))
       .finally(() => setLoadingPage(false));
-  }, [startDate, endDate, service, zone, debouncedQuery, ignoreDates, colFilters, page]);
+  }, [startDate, endDate, service, debouncedQuery, ignoreDates, colFilters, page]);
 
   useEffect(() => {
     fetchPaginatedOrders();
   }, [fetchPaginatedOrders]);
 
   const resetAllOrderFilters = () => {
-    setSearchQuery('');
-    setDebouncedQuery('');
-    setIgnoreDates(false);
     setColFilters({
       orden: '',
-      fecha: 'Todos',
       cliente: '',
-      operacion: 'Todos',
-      sector: 'Todos',
-      partner: 'Todos',
-      estadoOt: 'Todos',
-      wsp: 'Todos',
-      tracking: 'Todos',
+      operacion: [],
+      sector: [],
+      partner: [],
+      estadoOt: [],
+      wsp: [],
+      tracking: [],
     });
     setSortConfig({ col: 'orden', dir: 'desc' });
     setPage(1);
@@ -153,23 +164,10 @@ export function OrdersView({
       return Array.from(m.entries()).sort((a, b) => b[1] - a[1]);
     };
 
-    const getWspLabel = (o: RealOrder) => {
-      const st = String(o.estado_wsp || '').toLowerCase().trim();
-      if (st === 'read') return 'LEÍDO';
-      if (st.includes('deliver')) return 'ENTREGADO';
-      if (st === 'sent') return 'ENVIADO';
-      if (st === 'failed') return 'FALLIDO';
-      return 'NO ENVIADO';
-    };
-
     return {
-      fechas: countMap((o) => String(o.fecha_solicitud_fmt || '-').trim()),
       operaciones: countMap((o) => String(o.servicio_tipo || '-').trim().toUpperCase()),
       sectores: countMap((o) => String(o.sector_operativo || 'SIN SECTOR').trim()),
       partners: countMap((o) => String(o.partner || o.proveedor_ot || 'SIN PARTNER').trim()),
-      estadosOt: countMap((o) => String(o.estado_ot || 'Sin estado').trim()),
-      wsps: countMap(getWspLabel),
-      trackings: countMap((o) => (o.ingreso_tracking === 'SI' ? 'SÍ INGRESÓ' : 'NO')),
     };
   }, [serverOrders, initialOrders]);
 
@@ -179,14 +177,6 @@ export function OrdersView({
       if (sortConfig.col === 'orden') return (Number(a.orden_id) - Number(b.orden_id)) * dir;
       if (sortConfig.col === 'cliente')
         return String(a.cliente || '').localeCompare(String(b.cliente || '')) * dir;
-      if (sortConfig.col === 'operacion')
-        return String(a.servicio_tipo || '').localeCompare(String(b.servicio_tipo || '')) * dir;
-      if (sortConfig.col === 'sector')
-        return String(a.sector_operativo || '').localeCompare(String(b.sector_operativo || '')) * dir;
-      if (sortConfig.col === 'partner')
-        return String(a.partner || '').localeCompare(String(b.partner || '')) * dir;
-      if (sortConfig.col === 'estadoOt')
-        return String(a.estado_ot || '').localeCompare(String(b.estado_ot || '')) * dir;
       return 0;
     });
   }, [serverOrders, sortConfig]);
@@ -199,68 +189,27 @@ export function OrdersView({
       className="bg-[#111827]/90 border border-gray-800 rounded-xl p-4 space-y-3"
       onClick={() => setOpenHeaderCol(null)}
     >
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-800 pb-3">
-        <div>
-          <h3 className="font-bold text-sm text-white flex items-center gap-2">
-            <Layers size={16} className="text-[#FF6B00]" />
-            Explorador Total de Órdenes — Funnel 360°
-            <span className="ml-1 px-2.5 py-0.5 text-[11px] rounded-full bg-[#FF6B00]/15 text-[#FF6B00] border border-[#FF6B00]/30 font-bold">
-              {totalRecords.toLocaleString('es-PE')} registros encontrados
-            </span>
-            {loadingPage && (
-              <RefreshCw size={13} className="text-[#FF6B00] animate-spin ml-1" />
-            )}
-          </h3>
-          <p className="text-[11px] text-gray-400 mt-0.5">
-            Búsqueda directa en Azure MySQL (Mostrando {startIdx}–{endIdx} de {totalRecords.toLocaleString('es-PE')} en páginas de 50)
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          {(activeColFilterCount > 0 || searchQuery || ignoreDates) && (
+      {/* BARRA COMPACTA DE PAGINACIÓN Y ESTADO DE REGISTROS (SIN ENCABEZADO REDUNDANTE) */}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs bg-[#090D16]/70 border border-gray-800/80 rounded-lg px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-gray-300">
+          <span className="px-2.5 py-0.5 rounded-full bg-[#FF6B00]/15 text-[#FF6B00] border border-[#FF6B00]/30 font-bold">
+            {totalRecords.toLocaleString('es-PE')} registros
+          </span>
+          <span className="text-gray-500">•</span>
+          <span>
+            Mostrando <strong className="text-white">{startIdx}–{endIdx}</strong> (Página{' '}
+            <strong className="text-white">{page}</strong> de{' '}
+            <strong className="text-white">{totalPages.toLocaleString('es-PE')}</strong>)
+          </span>
+          {loadingPage && <RefreshCw size={13} className="text-[#FF6B00] animate-spin ml-1" />}
+          {activeColFilterCount > 0 && (
             <button
               onClick={resetAllOrderFilters}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-semibold transition text-[11px]"
+              className="ml-2 px-2.5 py-0.5 rounded bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-semibold transition text-[11px]"
             >
-              <span>✕ Limpiar filtros</span>
+              ✕ Limpiar filtros de columna ({activeColFilterCount})
             </button>
           )}
-
-          <button
-            onClick={() => setIgnoreDates(!ignoreDates)}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition ${
-              ignoreDates
-                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
-                : 'bg-[#090D16] text-gray-400 border-gray-700/80 hover:text-gray-200'
-            }`}
-            title="Actívalo para buscar un DNI, teléfono u orden en cualquier fecha de toda la historia"
-          >
-            <Globe size={13} />
-            <span>{ignoreDates ? 'Buscando en Todo el Histórico' : 'Solo Rango de Fechas'}</span>
-          </button>
-
-          <div className="flex items-center bg-[#090D16] border border-gray-700/80 rounded-lg px-3 py-1.5 w-80 focus-within:border-[#FF6B00]">
-            <Search size={14} className="text-gray-400 mr-2 shrink-0" />
-            <input
-              type="text"
-              placeholder="Buscar DNI, teléfono, orden, Cód.Clie, CTO, cliente..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="bg-transparent text-gray-200 focus:outline-none w-full text-xs"
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Controles de Paginación Superior */}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs bg-[#090D16]/70 border border-gray-800/80 rounded-lg px-3 py-2">
-        <div className="flex items-center gap-2 text-[11px] text-gray-300">
-          <span>
-            Página <strong className="text-white">{page}</strong> de{' '}
-            <strong className="text-white">{totalPages.toLocaleString('es-PE')}</strong>
-          </span>
-          <span className="text-gray-600">•</span>
-          <span>50 órdenes por página</span>
         </div>
 
         <div className="flex items-center gap-1.5">
@@ -295,36 +244,8 @@ export function OrdersView({
         </div>
       </div>
 
-      {activeColFilterCount > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-          <span className="text-gray-400 mr-1">Filtros de columna activos:</span>
-          {Object.entries(colFilters).map(([key, val]) => {
-            if (!val || val === 'Todos') return null;
-            return (
-              <span
-                key={key}
-                className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#FF6B00]/15 text-amber-300 border border-[#FF6B00]/40 font-semibold"
-              >
-                <span className="uppercase text-[10px] text-gray-300">{key}:</span>
-                <span>{val}</span>
-                <button
-                  onClick={() =>
-                    setColFilters((prev) => ({
-                      ...prev,
-                      [key]: key === 'orden' || key === 'cliente' ? '' : 'Todos',
-                    }))
-                  }
-                  className="hover:text-white ml-0.5"
-                >
-                  ✕
-                </button>
-              </span>
-            );
-          })}
-        </div>
-      )}
-
-      <div className="overflow-x-auto min-h-[420px] max-h-[680px]">
+      {/* TABLA CON CABECERAS MULTISELECCIÓN */}
+      <div className="overflow-x-auto min-h-[420px] max-h-[700px]">
         <table className="w-full text-xs border-collapse">
           <thead className="sticky top-0 bg-[#111827] z-20 shadow-md">
             <tr className="text-gray-300 border-b border-gray-800 text-[10px] uppercase tracking-wider select-none">
@@ -348,11 +269,11 @@ export function OrdersView({
                     onClick={(e) => e.stopPropagation()}
                     className="absolute left-0 mt-1.5 w-60 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-3 z-30 space-y-2.5 normal-case font-normal"
                   >
-                    <div className="text-[11px] font-bold text-white">Filtrar N° Orden o Ticket en BD</div>
+                    <div className="text-[11px] font-bold text-white">Filtrar N° Orden o Ticket</div>
                     <input
                       type="text"
                       autoFocus
-                      placeholder="Ej: 3575147 o VTEXT..."
+                      placeholder="Ej: 3575583 o VTR..."
                       value={colFilters.orden}
                       onChange={(e) => setColFilters({ ...colFilters, orden: e.target.value })}
                       className="w-full bg-[#111827] border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-[#FF6B00]"
@@ -383,7 +304,7 @@ export function OrdersView({
                     onClick={(e) => e.stopPropagation()}
                     className="absolute left-0 mt-1.5 w-64 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-3 z-30 space-y-2.5 normal-case font-normal"
                   >
-                    <div className="text-[11px] font-bold text-white">Buscar Cliente, DNI, Cód. o Teléfono en BD</div>
+                    <div className="text-[11px] font-bold text-white">Filtrar Cliente, DNI o Teléfono</div>
                     <input
                       type="text"
                       autoFocus
@@ -396,6 +317,7 @@ export function OrdersView({
                 )}
               </th>
 
+              {/* OPERACIÓN MULTISELECCIÓN */}
               <th className="py-2.5 px-2 text-left relative">
                 <div
                   onClick={(e) => {
@@ -403,13 +325,18 @@ export function OrdersView({
                     setOpenHeaderCol(openHeaderCol === 'operacion' ? null : 'operacion');
                   }}
                   className={`inline-flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer transition ${
-                    colFilters.operacion !== 'Todos'
+                    colFilters.operacion.length > 0
                       ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/40 font-extrabold'
                       : 'hover:bg-gray-800/80'
                   }`}
                 >
                   <span>Operación / Producto</span>
-                  <ChevronDown size={12} className={colFilters.operacion !== 'Todos' ? 'text-[#FF6B00]' : 'text-gray-500'} />
+                  {colFilters.operacion.length > 0 && (
+                    <span className="px-1.5 rounded-full bg-[#FF6B00] text-white text-[9px]">
+                      {colFilters.operacion.length}
+                    </span>
+                  )}
+                  <ChevronDown size={12} />
                 </div>
                 {openHeaderCol === 'operacion' && (
                   <div
@@ -417,25 +344,36 @@ export function OrdersView({
                     className="absolute left-0 mt-1.5 w-56 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-2 z-30 normal-case font-normal max-h-64 overflow-y-auto"
                   >
                     <div
-                      onClick={() => { setColFilters({ ...colFilters, operacion: 'Todos' }); setOpenHeaderCol(null); }}
-                      className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs ${colFilters.operacion === 'Todos' ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'}`}
+                      onClick={() => setColFilters({ ...colFilters, operacion: [] })}
+                      className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs ${
+                        colFilters.operacion.length === 0 ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'
+                      }`}
                     >
                       <span>Todas las operaciones</span>
                     </div>
-                    {headerOptions.operaciones.map(([val, cnt]) => (
-                      <div
-                        key={val}
-                        onClick={() => { setColFilters({ ...colFilters, operacion: val }); setOpenHeaderCol(null); }}
-                        className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs mt-0.5 ${colFilters.operacion === val ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'}`}
-                      >
-                        <span className="truncate pr-2">{val}</span>
-                        <span className="text-[10px] opacity-75">{cnt}</span>
-                      </div>
-                    ))}
+                    {headerOptions.operaciones.map(([val, cnt]) => {
+                      const active = colFilters.operacion.includes(val);
+                      return (
+                        <div
+                          key={val}
+                          onClick={() => toggleMultiFilter('operacion', val)}
+                          className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center justify-between text-xs mt-0.5 ${
+                            active ? 'bg-[#FF6B00]/20 text-white font-bold border border-[#FF6B00]/40' : 'text-gray-300 hover:bg-gray-800'
+                          }`}
+                        >
+                          <span className="truncate pr-2">{val}</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] opacity-75">{cnt}</span>
+                            {active && <Check size={12} className="text-[#FF6B00]" />}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </th>
 
+              {/* SECTOR MULTISELECCIÓN */}
               <th className="py-2.5 px-2 text-left relative">
                 <div
                   onClick={(e) => {
@@ -443,13 +381,18 @@ export function OrdersView({
                     setOpenHeaderCol(openHeaderCol === 'sector' ? null : 'sector');
                   }}
                   className={`inline-flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer transition ${
-                    colFilters.sector !== 'Todos'
+                    colFilters.sector.length > 0
                       ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/40 font-extrabold'
                       : 'hover:bg-gray-800/80'
                   }`}
                 >
                   <span>Sector / Distrito</span>
-                  <ChevronDown size={12} className={colFilters.sector !== 'Todos' ? 'text-[#FF6B00]' : 'text-gray-500'} />
+                  {colFilters.sector.length > 0 && (
+                    <span className="px-1.5 rounded-full bg-[#FF6B00] text-white text-[9px]">
+                      {colFilters.sector.length}
+                    </span>
+                  )}
+                  <ChevronDown size={12} />
                 </div>
                 {openHeaderCol === 'sector' && (
                   <div
@@ -457,25 +400,36 @@ export function OrdersView({
                     className="absolute left-0 mt-1.5 w-60 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-2 z-30 normal-case font-normal max-h-72 overflow-y-auto"
                   >
                     <div
-                      onClick={() => { setColFilters({ ...colFilters, sector: 'Todos' }); setOpenHeaderCol(null); }}
-                      className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs ${colFilters.sector === 'Todos' ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'}`}
+                      onClick={() => setColFilters({ ...colFilters, sector: [] })}
+                      className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs ${
+                        colFilters.sector.length === 0 ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'
+                      }`}
                     >
                       <span>Todos los sectores</span>
                     </div>
-                    {headerOptions.sectores.map(([val, cnt]) => (
-                      <div
-                        key={val}
-                        onClick={() => { setColFilters({ ...colFilters, sector: val }); setOpenHeaderCol(null); }}
-                        className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs mt-0.5 ${colFilters.sector === val ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'}`}
-                      >
-                        <span className="truncate pr-2">{val}</span>
-                        <span className="text-[10px] opacity-75">{cnt}</span>
-                      </div>
-                    ))}
+                    {headerOptions.sectores.map(([val, cnt]) => {
+                      const active = colFilters.sector.includes(val);
+                      return (
+                        <div
+                          key={val}
+                          onClick={() => toggleMultiFilter('sector', val)}
+                          className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center justify-between text-xs mt-0.5 ${
+                            active ? 'bg-[#FF6B00]/20 text-white font-bold border border-[#FF6B00]/40' : 'text-gray-300 hover:bg-gray-800'
+                          }`}
+                        >
+                          <span className="truncate pr-2">{val}</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] opacity-75">{cnt}</span>
+                            {active && <Check size={12} className="text-[#FF6B00]" />}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </th>
 
+              {/* PARTNER MULTISELECCIÓN */}
               <th className="py-2.5 px-2 text-left relative">
                 <div
                   onClick={(e) => {
@@ -483,13 +437,18 @@ export function OrdersView({
                     setOpenHeaderCol(openHeaderCol === 'partner' ? null : 'partner');
                   }}
                   className={`inline-flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer transition ${
-                    colFilters.partner !== 'Todos'
+                    colFilters.partner.length > 0
                       ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/40 font-extrabold'
                       : 'hover:bg-gray-800/80'
                   }`}
                 >
                   <span>Partner / Cuadrilla</span>
-                  <ChevronDown size={12} className={colFilters.partner !== 'Todos' ? 'text-[#FF6B00]' : 'text-gray-500'} />
+                  {colFilters.partner.length > 0 && (
+                    <span className="px-1.5 rounded-full bg-[#FF6B00] text-white text-[9px]">
+                      {colFilters.partner.length}
+                    </span>
+                  )}
+                  <ChevronDown size={12} />
                 </div>
                 {openHeaderCol === 'partner' && (
                   <div
@@ -497,25 +456,36 @@ export function OrdersView({
                     className="absolute left-0 mt-1.5 w-60 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-2 z-30 normal-case font-normal max-h-72 overflow-y-auto"
                   >
                     <div
-                      onClick={() => { setColFilters({ ...colFilters, partner: 'Todos' }); setOpenHeaderCol(null); }}
-                      className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs ${colFilters.partner === 'Todos' ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'}`}
+                      onClick={() => setColFilters({ ...colFilters, partner: [] })}
+                      className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs ${
+                        colFilters.partner.length === 0 ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'
+                      }`}
                     >
                       <span>Todos los partners</span>
                     </div>
-                    {headerOptions.partners.map(([val, cnt]) => (
-                      <div
-                        key={val}
-                        onClick={() => { setColFilters({ ...colFilters, partner: val }); setOpenHeaderCol(null); }}
-                        className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs mt-0.5 ${colFilters.partner === val ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'}`}
-                      >
-                        <span className="truncate pr-2">{val}</span>
-                        <span className="text-[10px] opacity-75">{cnt}</span>
-                      </div>
-                    ))}
+                    {headerOptions.partners.map(([val, cnt]) => {
+                      const active = colFilters.partner.includes(val);
+                      return (
+                        <div
+                          key={val}
+                          onClick={() => toggleMultiFilter('partner', val)}
+                          className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center justify-between text-xs mt-0.5 ${
+                            active ? 'bg-[#FF6B00]/20 text-white font-bold border border-[#FF6B00]/40' : 'text-gray-300 hover:bg-gray-800'
+                          }`}
+                        >
+                          <span className="truncate pr-2">{val}</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] opacity-75">{cnt}</span>
+                            {active && <Check size={12} className="text-[#FF6B00]" />}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </th>
 
+              {/* ESTADO OT MULTISELECCIÓN */}
               <th className="py-2.5 px-1.5 text-center whitespace-nowrap relative">
                 <div
                   onClick={(e) => {
@@ -523,32 +493,52 @@ export function OrdersView({
                     setOpenHeaderCol(openHeaderCol === 'estadoOt' ? null : 'estadoOt');
                   }}
                   className={`inline-flex items-center gap-1 px-2 py-1 rounded cursor-pointer transition ${
-                    colFilters.estadoOt !== 'Todos'
+                    colFilters.estadoOt.length > 0
                       ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/40 font-extrabold'
                       : 'hover:bg-gray-800/80'
                   }`}
                 >
                   <span>Estado OT</span>
-                  <ChevronDown size={12} className={colFilters.estadoOt !== 'Todos' ? 'text-[#FF6B00]' : 'text-gray-500'} />
+                  {colFilters.estadoOt.length > 0 && (
+                    <span className="px-1.5 rounded-full bg-[#FF6B00] text-white text-[9px]">
+                      {colFilters.estadoOt.length}
+                    </span>
+                  )}
+                  <ChevronDown size={12} />
                 </div>
                 {openHeaderCol === 'estadoOt' && (
                   <div
                     onClick={(e) => e.stopPropagation()}
                     className="absolute right-0 mt-1.5 w-48 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-2 z-30 normal-case font-normal text-left max-h-64 overflow-y-auto"
                   >
-                    {['Todos', 'Iniciada', 'Agendada', 'Finalizada', 'Pendiente', 'En camino', 'Cancelada', 'Anulada'].map((val) => (
-                      <div
-                        key={val}
-                        onClick={() => { setColFilters({ ...colFilters, estadoOt: val }); setOpenHeaderCol(null); }}
-                        className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs mt-0.5 ${colFilters.estadoOt === val ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'}`}
-                      >
-                        <span>{val}</span>
-                      </div>
-                    ))}
+                    <div
+                      onClick={() => setColFilters({ ...colFilters, estadoOt: [] })}
+                      className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs ${
+                        colFilters.estadoOt.length === 0 ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'
+                      }`}
+                    >
+                      <span>Todos</span>
+                    </div>
+                    {['Iniciada', 'Agendada', 'Finalizada', 'Pendiente', 'En camino', 'Cancelada', 'Anulada'].map((val) => {
+                      const active = colFilters.estadoOt.includes(val);
+                      return (
+                        <div
+                          key={val}
+                          onClick={() => toggleMultiFilter('estadoOt', val)}
+                          className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center justify-between text-xs mt-0.5 ${
+                            active ? 'bg-[#FF6B00]/20 text-white font-bold border border-[#FF6B00]/40' : 'text-gray-300 hover:bg-gray-800'
+                          }`}
+                        >
+                          <span>{val}</span>
+                          {active && <Check size={12} className="text-[#FF6B00]" />}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </th>
 
+              {/* WHATSAPP MULTISELECCIÓN */}
               <th className="py-2.5 px-1.5 text-center whitespace-nowrap relative">
                 <div
                   onClick={(e) => {
@@ -556,32 +546,52 @@ export function OrdersView({
                     setOpenHeaderCol(openHeaderCol === 'wsp' ? null : 'wsp');
                   }}
                   className={`inline-flex items-center gap-1 px-2 py-1 rounded cursor-pointer transition ${
-                    colFilters.wsp !== 'Todos'
+                    colFilters.wsp.length > 0
                       ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/40 font-extrabold'
                       : 'hover:bg-gray-800/80'
                   }`}
                 >
                   <span>WhatsApp</span>
-                  <ChevronDown size={12} className={colFilters.wsp !== 'Todos' ? 'text-[#FF6B00]' : 'text-gray-500'} />
+                  {colFilters.wsp.length > 0 && (
+                    <span className="px-1.5 rounded-full bg-[#FF6B00] text-white text-[9px]">
+                      {colFilters.wsp.length}
+                    </span>
+                  )}
+                  <ChevronDown size={12} />
                 </div>
                 {openHeaderCol === 'wsp' && (
                   <div
                     onClick={(e) => e.stopPropagation()}
                     className="absolute right-0 mt-1.5 w-48 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-2 z-30 normal-case font-normal text-left"
                   >
-                    {['Todos', 'LEÍDO', 'ENTREGADO', 'ENVIADO', 'NO ENVIADO', 'FALLIDO'].map((val) => (
-                      <div
-                        key={val}
-                        onClick={() => { setColFilters({ ...colFilters, wsp: val }); setOpenHeaderCol(null); }}
-                        className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs mt-0.5 ${colFilters.wsp === val ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'}`}
-                      >
-                        <span>{val}</span>
-                      </div>
-                    ))}
+                    <div
+                      onClick={() => setColFilters({ ...colFilters, wsp: [] })}
+                      className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs ${
+                        colFilters.wsp.length === 0 ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'
+                      }`}
+                    >
+                      <span>Todos</span>
+                    </div>
+                    {['LEÍDO', 'ENTREGADO', 'ENVIADO', 'NO ENVIADO', 'FALLIDO'].map((val) => {
+                      const active = colFilters.wsp.includes(val);
+                      return (
+                        <div
+                          key={val}
+                          onClick={() => toggleMultiFilter('wsp', val)}
+                          className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center justify-between text-xs mt-0.5 ${
+                            active ? 'bg-[#FF6B00]/20 text-white font-bold border border-[#FF6B00]/40' : 'text-gray-300 hover:bg-gray-800'
+                          }`}
+                        >
+                          <span>{val}</span>
+                          {active && <Check size={12} className="text-[#FF6B00]" />}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </th>
 
+              {/* TRACKING MULTISELECCIÓN */}
               <th className="py-2.5 px-1.5 text-center whitespace-nowrap relative">
                 <div
                   onClick={(e) => {
@@ -589,33 +599,50 @@ export function OrdersView({
                     setOpenHeaderCol(openHeaderCol === 'tracking' ? null : 'tracking');
                   }}
                   className={`inline-flex items-center gap-1 px-2 py-1 rounded cursor-pointer transition ${
-                    colFilters.tracking !== 'Todos'
+                    colFilters.tracking.length > 0
                       ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/40 font-extrabold'
                       : 'hover:bg-gray-800/80'
                   }`}
                 >
                   <span>Tracking</span>
-                  <ChevronDown size={12} className={colFilters.tracking !== 'Todos' ? 'text-[#FF6B00]' : 'text-gray-500'} />
+                  {colFilters.tracking.length > 0 && (
+                    <span className="px-1.5 rounded-full bg-[#FF6B00] text-white text-[9px]">
+                      {colFilters.tracking.length}
+                    </span>
+                  )}
+                  <ChevronDown size={12} />
                 </div>
                 {openHeaderCol === 'tracking' && (
                   <div
                     onClick={(e) => e.stopPropagation()}
                     className="absolute right-0 mt-1.5 w-44 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-2 z-30 normal-case font-normal text-left"
                   >
-                    {['Todos', 'SÍ INGRESÓ', 'NO'].map((val) => (
-                      <div
-                        key={val}
-                        onClick={() => { setColFilters({ ...colFilters, tracking: val }); setOpenHeaderCol(null); }}
-                        className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs mt-0.5 ${colFilters.tracking === val ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'}`}
-                      >
-                        <span>{val}</span>
-                      </div>
-                    ))}
+                    <div
+                      onClick={() => setColFilters({ ...colFilters, tracking: [] })}
+                      className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs ${
+                        colFilters.tracking.length === 0 ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'
+                      }`}
+                    >
+                      <span>Todos</span>
+                    </div>
+                    {['SÍ INGRESÓ', 'NO'].map((val) => {
+                      const active = colFilters.tracking.includes(val);
+                      return (
+                        <div
+                          key={val}
+                          onClick={() => toggleMultiFilter('tracking', val)}
+                          className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center justify-between text-xs mt-0.5 ${
+                            active ? 'bg-[#FF6B00]/20 text-white font-bold border border-[#FF6B00]/40' : 'text-gray-300 hover:bg-gray-800'
+                          }`}
+                        >
+                          <span>{val}</span>
+                          {active && <Check size={12} className="text-[#FF6B00]" />}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </th>
-
-              <th className="py-2.5 px-2 text-right whitespace-nowrap">Detalle</th>
             </tr>
           </thead>
 
@@ -650,7 +677,11 @@ export function OrdersView({
               return (
                 <tr
                   key={o.orden_id}
-                  onClick={() => onSelectOrder(o)}
+                  onClick={() => {
+                    const selection = window.getSelection()?.toString();
+                    if (selection && selection.length > 0) return;
+                    onSelectOrder(o);
+                  }}
                   className="hover:bg-[#FF6B00]/10 cursor-pointer transition group"
                 >
                   <td className="py-2 px-2 whitespace-nowrap">
@@ -721,14 +752,6 @@ export function OrdersView({
                     >
                       {o.ingreso_tracking === 'SI' ? 'SÍ INGRESÓ' : 'NO'}
                     </span>
-                  </td>
-                  <td className="py-2 px-2 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      onClick={() => onSelectOrder(o)}
-                      className="px-2.5 py-1 bg-[#1F2937] hover:bg-[#FF6B00] text-gray-200 hover:text-white rounded text-[11px] font-semibold transition"
-                    >
-                      Ver detalle
-                    </button>
                   </td>
                 </tr>
               );

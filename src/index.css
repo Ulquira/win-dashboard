@@ -9,3 +9,16 @@ body {
   margin: 0;
   padding: 0;
 }
+
+/* Permitir seleccionar y copiar texto libremente en toda la aplicación */
+*, *::before, *::after {
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  user-select: text !important;
+}
+
+/* Mantener cursores y comportamiento limpio solo en botones e íconos puros */
+button, select {
+  cursor: pointer;
+}

@@ -524,9 +524,14 @@ app.get('/api/tracking/search', async (req, res) => {
       params.push(startDate, endDate);
     }
 
-    if (service !== 'Todos los servicios') {
-      whereClauses.push('(v.tipo_operacion = ? OR v.producto = ?)');
-      params.push(service, service);
+    const srvList =
+      service && service !== 'Todos' && service !== 'Todos los servicios'
+        ? service.split(',').map((s) => s.trim()).filter(Boolean)
+        : [];
+    if (srvList.length > 0) {
+      const ph = srvList.map(() => '?').join(',');
+      whereClauses.push(`(v.tipo_operacion IN (${ph}) OR v.producto IN (${ph}))`);
+      params.push(...srvList, ...srvList);
     }
 
     if (zone !== 'Todas las zonas') {
@@ -642,7 +647,7 @@ app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
     const phone9 = rawPhone.slice(-9);
     const ordenId = req.query.ordenId ? Number(req.query.ordenId) : null;
     const grupoServicio = String(req.query.grupoServicio || 'GENERAL').trim();
-    const limit = Math.min(50, Math.max(5, Number(req.query.limit) || 15));
+    const limit = 1000;
 
     if (!phone9 && !ordenId) {
       return res.status(400).json({ ok: false, error: 'Parámetro phone u ordenId requerido' });
