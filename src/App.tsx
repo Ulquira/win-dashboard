@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Home, BarChart2, Layers, CheckCircle, Activity, Smile, FileText, 
   Calendar, ChevronDown, ClipboardList, Send, CheckCheck, 
-  MapPin, CalendarClock, MessageSquare, TrendingUp, Star,
+  MapPin, CalendarClock, MessageSquare, TrendingUp,
   Filter, Info, Settings, Laptop, Clock, Crown, Gem, Award, AlertTriangle, Target,
   Search, User, ExternalLink, Database, RefreshCw
 } from 'lucide-react';
@@ -60,8 +60,8 @@ export default function App() {
   const [activeNav, setActiveNav] = useState<NavSection>('WIN en RUTA');
   const [viewMode, setViewMode] = useState<ViewMode>('ejecutiva');
 
-  // Rango inicial corto de 7 días para respuesta inmediata en vistas pesadas
-  const todayStr = new Date().toLocaleDateString('en-CA'); // Formato YYYY-MM-DD local
+  // Por defecto carga el día actual para máxima velocidad (y el gráfico muestra los últimos 7 días)
+  const todayStr = new Date().toLocaleDateString('en-CA');
   const [startDate, setStartDate] = useState<string>(todayStr);
   const [endDate, setEndDate] = useState<string>(todayStr);
   const [service, setService] = useState<string>('Todos los servicios');
@@ -111,7 +111,6 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Cargamos primero el dashboard y en paralelo las listas de filtros
     fetchDashboardData();
 
     fetch('http://localhost:3001/api/filters')
@@ -137,17 +136,18 @@ export default function App() {
     const reprog = Number(kpis?.reprogramaciones || 0);
     const encuestas = Number(kpis?.encuestas_respondidas || 0);
     const leidosSinIngreso = Number(kpis?.leidos_sin_ingreso || 0);
+
     const avEnviados = Number(kpis?.av_enviados || 0);
     const avTracking = Number(kpis?.av_tracking || 0);
     const prefEnviados = Number(kpis?.pref_enviados || 0);
     const prefTracking = Number(kpis?.pref_tracking || 0);
 
-    const avPctNum = avEnviados > 0 ? (avTracking / avEnviados) * 100 : 0;
-    const prefPctNum = prefEnviados > 0 ? (prefTracking / prefEnviados) * 100 : 0;
-
     const fmt = (n: number) => n.toLocaleString('es-PE');
     const pct = (num: number, den: number) =>
       den > 0 ? ((num / den) * 100).toFixed(1).replace('.', ',') : '0,0';
+
+    const avPctNum = avEnviados > 0 ? (avTracking / avEnviados) * 100 : 0;
+    const prefPctNum = prefEnviados > 0 ? (prefTracking / prefEnviados) * 100 : 0;
 
     return {
       ordenes: fmt(total),
@@ -156,8 +156,8 @@ export default function App() {
       leidos: fmt(leidos),
       readPct: pct(leidos, enviados),
       tracking: fmt(tracking),
-      trackPct: pct(tracking, enviados),        // % sobre enviados
-      trackOverReadPct: pct(tracking, leidos),  // % sobre leídos
+      trackPct: pct(tracking, enviados),
+      trackOverReadPct: pct(tracking, leidos),
       reprog: fmt(reprog),
       csatCount: fmt(encuestas),
       sent: fmt(sent),
@@ -170,10 +170,10 @@ export default function App() {
       noEnviadoPct: pct(noEnviado, total),
       leidosSinIngreso: fmt(leidosSinIngreso),
       leidosSinIngresoPct: pct(leidosSinIngreso, enviados),
-      vTrackingFmt: fmt(avTracking),
+      avTrackingFmt: fmt(avTracking),
       avEnviadosFmt: fmt(avEnviados),
       avPct: pct(avTracking, avEnviados),
-      avBarWidth: Math.min(100, Math.max(6, Math.round(avPctNum * 2.2))), // Escala visual proporcional
+      avBarWidth: Math.min(100, Math.max(6, Math.round(avPctNum * 2.2))),
       prefTrackingFmt: fmt(prefTracking),
       prefEnviadosFmt: fmt(prefEnviados),
       prefPct: pct(prefTracking, prefEnviados),
@@ -216,7 +216,6 @@ export default function App() {
     const trkLeiPts: string[] = [];
 
     const points = evolution.map((pt, idx) => {
-      // Dejamos un margen lateral de 22px (de 22 a 378) para que los % de los bordes no se corten
       const x = evolution.length === 1 ? 200 : Math.round(22 + (idx / maxIdx) * 356);
       const tot = Number(pt.total || 0);
       const env = Number(pt.enviados || 0);
@@ -328,7 +327,7 @@ export default function App() {
       {/* CONTENIDO PRINCIPAL */}
       <main className="flex-1 p-5 overflow-y-auto space-y-4">
         
-        {/* BANNER DE ERROR SI EL BACKEND ESTÁ APAGADO O TARDA */}
+        {/* BANNER DE ERROR SI EL BACKEND ESTÁ APAGADO */}
         {errorMsg && (
           <div className="bg-red-500/10 border border-red-500/40 text-red-300 px-4 py-2.5 rounded-xl text-xs flex items-center justify-between">
             <span><strong>Aviso de conexión:</strong> {errorMsg}</span>
@@ -444,7 +443,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* FILA 1: 6 TARJETAS KPI */}
         {/* FILA 1: 6 TARJETAS KPI HOMOLOGADAS */}
         <div className="grid grid-cols-6 gap-3">
           
@@ -493,7 +491,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* KPI 4: Ingreso a Tracking (Porcentajes uno encima del otro justo al lado del número) */}
+          {/* KPI 4: Ingreso a Tracking */}
           <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
             <div className="flex items-center gap-2.5">
               <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400">
@@ -539,11 +537,15 @@ export default function App() {
               <span className="text-2xl font-extrabold text-white tracking-tight">{calc.csatCount}</span>
             </div>
           </div>
+
         </div>
 
         {viewMode === 'ejecutiva' ? (
           <>
+            {/* FILA 2: EMBUDO ALINEADO + EVOLUCIÓN CON PUNTOS DIARIOS + EFICIENCIA */}
             <div className="grid grid-cols-12 gap-4">
+              
+              {/* Embudo de Interacción del Cliente */}
               <div className="col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-between">
                 <div className="border-b border-gray-800 pb-2.5 mb-3">
                   <div className="flex items-center gap-2">
@@ -554,92 +556,108 @@ export default function App() {
                   <p className="text-[11px] text-gray-400 mt-0.5">Desde la orden hasta el ingreso a tracking</p>
                 </div>
 
-                <div className="space-y-1.5 my-auto">
-                  {/* Nivel 1: Órdenes (100% -> 84%) */}
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1">
-                      <div 
-                        className="w-full h-12 bg-gradient-to-r from-blue-700 to-blue-500 flex items-center justify-center shadow-md" 
-                        style={{ clipPath: 'polygon(0% 0%, 100% 0%, 92% 100%, 8% 100%)' }}
-                      >
-                        <div className="flex items-center gap-2.5 w-36">
-                          <ClipboardList size={16} className="text-blue-100 shrink-0" />
-                          <div className="leading-tight">
-                            <div className="font-extrabold text-sm text-white">{calc.ordenes}</div>
-                            <div className="text-[10px] text-blue-100">Órdenes</div>
-                          </div>
+                <div className="space-y-2 my-auto py-1">
+                  {/* Nivel 1: Órdenes */}
+                  <div className="flex items-center gap-4">
+                    <div className="relative flex-1 h-12 flex items-center justify-center">
+                      <div
+                        className="absolute inset-0 bg-gradient-to-r from-blue-700 via-blue-600 to-blue-500 shadow-lg"
+                        style={{ clipPath: 'polygon(0% 0%, 100% 0%, 93% 100%, 7% 100%)' }}
+                      />
+                      <div className="relative z-10 grid grid-cols-[28px_115px] items-center gap-2.5">
+                        <div className="w-7 h-7 rounded-lg bg-white/15 flex items-center justify-center text-white shadow-inner">
+                          <ClipboardList size={15} />
+                        </div>
+                        <div className="text-left leading-tight">
+                          <div className="font-extrabold text-base text-white tracking-tight">{calc.ordenes}</div>
+                          <div className="text-[11px] font-medium text-blue-100">Órdenes</div>
                         </div>
                       </div>
                     </div>
-                    <div className="w-24 text-right font-bold text-sm text-white shrink-0">100%</div>
-                  </div>
-
-                  {/* Nivel 2: Mensajes enviados (84% -> 68%) */}
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1">
-                      <div 
-                        className="w-full h-12 bg-gradient-to-r from-emerald-600 to-emerald-500 flex items-center justify-center shadow-md" 
-                        style={{ clipPath: 'polygon(8% 0%, 92% 0%, 84% 100%, 16% 100%)' }}
-                      >
-                        <div className="flex items-center gap-2.5 w-36">
-                          <Send size={15} className="text-emerald-100 shrink-0" />
-                          <div className="leading-tight">
-                            <div className="font-extrabold text-sm text-white">{calc.whsEnviados}</div>
-                            <div className="text-[10px] text-emerald-100">Mensajes enviados</div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="w-24 text-right font-bold text-sm text-white shrink-0">{calc.whsPct}%</div>
-                  </div>
-
-                  {/* Nivel 3: Mensajes leídos (68% -> 52%) */}
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1">
-                      <div 
-                        className="w-full h-12 bg-gradient-to-r from-cyan-600 to-cyan-500 flex items-center justify-center shadow-md" 
-                        style={{ clipPath: 'polygon(16% 0%, 84% 0%, 76% 100%, 24% 100%)' }}
-                      >
-                        <div className="flex items-center gap-2.5 w-36">
-                          <CheckCheck size={15} className="text-cyan-100 shrink-0" />
-                          <div className="leading-tight">
-                            <div className="font-extrabold text-sm text-white">{calc.leidos}</div>
-                            <div className="text-[10px] text-cyan-100">Mensajes leídos</div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="w-24 text-right leading-tight shrink-0">
-                      <div className="font-bold text-sm text-white">{calc.readPct}%</div>
-                      <div className="text-[10px] text-gray-400">(del enviado)</div>
+                    <div className="w-28 text-right shrink-0">
+                      <div className="font-extrabold text-sm text-white">100%</div>
+                      <div className="text-[10px] text-gray-500">Total base</div>
                     </div>
                   </div>
 
-                  {/* Nivel 4: Ingreso a tracking (52% -> 36%) */}
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1">
-                      <div 
-                        className="w-full h-12 bg-gradient-to-r from-amber-600 to-amber-500 flex items-center justify-center shadow-md" 
-                        style={{ clipPath: 'polygon(24% 0%, 76% 0%, 68% 100%, 32% 100%)' }}
-                      >
-                        <div className="flex items-center gap-2.5 w-36">
-                          <MapPin size={15} className="text-amber-100 shrink-0" />
-                          <div className="leading-tight">
-                            <div className="font-extrabold text-sm text-white">{calc.tracking}</div>
-                            <div className="text-[10px] text-amber-100">Ingreso a tracking</div>
-                          </div>
+                  {/* Nivel 2: Mensajes enviados */}
+                  <div className="flex items-center gap-4">
+                    <div className="relative flex-1 h-12 flex items-center justify-center">
+                      <div
+                        className="absolute inset-0 bg-gradient-to-r from-emerald-700 via-emerald-600 to-emerald-500 shadow-lg"
+                        style={{ clipPath: 'polygon(7% 0%, 93% 0%, 86% 100%, 14% 100%)' }}
+                      />
+                      <div className="relative z-10 grid grid-cols-[28px_115px] items-center gap-2.5">
+                        <div className="w-7 h-7 rounded-lg bg-white/15 flex items-center justify-center text-white shadow-inner">
+                          <Send size={14} />
+                        </div>
+                        <div className="text-left leading-tight">
+                          <div className="font-extrabold text-base text-white tracking-tight">{calc.whsEnviados}</div>
+                          <div className="text-[11px] font-medium text-emerald-50 whitespace-nowrap">Mensajes enviados</div>
                         </div>
                       </div>
                     </div>
-                    <div className="w-24 text-right leading-tight space-y-0.5 shrink-0">
-                      <div className="font-bold text-xs text-white">{calc.trackPct}% <span className="text-[9px] font-normal text-gray-400">(env.)</span></div>
-                      <div className="font-bold text-xs text-amber-300">{calc.trackOverReadPct}% <span className="text-[9px] font-normal text-amber-400/80">(leído)</span></div>
+                    <div className="w-28 text-right shrink-0">
+                      <div className="font-extrabold text-sm text-emerald-400">{calc.whsPct}%</div>
+                      <div className="text-[10px] text-gray-400">del total</div>
+                    </div>
+                  </div>
+
+                  {/* Nivel 3: Mensajes leídos */}
+                  <div className="flex items-center gap-4">
+                    <div className="relative flex-1 h-12 flex items-center justify-center">
+                      <div
+                        className="absolute inset-0 bg-gradient-to-r from-cyan-700 via-cyan-600 to-cyan-500 shadow-lg"
+                        style={{ clipPath: 'polygon(14% 0%, 86% 0%, 79% 100%, 21% 100%)' }}
+                      />
+                      <div className="relative z-10 grid grid-cols-[28px_115px] items-center gap-2.5">
+                        <div className="w-7 h-7 rounded-lg bg-white/15 flex items-center justify-center text-white shadow-inner">
+                          <CheckCheck size={15} />
+                        </div>
+                        <div className="text-left leading-tight">
+                          <div className="font-extrabold text-base text-white tracking-tight">{calc.leidos}</div>
+                          <div className="text-[11px] font-medium text-cyan-50 whitespace-nowrap">Mensajes leídos</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="w-28 text-right shrink-0">
+                      <div className="font-extrabold text-sm text-cyan-300">{calc.readPct}%</div>
+                      <div className="text-[10px] text-gray-400">del enviado</div>
+                    </div>
+                  </div>
+
+                  {/* Nivel 4: Ingreso a tracking */}
+                  <div className="flex items-center gap-4">
+                    <div className="relative flex-1 h-12 flex items-center justify-center">
+                      <div
+                        className="absolute inset-0 bg-gradient-to-r from-amber-600 via-amber-500 to-orange-500 shadow-lg"
+                        style={{ clipPath: 'polygon(21% 0%, 79% 0%, 72% 100%, 28% 100%)' }}
+                      />
+                      <div className="relative z-10 grid grid-cols-[28px_115px] items-center gap-2.5">
+                        <div className="w-7 h-7 rounded-lg bg-white/15 flex items-center justify-center text-white shadow-inner">
+                          <MapPin size={15} />
+                        </div>
+                        <div className="text-left leading-tight">
+                          <div className="font-extrabold text-base text-white tracking-tight">{calc.tracking}</div>
+                          <div className="text-[11px] font-medium text-amber-50 whitespace-nowrap">Ingreso a tracking</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="w-28 flex flex-col items-end justify-center gap-1 shrink-0">
+                      <div className="flex items-center justify-between w-full px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-[10px]">
+                        <span className="text-gray-300">s/env.</span>
+                        <span className="font-extrabold text-white">{calc.trackPct}%</span>
+                      </div>
+                      <div className="flex items-center justify-between w-full px-1.5 py-0.5 rounded bg-yellow-500/15 border border-yellow-500/30 text-[10px]">
+                        <span className="text-yellow-200/80">s/leído</span>
+                        <span className="font-extrabold text-yellow-300">{calc.trackOverReadPct}%</span>
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Evolución de Indicadores Clave con nodos y % diario */}
+              {/* Evolución de Indicadores Clave */}
               <div className="col-span-5 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-between">
                 <div className="flex items-center justify-between border-b border-gray-800 pb-2.5 mb-2">
                   <div className="flex items-center gap-2">
@@ -650,42 +668,33 @@ export default function App() {
                 </div>
 
                 <div className="flex items-center gap-2 h-48 my-auto">
-                  {/* Eje Y */}
                   <div className="flex flex-col justify-between h-36 text-[10px] text-gray-500 pr-1 text-right self-start mt-2">
                     <span>100%</span><span>80%</span><span>60%</span><span>40%</span><span>20%</span><span>0%</span>
                   </div>
 
-                  {/* Lienzo SVG con líneas, puntos, porcentajes y fechas perfectamente alineadas */}
                   <div className="flex-1 h-full flex items-center">
                     <svg viewBox="0 0 400 152" className="w-full h-44 overflow-visible">
-                      {/* Líneas guía horizontales */}
                       {[15, 38, 61, 84, 107, 130].map((y, idx) => (
                         <line key={idx} x1="10" y1={y} x2="390" y2={y} stroke="#1F2937" strokeDasharray="3 3" />
                       ))}
 
-                      {/* Líneas guía verticales por día */}
                       {chartPolylines.points.map((pt, idx) => (
                         <line key={`v-${idx}`} x1={pt.x} y1="15" x2={pt.x} y2="130" stroke="#1F2937" strokeWidth="0.6" strokeDasharray="2 2" />
                       ))}
 
-                      {/* 4 Curvas del evolutivo */}
                       <polyline fill="none" stroke="#10B981" strokeWidth="2.2" points={chartPolylines.whs} />
                       <polyline fill="none" stroke="#3B82F6" strokeWidth="2.2" points={chartPolylines.lectura} />
                       <polyline fill="none" stroke="#FDE047" strokeWidth="1.8" strokeDasharray="4 3" points={chartPolylines.trackingLeidos} />
                       <polyline fill="none" stroke="#F59E0B" strokeWidth="2.2" points={chartPolylines.tracking} />
 
-                      {/* Puntos, etiquetas de % por día y fecha en eje X */}
                       {chartPolylines.points.map((pt, idx) => {
-                        // Si hay más de 10 días seleccionados, mostramos los % día por medio para que no se pisen
                         const showLabel = chartPolylines.points.length <= 10 || idx % 2 === 0 || idx === chartPolylines.points.length - 1;
                         return (
                           <g key={idx}>
-                            {/* Fecha en Eje X */}
                             <text x={pt.x} y={146} textAnchor="middle" fill="#9CA3AF" fontSize="9.5" fontWeight="500">
                               {pt.fecha}
                             </text>
 
-                            {/* 1. Envío WHS (Verde) */}
                             <circle cx={pt.x} cy={pt.yWhs} r="3.5" fill="#10B981" stroke="#090D16" strokeWidth="1.5">
                               <title>{`${pt.fecha} • Envío WHS: ${pt.vWhs}`}</title>
                             </circle>
@@ -695,7 +704,6 @@ export default function App() {
                               </text>
                             )}
 
-                            {/* 2. Lectura (Azul) */}
                             <circle cx={pt.x} cy={pt.yLec} r="3.5" fill="#3B82F6" stroke="#090D16" strokeWidth="1.5">
                               <title>{`${pt.fecha} • Lectura: ${pt.vLec}`}</title>
                             </circle>
@@ -705,7 +713,6 @@ export default function App() {
                               </text>
                             )}
 
-                            {/* 3. Tracking % s/Leído (Amarillo) */}
                             <circle cx={pt.x} cy={pt.yTrkLei} r="3.2" fill="#FDE047" stroke="#090D16" strokeWidth="1.5">
                               <title>{`${pt.fecha} • Tracking (s/Leído): ${pt.vTrkLei}`}</title>
                             </circle>
@@ -715,7 +722,6 @@ export default function App() {
                               </text>
                             )}
 
-                            {/* 4. Tracking % s/Enviado (Naranja - etiqueta debajo del punto para no chocar con la amarilla) */}
                             <circle cx={pt.x} cy={pt.yTrk} r="3.5" fill="#F59E0B" stroke="#090D16" strokeWidth="1.5">
                               <title>{`${pt.fecha} • Tracking (s/Env.): ${pt.vTrk}`}</title>
                             </circle>
@@ -730,7 +736,6 @@ export default function App() {
                     </svg>
                   </div>
 
-                  {/* Resumen derecho del período */}
                   <div className="flex flex-col justify-between h-36 py-1 text-[10px] font-bold text-right shrink-0">
                     <span className="px-2 py-0.5 rounded bg-emerald-500 text-gray-950">{calc.whsPct}%</span>
                     <span className="px-2 py-0.5 rounded bg-blue-500 text-white">{calc.readPct}%</span>
@@ -739,7 +744,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Leyenda inferior */}
                 <div className="flex flex-wrap items-center justify-center gap-4 pt-2 border-t border-gray-800/60 text-[11px] text-gray-300">
                   <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span><span>Envío WHS</span></div>
                   <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-blue-500"></span><span>Lectura</span></div>
@@ -748,6 +752,7 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Eficiencia Operativa */}
               <div className="col-span-3 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-between space-y-2.5">
                 <div className="flex items-center justify-between border-b border-gray-800 pb-2">
                   <div className="flex items-center gap-2">
@@ -788,6 +793,7 @@ export default function App() {
               </div>
             </div>
 
+            {/* FILA 3: DONA DE ESTADOS + TRACKING POR SEGMENTO (CONECTADO POR DISTRITO) + RANKING */}
             <div className="grid grid-cols-12 gap-4">
               <div className="col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4">
                 <div className="flex items-center gap-2 border-b border-gray-800 pb-2.5 mb-3">
@@ -815,6 +821,7 @@ export default function App() {
                 </div>
               </div>
 
+              {/* TARJETA INGRESO A TRACKING POR SEGMENTO (CONECTADA A DISTRITOS DE AZURE) */}
               <div className="col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-between">
                 <div className="flex items-center justify-between border-b border-gray-800 pb-2.5">
                   <div className="flex items-center gap-2">
@@ -840,7 +847,7 @@ export default function App() {
                     <div className="text-right w-28 leading-tight shrink-0">
                       <div className="font-extrabold text-xs text-white">{calc.avPct}%</div>
                       <div className="text-[10px] text-gray-400">
-                        ({calc.avTrackingFmt} de {calc.avEnviadosFmt})
+                        ({calc.avTrackingFmt} ingresos)
                       </div>
                     </div>
                   </div>
@@ -860,7 +867,7 @@ export default function App() {
                     <div className="text-right w-28 leading-tight shrink-0">
                       <div className="font-extrabold text-xs text-white">{calc.prefPct}%</div>
                       <div className="text-[10px] text-gray-400">
-                        ({calc.prefTrackingFmt} de {calc.prefEnviadosFmt})
+                        ({calc.prefTrackingFmt} ingresos)
                       </div>
                     </div>
                   </div>
@@ -891,6 +898,7 @@ export default function App() {
               </div>
             </div>
 
+            {/* FILA 4: ALERTAS OPERATIVAS + OPORTUNIDADES */}
             <div className="grid grid-cols-12 gap-4">
               <div className="col-span-8 bg-[#111827]/90 border border-gray-800 rounded-xl p-4">
                 <div className="flex items-center gap-2 border-b border-gray-800 pb-2 mb-2">

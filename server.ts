@@ -12,6 +12,7 @@ app.use(cors());
 app.use(compression());
 app.use(express.json());
 
+// Caché en RAM por 5 minutos (300 segundos)
 const queryCache = new NodeCache({ stdTTL: 300 });
 
 const pool = mysql.createPool({
@@ -25,9 +26,8 @@ const pool = mysql.createPool({
   connectionLimit: 10,
 });
 
-let servicioToTipoMap = new Map<string, string>();
-let tiposUnicosList: string[] = [];
-
+// Distritos catalogados como Alto Valor (Lima Top / Lima Moderna)
+// Todo distrito fuera de esta lista (periferias y resto) se agrupa en Preferente
 const DISTRITOS_ALTO_VALOR = [
   'MIRAFLORES',
   'SAN ISIDRO',
@@ -43,12 +43,17 @@ const DISTRITOS_ALTO_VALOR = [
   'MAGDALENA',
   'PUEBLO LIBRE',
   'SAN MIGUEL',
-  'SURQUILLO'
+  'SURQUILLO',
 ];
+
+let servicioToTipoMap = new Map<string, string>();
+let tiposUnicosList: string[] = [];
 
 async function loadTipoServicioCache() {
   try {
-    const [rows]: any = await pool.query(`SELECT Servicio, Tipo FROM tiposervicio WHERE Tipo IS NOT NULL`);
+    const [rows]: any = await pool.query(
+      `SELECT Servicio, Tipo FROM tiposervicio WHERE Tipo IS NOT NULL`
+    );
     const map = new Map<string, string>();
     const setTipos = new Set<string>();
     for (const r of rows) {
@@ -67,6 +72,7 @@ async function loadTipoServicioCache() {
 
 loadTipoServicioCache();
 
+// 1. Endpoint de catálogos para filtros desplegables
 app.get('/api/filters', async (_req, res) => {
   try {
     const cachedFilters = queryCache.get('catalog_filters');
@@ -83,11 +89,12 @@ app.get('/api/filters', async (_req, res) => {
       ORDER BY sector_operativo
     `);
 
+    const todayStr = new Date().toLocaleDateString('en-CA');
     const payload = {
       ok: true,
       servicios: tiposUnicosList,
       zonas: zonas.map((z: any) => z.zona),
-      dateRange: { minDate: '2026-10-25', maxDate: '2026-10-31' },
+      dateRange: { minDate: todayStr, maxDate: todayStr },
     };
 
     queryCache.set('catalog_filters', payload, 3600);
@@ -97,11 +104,13 @@ app.get('/api/filters', async (_req, res) => {
   }
 });
 
+// 2. Endpoint principal del Dashboard
 app.get('/api/dashboard', async (req, res) => {
   const startTime = Date.now();
+  const todayDefault = new Date().toLocaleDateString('en-CA');
   const {
-    startDate = '2026-10-25',
-    endDate = '2026-10-31',
+    startDate = todayDefault,
+    endDate = todayDefault,
     service = 'Todos los servicios',
     zone = 'Todas las zonas',
     refresh = 'false',
@@ -116,15 +125,13 @@ app.get('/api/dashboard', async (req, res) => {
     }
   }
 
-  
   try {
-    // Calculamos si el rango elegido tiene menos de 7 días para forzar mínimo 7 días en el gráfico
+    // Aseguramos mínimo los últimos 7 días hasta endDate para el gráfico evolutivo
     const endObj = new Date(`${endDate}T00:00:00`);
     const min7StartObj = new Date(endObj);
-    min7StartObj.setDate(min7StartObj.getDate() - 6); // Últimos 7 días contando endDate
+    min7StartObj.setDate(min7StartObj.getDate() - 6);
     const min7StartStr = min7StartObj.toISOString().split('T')[0];
 
-    // Si startDate es más reciente que hace 7 días, el gráfico consulta desde hace 7 días; si el usuario pidió más días, respeta startDate
     const chartStartDate = startDate < min7StartStr ? startDate : min7StartStr;
 
     const extraFilters: string[] = [];
@@ -152,18 +159,11 @@ app.get('/api/dashboard', async (req, res) => {
 
     const filterSql = extraFilters.join(' ');
     const avListSql = DISTRITOS_ALTO_VALOR.map((d) => `'${d}'`).join(',');
+
     const [dailyResult, orderResult]: any = await Promise.all([
-        
-      // 1. Consulta diaria usando chartStartDate (mínimo 7 días para el gráfico)
       pool.query(
         `
         SELECT 
-          COALESCE(SUM(v.estado_wsp = 'read' AND v.ingreso_tracking = 'NO'), 0) AS leidos_sin_ingreso,
-          COALESCE(SUM(UPPER(TRIM(v.distrito)) IN (${avListSql}) AND v.se_envio_wsp = 'SI'), 0) AS av_enviados,
-          COALESCE(SUM(UPPER(TRIM(v.distrito)) IN (${avListSql}) AND v.ingreso_tracking = 'SI'), 0) AS av_tracking,
-          COALESCE(SUM((UPPER(TRIM(v.distrito)) NOT IN (${avListSql}) OR v.distrito IS NULL) AND v.se_envio_wsp = 'SI'), 0) AS pref_enviados,
-          COALESCE(SUM((UPPER(TRIM(v.distrito)) NOT IN (${avListSql}) OR v.distrito IS NULL) AND v.ingreso_tracking = 'SI'), 0) AS pref_tracking
-          FROM vw_reporte_funnel_casos_360 v
           DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
           DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m') AS fecha,
           COUNT(*) AS total,
@@ -176,7 +176,11 @@ app.get('/api/dashboard', async (req, res) => {
           COALESCE(SUM(v.ingreso_tracking = 'SI'), 0) AS tracking,
           COALESCE(SUM(v.reprogramo = 'SI'), 0) AS reprogramaciones,
           COALESCE(SUM(v.respondio_encuesta = 'SI'), 0) AS encuestas,
-          COALESCE(SUM(v.estado_wsp = 'read' AND v.ingreso_tracking = 'NO'), 0) AS leidos_sin_ingreso
+          COALESCE(SUM(v.estado_wsp = 'read' AND v.ingreso_tracking = 'NO'), 0) AS leidos_sin_ingreso,
+          COALESCE(SUM(UPPER(TRIM(v.distrito)) IN (${avListSql}) AND v.se_envio_wsp = 'SI'), 0) AS av_enviados,
+          COALESCE(SUM(UPPER(TRIM(v.distrito)) IN (${avListSql}) AND v.ingreso_tracking = 'SI'), 0) AS av_tracking,
+          COALESCE(SUM((UPPER(TRIM(v.distrito)) NOT IN (${avListSql}) OR v.distrito IS NULL) AND v.se_envio_wsp = 'SI'), 0) AS pref_enviados,
+          COALESCE(SUM((UPPER(TRIM(v.distrito)) NOT IN (${avListSql}) OR v.distrito IS NULL) AND v.ingreso_tracking = 'SI'), 0) AS pref_tracking
         FROM vw_reporte_funnel_casos_360 v
         WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
         ${filterSql}
@@ -185,7 +189,6 @@ app.get('/api/dashboard', async (req, res) => {
         `,
         [chartStartDate, endDate, ...extraParams]
       ),
-      // 2. Consulta de órdenes usando estrictamente el rango seleccionado (startDate a endDate)
       pool.query(
         `
         SELECT 
@@ -205,7 +208,7 @@ app.get('/api/dashboard', async (req, res) => {
 
     const dailyRows: any[] = dailyResult[0] || [];
 
-    // Para los KPIs, Embudo y Dona solo sumamos los días dentro del filtro exacto del usuario (startDate..endDate)
+    // Sumamos para los KPIs únicamente los días dentro del rango exacto seleccionado (startDate..endDate)
     const kpiRowsInRange = dailyRows.filter(
       (r) => r.raw_date >= startDate && r.raw_date <= endDate
     );
@@ -229,10 +232,21 @@ app.get('/api/dashboard', async (req, res) => {
         pref_tracking: acc.pref_tracking + Number(row.pref_tracking || 0),
       }),
       {
-        total_ordenes: 0, whs_enviados: 0, whs_leidos: 0, whs_sent: 0,
-        whs_delivered: 0, whs_failed: 0, whs_no_enviado: 0, ingreso_tracking: 0,
-        reprogramaciones: 0, encuestas_respondidas: 0, leidos_sin_ingreso: 0,
-        av_enviados: 0, av_tracking: 0, pref_enviados: 0, pref_tracking: 0,
+        total_ordenes: 0,
+        whs_enviados: 0,
+        whs_leidos: 0,
+        whs_sent: 0,
+        whs_delivered: 0,
+        whs_failed: 0,
+        whs_no_enviado: 0,
+        ingreso_tracking: 0,
+        reprogramaciones: 0,
+        encuestas_respondidas: 0,
+        leidos_sin_ingreso: 0,
+        av_enviados: 0,
+        av_tracking: 0,
+        pref_enviados: 0,
+        pref_tracking: 0,
       }
     );
 
