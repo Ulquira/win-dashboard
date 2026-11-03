@@ -490,7 +490,351 @@ app.get('/api/dashboard', async (req, res) => {
   }
 });
 
+// 1. Endpoint de Búsqueda Paginada (50 en 50) para Seguimiento (Cruzando con historial_chats_mantra)
+app.get('/api/tracking/search', async (req, res) => {
+  try {
+    const todayIso = new Date().toLocaleDateString('en-CA');
+    const rawStart = String(req.query.startDate || '').trim();
+    const rawEnd = String(req.query.endDate || '').trim();
+
+    const startDate = /^\d{4}-\d{2}-\d{2}$/.test(rawStart) ? rawStart : todayIso;
+    const endDate = /^\d{4}-\d{2}-\d{2}$/.test(rawEnd) ? rawEnd : todayIso;
+
+    const rawService = String(req.query.service || '').trim();
+    const rawZone = String(req.query.zone || '').trim();
+    const service = !rawService || rawService === 'undefined' ? 'Todos los servicios' : rawService;
+    const zone = !rawZone || rawZone === 'undefined' ? 'Todas las zonas' : rawZone;
+
+    const q = String(req.query.q || '').trim();
+    const ignoreDates = req.query.ignoreDates === 'true';
+    const fEstadoChat = String(req.query.estadoChat || 'Todos');
+    const fSla = String(req.query.sla || 'Todos');
+    const fTurno = String(req.query.turno || 'Todos');
+    const fSoloConChat = req.query.soloConChat === 'true';
+
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(10, Number(req.query.pageSize) || 50));
+    const offset = (page - 1) * pageSize;
+
+    const whereClauses: string[] = [];
+    const params: any[] = [];
+
+    if (!ignoreDates) {
+      whereClauses.push('v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?');
+      params.push(startDate, endDate);
+    }
+
+    if (service !== 'Todos los servicios') {
+      whereClauses.push('(v.tipo_operacion = ? OR v.producto = ?)');
+      params.push(service, service);
+    }
+
+    if (zone !== 'Todas las zonas') {
+      whereClauses.push('(v.sector_operativo = ? OR v.distrito = ?)');
+      params.push(zone, zone);
+    }
+
+    if (fSoloConChat) {
+      whereClauses.push('(h.orden_id IS NOT NULL OR h.phone IS NOT NULL)');
+    }
+
+    if (fEstadoChat !== 'Todos') {
+      whereClauses.push("UPPER(COALESCE(h.estado_chat, '')) = ?");
+      params.push(fEstadoChat.toUpperCase());
+    }
+
+    if (fSla !== 'Todos') {
+      whereClauses.push("UPPER(COALESCE(h.semaforo_sla, '')) LIKE ?");
+      params.push(`%${fSla.toUpperCase()}%`);
+    }
+
+    if (fTurno !== 'Todos') {
+      whereClauses.push("UPPER(COALESCE(h.quien_tiene_la_palabra, '')) LIKE ?");
+      params.push(`%${fTurno.toUpperCase()}%`);
+    }
+
+    if (q) {
+      const likeQ = `%${q}%`;
+      whereClauses.push(`(
+        CAST(v.orden_id AS CHAR) LIKE ? OR
+        v.ticket LIKE ? OR
+        v.cliente LIKE ? OR
+        v.telefono LIKE ? OR
+        h.phone LIKE ? OR
+        w.\`Número Documento\` LIKE ? OR
+        w.CodiSeguiClien LIKE ? OR
+        w.Cuadrilla LIKE ?
+      )`);
+      params.push(likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+    const [countResult, rowsResult]: any = await Promise.all([
+      pool.query(
+        `
+        SELECT COUNT(*) AS total
+        FROM vw_reporte_funnel_casos_360 v
+        LEFT JOIN historial_chats_mantra h ON h.orden_id = v.orden_id
+        LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
+        ${whereSql}
+        `,
+        params
+      ),
+      pool.query(
+        `
+        SELECT 
+          v.*,
+          DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_solicitud_fmt,
+          COALESCE(NULLIF(TRIM(v.tipo_operacion), ''), NULLIF(TRIM(v.producto), ''), 'OTROS') AS servicio_tipo,
+          w.\`Número Documento\` AS numero_documento,
+          w.\`Tipo Documento\` AS tipo_documento,
+          w.CodiSeguiClien AS codi_segui_clien,
+          w.CodiClien AS codi_clien,
+          w.CodiSegui AS codi_segui_ot,
+          w.Cuadrilla AS cuadrilla_completa,
+          w.Proveedeor AS proveedor_ot,
+          w.Tipo AS segmento_cliente,
+          w.Provincia AS provincia_cliente,
+          w.\`Motivo Trabajo\` AS motivo_trabajo,
+          w.Direccion AS direccion_cliente,
+          w.IdenServi AS plan_contratado,
+          h.phone AS mantra_phone,
+          h.estado_chat,
+          h.semaforo_sla,
+          h.quien_tiene_la_palabra,
+          h.ultimos_mensajes_json AS chat_json_mantra
+        FROM vw_reporte_funnel_casos_360 v
+        LEFT JOIN historial_chats_mantra h ON h.orden_id = v.orden_id
+        LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
+        ${whereSql}
+        ORDER BY (h.ultimos_mensajes_json IS NOT NULL) DESC, v.orden_id DESC
+        LIMIT ${Number(pageSize)} OFFSET ${Number(offset)}
+        `,
+        params
+      ),
+    ]);
+
+    const total = Number(countResult?.[0]?.[0]?.total || 0);
+    const rows = (rowsResult?.[0] || []).map((r: any) => ({
+      ...r,
+      ultimos_mensajes_json: r.chat_json_mantra || r.ultimos_mensajes_json || null,
+    }));
+
+    return res.json({
+      ok: true,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      orders: rows,
+    });
+  } catch (error: any) {
+    console.error('❌ Error en /api/tracking/search:', error.message);
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// 2. Endpoint Live + Fallback BD usando config_plantillas_mantra e historial_chats_mantra
+app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
+  try {
+    const rawPhone = String(req.query.phone || '').replace(/\D/g, '');
+    const phone9 = rawPhone.slice(-9);
+    const ordenId = req.query.ordenId ? Number(req.query.ordenId) : null;
+    const grupoServicio = String(req.query.grupoServicio || 'GENERAL').trim();
+    const limit = Math.min(50, Math.max(5, Number(req.query.limit) || 15));
+
+    if (!phone9 && !ordenId) {
+      return res.status(400).json({ ok: false, error: 'Parámetro phone u ordenId requerido' });
+    }
+
+    // A. Consultar credenciales dinámicas en config_plantillas_mantra por tipo_servicio
+    let apiKey: string | null = process.env.MANTRA_API_TOKEN || null;
+    let groupId: string | null = null;
+    try {
+      const [cfgRows]: any = await pool.query(
+        `
+        SELECT group_id, api_key, tipo_servicio
+        FROM config_plantillas_mantra
+        WHERE UPPER(tipo_servicio) LIKE ? OR ? LIKE CONCAT('%', UPPER(tipo_servicio), '%')
+        LIMIT 1
+        `,
+        [`%${grupoServicio.toUpperCase()}%`, grupoServicio.toUpperCase()]
+      );
+      if (cfgRows?.[0]) {
+        apiKey = cfgRows[0].api_key || apiKey;
+        groupId = cfgRows[0].group_id || null;
+      } else {
+        const [fallbackCfg]: any = await pool.query(
+          `SELECT group_id, api_key FROM config_plantillas_mantra WHERE api_key IS NOT NULL LIMIT 1`
+        );
+        if (fallbackCfg?.[0]) {
+          apiKey = fallbackCfg[0].api_key || apiKey;
+          groupId = fallbackCfg[0].group_id || null;
+        }
+      }
+    } catch (_) {}
+
+    // B. Intento en vivo contra API Mantra si existe URL configurada y credenciales de config_plantillas_mantra
+    if (process.env.MANTRA_API_URL && apiKey) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4500);
+      try {
+        const liveUrl = `${process.env.MANTRA_API_URL}?phone=${encodeURIComponent(
+          rawPhone
+        )}&group_id=${encodeURIComponent(groupId || grupoServicio)}&limit=${limit}`;
+        const liveRes = await fetch(liveUrl, {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'x-api-key': apiKey,
+          },
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (liveRes.ok) {
+          const liveData = await liveRes.json();
+          const msgs = Array.isArray(liveData)
+            ? liveData
+            : liveData.messages || liveData.data || liveData.ultimos_mensajes_json || [];
+          if (Array.isArray(msgs) && msgs.length > 0) {
+            return res.json({
+              ok: true,
+              source: 'live_api',
+              groupId,
+              messages: msgs.slice(-limit),
+            });
+          }
+        }
+      } catch (_) {
+        clearTimeout(timeout);
+      }
+    }
+
+    // C. Fallback directo a tabla física historial_chats_mantra
+    const [chatRows]: any = await pool.query(
+      `
+      SELECT *
+      FROM historial_chats_mantra
+      WHERE (${ordenId ? 'orden_id = ? OR ' : ''} phone LIKE ?)
+      ORDER BY orden_id DESC
+      LIMIT 1
+      `,
+      ordenId ? [ordenId, `%${phone9}%`] : [`%${phone9}%`]
+    );
+
+    const chatRecord = chatRows?.[0] || null;
+    let messages: any[] = [];
+
+    if (chatRecord?.ultimos_mensajes_json) {
+      try {
+        const parsed =
+          typeof chatRecord.ultimos_mensajes_json === 'string'
+            ? JSON.parse(chatRecord.ultimos_mensajes_json)
+            : chatRecord.ultimos_mensajes_json;
+        if (Array.isArray(parsed)) {
+          messages = parsed.slice(-limit);
+        } else if (parsed && Array.isArray(parsed.messages)) {
+          messages = parsed.messages.slice(-limit);
+        }
+      } catch (_) {}
+    }
+
+    return res.json({
+      ok: true,
+      source: 'db_fallback',
+      chatMeta: chatRecord
+        ? {
+            estado_chat: chatRecord.estado_chat,
+            semaforo_sla: chatRecord.semaforo_sla,
+            quien_tiene_la_palabra: chatRecord.quien_tiene_la_palabra,
+            phone: chatRecord.phone,
+            orden_id: chatRecord.orden_id,
+            ticket: chatRecord.ticket,
+          }
+        : null,
+      messages,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`✅ API Azure MySQL lista en http://localhost:${PORT}`);
+});
+
+// Endpoint Live + Fallback BD para el Visor de Chats (WhatsApp / Mantra)
+app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
+  try {
+    const phone = String(req.query.phone || '').replace(/\D/g, '');
+    const grupoServicio = String(req.query.grupoServicio || 'GENERAL');
+    const limit = Math.min(50, Math.max(5, Number(req.query.limit) || 15));
+
+    if (!phone) {
+      return res.status(400).json({ ok: false, error: 'Parámetro phone requerido' });
+    }
+
+    // 1. Intento de consumo en vivo si existe URL de API Mantra configurada en .env
+    if (process.env.MANTRA_API_URL) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4500);
+      try {
+        const liveUrl = `${process.env.MANTRA_API_URL}?phone=${encodeURIComponent(phone)}&grupoServicio=${encodeURIComponent(grupoServicio)}&limit=${limit}`;
+        const liveRes = await fetch(liveUrl, {
+          headers: process.env.MANTRA_API_TOKEN
+            ? { Authorization: `Bearer ${process.env.MANTRA_API_TOKEN}` }
+            : {},
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (liveRes.ok) {
+          const liveData = await liveRes.json();
+          return res.json({
+            ok: true,
+            source: 'live_api',
+            messages: Array.isArray(liveData) ? liveData : liveData.messages || liveData.data || [],
+          });
+        }
+      } catch (_) {
+        clearTimeout(timeout);
+      }
+    }
+
+    // 2. Fallback a Base de Datos Azure MySQL (vw_reporte_funnel_casos_360)
+    const [rows]: any = await pool.query(
+      `
+      SELECT 
+        orden_id, ticket, cliente, telefono, estado_wsp, se_envio_wsp,
+        ingreso_tracking, link_tracking, fecha_solicitud,
+        ultimos_mensajes_json
+      FROM vw_reporte_funnel_casos_360
+      WHERE telefono LIKE ?
+      ORDER BY orden_id DESC
+      LIMIT 1
+      `,
+      [`%${phone.slice(-9)}%`]
+    );
+
+    const row = rows?.[0];
+    let messages: any[] = [];
+
+    if (row?.ultimos_mensajes_json) {
+      try {
+        const parsed =
+          typeof row.ultimos_mensajes_json === 'string'
+            ? JSON.parse(row.ultimos_mensajes_json)
+            : row.ultimos_mensajes_json;
+        if (Array.isArray(parsed)) messages = parsed.slice(-limit);
+      } catch (_) {}
+    }
+
+    return res.json({
+      ok: true,
+      source: 'db_fallback',
+      messages,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
 });

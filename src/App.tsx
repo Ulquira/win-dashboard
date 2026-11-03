@@ -10,6 +10,7 @@ import { KpiCards } from './components/KpiCards';
 import { OrderDetailDrawer } from './components/OrderDetailDrawer';
 import { ExecutiveView } from './views/ExecutiveView';
 import { OperationalView } from './views/OperationalView';
+import { TrackingView } from './views/TrackingView';
 import { OrdersView } from './views/OrdersView';
 
 export default function App() {
@@ -248,9 +249,25 @@ export default function App() {
         )}
 
         {activeNav === 'Órdenes' && (
-          <OrdersView orders={orders} onSelectOrder={setSelectedOrder} />
+          <OrdersView
+            orders={orders}
+            startDate={startDate}
+            endDate={endDate}
+            service={service}
+            zone={zone}
+            onSelectOrder={setSelectedOrder}
+          />
         )}
-
+        {activeNav === 'Seguimiento' && (
+          <TrackingView
+            orders={orders}
+            startDate={startDate}
+            endDate={endDate}
+            service={service}
+            zone={zone}
+            onSelectOrder={setSelectedOrder}
+          />
+        )}
         <OrderDetailDrawer
           selectedOrder={selectedOrder}
           onClose={() => setSelectedOrder(null)}
