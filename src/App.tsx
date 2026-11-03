@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 
 type ViewMode = 'ejecutiva' | 'operativa';
-type NavSection = 'Inicio' | 'WIN en RUTA' | 'Órdenes' | 'Seguimiento' | 'Eficiencia' | 'Experiencia (CSAT)';
+type NavSection = 'Inicio' | 'Dashboard' | 'Órdenes' | 'Seguimiento' | 'Eficiencia' | 'Experiencia (CSAT)';
 
 interface KpiData {
   total_ordenes: number;
@@ -59,6 +59,9 @@ interface RealOrder {
   estado_wsp: string;
   ingreso_tracking: string;
   link_tracking: string;
+  reprogramo?: string;
+  respondio_encuesta?: string;
+  [key: string]: any;
 }
 
 interface PartnerRankItem {
@@ -70,8 +73,9 @@ interface PartnerRankItem {
 }
 
 export default function App() {
-  const [activeNav, setActiveNav] = useState<NavSection>('WIN en RUTA');
+  const [activeNav, setActiveNav] = useState<NavSection>('Dashboard');
   const [viewMode, setViewMode] = useState<ViewMode>('ejecutiva');
+  const [dashOpen, setDashOpen] = useState<boolean>(true);
 
   const todayStr = new Date().toLocaleDateString('en-CA');
   const [startDate, setStartDate] = useState<string>(todayStr);
@@ -84,6 +88,10 @@ export default function App() {
 
   const [kpis, setKpis] = useState<KpiData | null>(null);
   const [evolution, setEvolution] = useState<EvolutionPoint[]>([]);
+  const [dailyInRange, setDailyInRange] = useState<any[]>([]);
+  const [byEstadoOt, setByEstadoOt] = useState<any[]>([]);
+  const [bySector, setBySector] = useState<any[]>([]);
+  const [byTipoOperacion, setByTipoOperacion] = useState<any[]>([]);
   const [orders, setOrders] = useState<RealOrder[]>([]);
   const [partners, setPartners] = useState<PartnerRankItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -92,6 +100,9 @@ export default function App() {
 
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('Todos');
+  const [otStatusFilter, setOtStatusFilter] = useState<string>('Todos');
+  const [trackingFilter, setTrackingFilter] = useState<string>('Todos');
+  const [selectedOrder, setSelectedOrder] = useState<RealOrder | null>(null);
 
   const fetchDashboardData = (
     sDate = startDate,
@@ -116,6 +127,10 @@ export default function App() {
         if (data.ok) {
           setKpis(data.kpis);
           setEvolution(data.evolution || []);
+          setDailyInRange(data.dailyInRange || []);
+          setByEstadoOt(data.byEstadoOt || []);
+          setBySector(data.bySector || []);
+          setByTipoOperacion(data.byTipoOperacion || []);
           setOrders(data.orders || []);
           setPartners(data.partners || []);
           setDbOnline(true);
@@ -290,22 +305,42 @@ export default function App() {
     };
   }, [evolution]);
 
+  const uniqueOtStatuses = useMemo(() => {
+    const s = new Set<string>();
+    orders.forEach((o) => {
+      if (o.estado_ot) s.add(String(o.estado_ot).trim());
+    });
+    return Array.from(s).sort();
+  }, [orders]);
+
   const filteredOrders = useMemo(() => {
     return orders.filter((o) => {
-      const st = (o.estado_wsp || 'NO ENVIADO').toUpperCase().trim();
-      const matchStatus = statusFilter === 'Todos' || st === statusFilter.toUpperCase();
+      const stWsp = (o.estado_wsp || 'NO ENVIADO').toUpperCase().trim();
+      const matchWsp = statusFilter === 'Todos' || stWsp === statusFilter.toUpperCase();
+
+      const stOt = (o.estado_ot || '').trim();
+      const matchOt = otStatusFilter === 'Todos' || stOt === otStatusFilter;
+
+      const trk = (o.ingreso_tracking || 'NO').toUpperCase().trim();
+      const matchTrk = trackingFilter === 'Todos' || trk === trackingFilter;
+
       const q = searchQuery.toLowerCase();
       const matchSearch =
         !q ||
         String(o.orden_id).includes(q) ||
         (o.ticket || '').toLowerCase().includes(q) ||
         (o.cliente || '').toLowerCase().includes(q) ||
+        (o.numero_documento || '').toLowerCase().includes(q) ||
+        (o.codi_segui_clien || '').toLowerCase().includes(q) ||
         (o.telefono || '').toLowerCase().includes(q) ||
-        (o.cuadrilla || '').toLowerCase().includes(q) ||
+        (o.distrito || '').toLowerCase().includes(q) ||
+        (o.sector_operativo || '').toLowerCase().includes(q) ||
+        (o.cuadrilla_completa || o.cuadrilla || '').toLowerCase().includes(q) ||
         (o.partner || '').toLowerCase().includes(q);
-      return matchStatus && matchSearch;
+
+      return matchWsp && matchOt && matchTrk && matchSearch;
     });
-  }, [orders, statusFilter, searchQuery]);
+  }, [orders, statusFilter, otStatusFilter, trackingFilter, searchQuery]);
 
   return (
     <div className="flex min-h-screen bg-[#090D16] text-gray-100 font-sans select-none">
@@ -325,8 +360,66 @@ export default function App() {
 
           <nav className="space-y-1 text-xs font-medium">
             <NavItem icon={<Home size={16} />} label="Inicio" active={activeNav === 'Inicio'} onClick={() => { setActiveNav('Inicio'); setViewMode('ejecutiva'); }} />
-            <NavItem icon={<BarChart2 size={16} />} label="WIN en RUTA" active={activeNav === 'WIN en RUTA'} onClick={() => { setActiveNav('WIN en RUTA'); setViewMode('ejecutiva'); }} />
-            <NavItem icon={<Layers size={16} />} label="Órdenes" active={activeNav === 'Órdenes'} onClick={() => { setActiveNav('Órdenes'); setViewMode('operativa'); }} />
+            
+            {/* Desplegable Dashboard con las 2 vistas configuradas */}
+            <div>
+              <div
+                onClick={() => {
+                  setActiveNav('Dashboard');
+                  setDashOpen(!dashOpen);
+                }}
+                className={`flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer transition ${
+                  activeNav === 'Dashboard'
+                    ? 'bg-gradient-to-r from-[#FF6B00] to-[#FF8533] text-white font-semibold shadow-md shadow-orange-500/20'
+                    : 'text-gray-400 hover:text-white hover:bg-gray-800/40'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <BarChart2 size={16} />
+                  <span>Dashboard</span>
+                </div>
+                <ChevronDown
+                  size={14}
+                  className={`transition-transform duration-200 ${dashOpen ? 'rotate-180' : ''}`}
+                />
+              </div>
+
+              {dashOpen && (
+                <div className="mt-1 ml-4 pl-3 border-l border-gray-800 space-y-1">
+                  <div
+                    onClick={() => {
+                      setActiveNav('Dashboard');
+                      setViewMode('ejecutiva');
+                    }}
+                    className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition text-[11px] ${
+                      activeNav === 'Dashboard' && viewMode === 'ejecutiva'
+                        ? 'bg-[#FF6B00]/15 text-[#FF6B00] font-bold border border-[#FF6B00]/30'
+                        : 'text-gray-400 hover:text-white hover:bg-gray-800/30'
+                    }`}
+                  >
+                    <Activity size={13} />
+                    <span>Vista Ejecutiva</span>
+                  </div>
+
+                  <div
+                    onClick={() => {
+                      setActiveNav('Dashboard');
+                      setViewMode('operativa');
+                    }}
+                    className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition text-[11px] ${
+                      activeNav === 'Dashboard' && viewMode === 'operativa'
+                        ? 'bg-[#FF6B00]/15 text-[#FF6B00] font-bold border border-[#FF6B00]/30'
+                        : 'text-gray-400 hover:text-white hover:bg-gray-800/30'
+                    }`}
+                  >
+                    <ClipboardList size={13} />
+                    <span>Vista Operativa</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <NavItem icon={<Layers size={16} />} label="Órdenes" active={activeNav === 'Órdenes'} onClick={() => setActiveNav('Órdenes')} />
             <NavItem icon={<CheckCircle size={16} />} label="Seguimiento" active={activeNav === 'Seguimiento'} onClick={() => { setActiveNav('Seguimiento'); setViewMode('operativa'); }} />
             <NavItem icon={<Activity size={16} />} label="Eficiencia" active={activeNav === 'Eficiencia'} onClick={() => { setActiveNav('Eficiencia'); setViewMode('ejecutiva'); }} />
             <NavItem icon={<Smile size={16} />} label="Experiencia (CSAT)" active={activeNav === 'Experiencia (CSAT)'} onClick={() => { setActiveNav('Experiencia (CSAT)'); setViewMode('ejecutiva'); }} />
@@ -444,7 +537,8 @@ export default function App() {
           </div>
         </header>
 
-        {/* TABS SUPERIORES */}
+        {/* TABS SUPERIORES (Solo visibles en sección Dashboard) */}
+        {activeNav !== 'Órdenes' && (
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <button
@@ -467,12 +561,14 @@ export default function App() {
               }`}
             >
               <ClipboardList size={14} />
-              Vista Operativa ({orders.length})
+              Vista Operativa
             </button>
           </div>
         </div>
+        )}
 
-        {/* FILA 1: 6 TARJETAS KPI HOMOLOGADAS */}
+        {/* FILA 1: 6 TARJETAS KPI HOMOLOGADAS (Solo visibles fuera de Órdenes) */}
+        {activeNav !== 'Órdenes' && (
         <div className="grid grid-cols-6 gap-3">
           
           <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
@@ -567,8 +663,9 @@ export default function App() {
           </div>
 
         </div>
+        )}
 
-        {viewMode === 'ejecutiva' ? (
+        {activeNav === 'Órdenes' ? null : viewMode === 'ejecutiva' ? (
           <>
             {/* FILA 2: EMBUDO ALINEADO + EVOLUCIÓN CON PUNTOS DIARIOS + EFICIENCIA */}
             <div className="grid grid-cols-12 gap-4">
@@ -988,113 +1085,600 @@ export default function App() {
             </div>
           </>
         ) : (
+          <div className="space-y-4">
+            {/* FILA 1 OPERATIVA: RESUMEN EJECUTIVO DIARIO + DISTRIBUCIÓN POR ESTADO WSP */}
+            <div className="grid grid-cols-12 gap-4">
+              {/* Tabla Resumen Ejecutivo */}
+              <div className="col-span-8 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-start">
+                <div className="flex items-center justify-between border-b border-gray-800 pb-2.5 mb-3">
+                  <div className="flex items-center gap-2">
+                    <Calendar size={15} className="text-cyan-400" />
+                    <h3 className="font-bold text-xs tracking-wider uppercase text-white">Resumen Ejecutivo</h3>
+                  </div>
+                  <span className="text-[11px] text-gray-400">{dailyInRange.length} {dailyInRange.length === 1 ? 'día' : 'días'}</span>
+                </div>
+
+                <div className="overflow-x-auto max-h-64">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-gray-400 border-b border-gray-800 text-[10px] uppercase">
+                        <th className="py-2 text-left">Fecha</th>
+                        <th className="py-2 text-right">Total Base</th>
+                        <th className="py-2 text-right">WSP Env.</th>
+                        <th className="py-2 text-right">Leídos (Read)</th>
+                        <th className="py-2 text-right">Tracking</th>
+                        <th className="py-2 text-right">Reprog.</th>
+                        <th className="py-2 text-right">Encuestas</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-800/50">
+                      {[...dailyInRange].reverse().map((d, i) => {
+                        const tot = Number(d.total || 0);
+                        const env = Number(d.enviados || 0);
+                        const lei = Number(d.leidos || 0);
+                        const trk = Number(d.tracking || 0);
+                        const pEnv = tot > 0 ? ((env / tot) * 100).toFixed(1) : '0.0';
+                        const pLei = env > 0 ? ((lei / env) * 100).toFixed(1) : '0.0';
+                        const pTrkEnv = env > 0 ? ((trk / env) * 100).toFixed(1) : '0.0';
+                        const pTrkLei = lei > 0 ? ((trk / lei) * 100).toFixed(1) : '0.0';
+                        return (
+                          <tr key={i} className="hover:bg-gray-800/30">
+                            <td className="py-2.5 font-bold text-white">{d.fecha_full || d.raw_date}</td>
+                            <td className="py-2.5 text-right font-bold text-gray-200">{tot.toLocaleString('es-PE')}</td>
+                            <td className="py-2.5 text-right">
+                              <span className="text-emerald-400 font-bold">{env.toLocaleString('es-PE')}</span>{' '}
+                              <span className="text-[10px] text-emerald-500/80">({pEnv}%)</span>
+                            </td>
+                            <td className="py-2.5 text-right">
+                              <span className="text-cyan-400 font-bold">{lei.toLocaleString('es-PE')}</span>{' '}
+                              <span className="text-[10px] text-cyan-500/80">({pLei}%)</span>
+                            </td>
+                            <td className="py-2.5 text-right">
+                              <span className="text-amber-400 font-bold">{trk.toLocaleString('es-PE')}</span>{' '}
+                              <span className="text-[10px] text-amber-500/90">({pTrkEnv}%)</span>{' '}
+                              <span className="text-[10px] text-cyan-300 font-semibold">[{pTrkLei}%]</span>
+                            </td>
+                            <td className="py-2.5 text-right font-bold text-purple-400">{Number(d.reprogramaciones || 0)}</td>
+                            <td className="py-2.5 text-right font-bold text-emerald-400">{Number(d.encuestas || 0)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Barras Distribución por Estado WSP */}
+              <div className="col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4">
+                <div className="flex items-center justify-between border-b border-gray-800 pb-2.5 mb-3">
+                  <div className="flex items-center gap-2">
+                    <Send size={14} className="text-emerald-400" />
+                    <h3 className="font-bold text-xs tracking-wider uppercase text-white">Distribución por Estado WSP</h3>
+                  </div>
+                  <span className="text-[11px] text-gray-400">{calc.ordenes} msgs</span>
+                </div>
+
+                <div className="space-y-3">
+                  {[
+                    { label: 'READ', count: Number(kpis?.whs_leidos || 0), badge: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30', bar: 'bg-emerald-500' },
+                    { label: 'DELIVERED', count: Number(kpis?.whs_delivered || 0), badge: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30', bar: 'bg-cyan-400' },
+                    { label: 'NO ENVIADO', count: Number(kpis?.whs_no_enviado || 0), badge: 'bg-gray-700/40 text-gray-300 border-gray-600/40', bar: 'bg-gray-500' },
+                    { label: 'SENT', count: Number(kpis?.whs_sent || 0), badge: 'bg-blue-500/15 text-blue-400 border-blue-500/30', bar: 'bg-blue-500' },
+                    { label: 'FAILED', count: Number(kpis?.whs_failed || 0), badge: 'bg-red-500/15 text-red-400 border-red-500/30', bar: 'bg-red-500' },
+                  ].map((st) => {
+                    const tot = Number(kpis?.total_ordenes || 0);
+                    const pctVal = tot > 0 ? (st.count / tot) * 100 : 0;
+                    return (
+                      <div key={st.label} className="space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${st.badge}`}>{st.label}</span>
+                          <div>
+                            <span className="font-extrabold text-white mr-1.5">{st.count.toLocaleString('es-PE')}</span>
+                            <span className="text-[11px] text-gray-400">({pctVal.toFixed(1)}%)</span>
+                          </div>
+                        </div>
+                        <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                          <div className={`h-full rounded-full ${st.bar}`} style={{ width: `${Math.min(100, pctVal)}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* FILA 2 OPERATIVA: CONVERSIÓN POR ESTADO OT (% LEÍDO & % INGRESO) */}
+            <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-4">
+              <div className="flex items-center justify-between border-b border-gray-800 pb-2.5 mb-3">
+                <div className="flex items-center gap-2">
+                  <Activity size={15} className="text-emerald-400" />
+                  <h3 className="font-bold text-xs tracking-wider uppercase text-white">Conversión por Estado OT (% Leído & % Ingreso)</h3>
+                </div>
+                <span className="text-[11px] text-gray-400">{byEstadoOt.length} estados</span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-gray-400 border-b border-gray-800 text-[10px] uppercase">
+                      <th className="py-2 text-left">Estado OT</th>
+                      <th className="py-2 text-right">Total OTs</th>
+                      <th className="py-2 text-right">WSP Env.</th>
+                      <th className="py-2 text-right">Leídos (Read)</th>
+                      <th className="py-2 text-right">% Leído</th>
+                      <th className="py-2 text-right">Tracking</th>
+                      <th className="py-2 text-right">% Ingreso s/Env</th>
+                      <th className="py-2 text-right">% Ingreso s/Read</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-800/50">
+                    {byEstadoOt.map((r, i) => {
+                      const tot = Number(r.total || 0);
+                      const env = Number(r.enviados || 0);
+                      const lei = Number(r.leidos || 0);
+                      const trk = Number(r.tracking || 0);
+                      const pEnv = tot > 0 ? ((env / tot) * 100).toFixed(1) : '0.0';
+                      const pLei = env > 0 ? ((lei / env) * 100).toFixed(1) : '0.0';
+                      const pTrkEnv = env > 0 ? ((trk / env) * 100).toFixed(1) : '0.0';
+                      const pTrkLei = lei > 0 ? ((trk / lei) * 100).toFixed(1) : '0.0';
+
+                      const stLower = String(r.estado_ot || '').toLowerCase();
+                      const badgeCls =
+                        stLower.includes('iniciada') || stLower.includes('finalizada')
+                          ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                          : stLower.includes('agendada')
+                          ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+                          : stLower.includes('cancel') || stLower.includes('anul')
+                          ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                          : 'bg-amber-500/15 text-amber-300 border-amber-500/30';
+
+                      return (
+                        <tr key={i} className="hover:bg-gray-800/30">
+                          <td className="py-2.5">
+                            <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${badgeCls}`}>
+                              {r.estado_ot}
+                            </span>
+                          </td>
+                          <td className="py-2.5 text-right font-bold text-white">{tot.toLocaleString('es-PE')}</td>
+                          <td className="py-2.5 text-right">
+                            <span className="text-emerald-400 font-bold">{env.toLocaleString('es-PE')}</span>{' '}
+                            <span className="text-[10px] text-emerald-500/80">({pEnv}%)</span>
+                          </td>
+                          <td className="py-2.5 text-right font-bold text-cyan-400">{lei.toLocaleString('es-PE')}</td>
+                          <td className="py-2.5 text-right font-bold text-cyan-300">{pLei}%</td>
+                          <td className="py-2.5 text-right font-bold text-amber-400">{trk.toLocaleString('es-PE')}</td>
+                          <td className="py-2.5 text-right font-bold text-amber-400">{pTrkEnv}%</td>
+                          <td className="py-2.5 text-right font-bold text-cyan-300">[{pTrkLei}%]</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* FILA 3 OPERATIVA: RENDIMIENTO POR SECTOR OPERATIVO + TIPO DE OPERACIÓN */}
+            <div className="grid grid-cols-12 gap-4">
+              {/* Rendimiento por Sector Operativo */}
+              <div className="col-span-8 bg-[#111827]/90 border border-gray-800 rounded-xl p-4">
+                <div className="flex items-center justify-between border-b border-gray-800 pb-2.5 mb-3">
+                  <div className="flex items-center gap-2">
+                    <MapPin size={15} className="text-[#FF6B00]" />
+                    <h3 className="font-bold text-xs tracking-wider uppercase text-white">Rendimiento por Sector Operativo (Top Sectores)</h3>
+                  </div>
+                  <span className="text-[11px] text-gray-400">{bySector.length} sectores</span>
+                </div>
+
+                <div className="overflow-y-auto max-h-80 pr-1">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-[#111827]">
+                      <tr className="text-gray-400 border-b border-gray-800 text-[10px] uppercase">
+                        <th className="py-2 text-left">Sector Operativo</th>
+                        <th className="py-2 text-right">Total OTs</th>
+                        <th className="py-2 text-right">Enviados</th>
+                        <th className="py-2 text-right">No Env.</th>
+                        <th className="py-2 text-center">% Cobertura WSP</th>
+                        <th className="py-2 text-right">Tracking</th>
+                        <th className="py-2 text-right">Leídos</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-800/50">
+                      {bySector.map((s, i) => {
+                        const tot = Number(s.total || 0);
+                        const env = Number(s.enviados || 0);
+                        const noEnv = Number(s.no_enviados || 0);
+                        const cobPct = tot > 0 ? Math.round((env / tot) * 100) : 0;
+                        return (
+                          <tr key={i} className="hover:bg-gray-800/30">
+                            <td className="py-2.5 font-bold text-white uppercase">{s.sector_operativo}</td>
+                            <td className="py-2.5 text-right font-bold text-white">{tot.toLocaleString('es-PE')}</td>
+                            <td className="py-2.5 text-right font-bold text-emerald-400">{env.toLocaleString('es-PE')}</td>
+                            <td className="py-2.5 text-right text-gray-400">{noEnv.toLocaleString('es-PE')}</td>
+                            <td className="py-2.5">
+                              <div className="flex items-center justify-center gap-2">
+                                <div className="w-20 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                                  <div className="h-full bg-amber-400 rounded-full" style={{ width: `${Math.min(100, cobPct)}%` }} />
+                                </div>
+                                <span className="text-[11px] font-bold text-amber-400 w-8">{cobPct}%</span>
+                              </div>
+                            </td>
+                            <td className="py-2.5 text-right font-bold text-amber-400">{Number(s.tracking || 0)}</td>
+                            <td className="py-2.5 text-right font-bold text-cyan-400">{Number(s.leidos || 0)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Tipo de Operación */}
+              <div className="col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4">
+                <div className="flex items-center justify-between border-b border-gray-800 pb-2.5 mb-3">
+                  <div className="flex items-center gap-2">
+                    <Layers size={15} className="text-amber-400" />
+                    <h3 className="font-bold text-xs tracking-wider uppercase text-white">Tipo de Operación</h3>
+                  </div>
+                  <span className="text-[11px] text-gray-400">{byTipoOperacion.length} tipos</span>
+                </div>
+
+                <div className="space-y-3 overflow-y-auto max-h-80 pr-1">
+                  {byTipoOperacion.map((t, i) => {
+                    const totalGlobal = Number(kpis?.total_ordenes || 0);
+                    const totalTipo = Number(t.total || 0);
+                    const envTipo = Number(t.enviados || 0);
+                    const sharePct = totalGlobal > 0 ? ((totalTipo / totalGlobal) * 100).toFixed(1) : '0.0';
+                    const cobPct = totalTipo > 0 ? Math.round((envTipo / totalTipo) * 100) : 0;
+                    return (
+                      <div key={i} className="bg-[#090D16]/70 border border-gray-800/80 rounded-xl p-3 space-y-1.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-extrabold text-white uppercase">{t.tipo}</span>
+                          <span className="font-bold text-gray-200">
+                            {totalTipo.toLocaleString('es-PE')} <span className="text-gray-400 font-normal">({sharePct}%)</span>
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="text-gray-400">
+                            Enviados WSP: <strong className="text-emerald-400">{envTipo.toLocaleString('es-PE')}</strong>
+                          </span>
+                          <span className="text-gray-400">
+                            Cobertura: <strong className="text-[#FF6B00]">{cobPct}%</strong>
+                          </span>
+                        </div>
+                        <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                          <div className="h-full bg-gradient-to-r from-[#FF6B00] to-amber-500 rounded-full" style={{ width: `${Math.min(100, cobPct)}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            </div>
+        )}
+
+        {/* SECCIÓN PESTAÑA "ÓRDENES": TABLA FUNNEL HOMOLOGADA + DRAWER DE DETALLE 360° */}
+        {activeNav === 'Órdenes' && (
           <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-4 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-800 pb-3">
+            {/* Barra de herramientas y filtros homologados */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-800 pb-3.5">
               <div>
                 <h3 className="font-bold text-sm text-white flex items-center gap-2">
-                  <ClipboardList size={16} className="text-[#FF6B00]" />
-                  Órdenes Reales desde vw_reporte_funnel_casos_360
+                  <Layers size={16} className="text-[#FF6B00]" />
+                  Explorador de Órdenes — Funnel 360°
+                  <span className="ml-1 px-2 py-0.5 text-[11px] rounded-full bg-[#FF6B00]/15 text-[#FF6B00] border border-[#FF6B00]/30 font-bold">
+                    {filteredOrders.length} registros
+                  </span>
                 </h3>
+                <p className="text-[11px] text-gray-400 mt-0.5">
+                  Haz clic sobre cualquier orden para abrir la ficha técnica completa del caso
+                </p>
               </div>
-              <div className="flex items-center gap-2.5 text-xs">
-                <div className="flex items-center bg-[#090D16] border border-gray-700 rounded-lg px-3 py-1.5 w-72">
-                  <Search size={14} className="text-gray-400 mr-2" />
+
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                {/* Buscador */}
+                <div className="flex items-center bg-[#090D16] border border-gray-700/80 rounded-lg px-3 py-1.5 w-72 focus-within:border-[#FF6B00]">
+                  <Search size={14} className="text-gray-400 mr-2 shrink-0" />
                   <input
                     type="text"
-                    placeholder="Buscar orden, ticket, cliente, teléfono o cuadrilla..."
+                    placeholder="Buscar N° orden, ticket, cliente, distrito, partner..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="bg-transparent text-gray-200 focus:outline-none w-full text-xs"
                   />
                 </div>
+
+                {/* Filtro Estado OT */}
+                <select
+                  value={otStatusFilter}
+                  onChange={(e) => setOtStatusFilter(e.target.value)}
+                  className="bg-[#090D16] border border-gray-700/80 rounded-lg px-2.5 py-1.5 text-gray-200 focus:outline-none cursor-pointer"
+                >
+                  <option value="Todos">Estado OT: Todos</option>
+                  {uniqueOtStatuses.map((st) => (
+                    <option key={st} value={st}>{st}</option>
+                  ))}
+                </select>
+
+                {/* Filtro Estado WhatsApp */}
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
-                  className="bg-[#090D16] border border-gray-700 rounded-lg px-3 py-1.5 text-gray-200 focus:outline-none cursor-pointer"
+                  className="bg-[#090D16] border border-gray-700/80 rounded-lg px-2.5 py-1.5 text-gray-200 focus:outline-none cursor-pointer"
                 >
-                  <option value="Todos">Todos los estados_wsp</option>
-                  <option value="READ">READ (Leído)</option>
-                  <option value="DELIVERED">DELIVERED (Entregado)</option>
-                  <option value="SENT">SENT (Enviado)</option>
-                  <option value="NO ENVIADO">NO ENVIADO</option>
-                  <option value="FAILED">FAILED (Fallido)</option>
+                  <option value="Todos">Estado WSP: Todos</option>
+                  <option value="READ">Leído (READ)</option>
+                  <option value="DELIVERED">Entregado (DELIVERED)</option>
+                  <option value="SENT">Enviado (SENT)</option>
+                  <option value="NO ENVIADO">No enviado</option>
+                  <option value="FAILED">Fallido (FAILED)</option>
+                </select>
+
+                {/* Filtro Ingreso Tracking */}
+                <select
+                  value={trackingFilter}
+                  onChange={(e) => setTrackingFilter(e.target.value)}
+                  className="bg-[#090D16] border border-gray-700/80 rounded-lg px-2.5 py-1.5 text-gray-200 focus:outline-none cursor-pointer"
+                >
+                  <option value="Todos">Tracking: Todos</option>
+                  <option value="SI">Ingresó (SÍ)</option>
+                  <option value="NO">Sin ingreso (NO)</option>
                 </select>
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-gray-400 border-b border-gray-800 text-[11px]">
-                    <th className="py-2 text-left">Orden / Ticket</th>
-                    <th className="py-2 text-left">Cliente / Teléfono</th>
-                    <th className="py-2 text-left">Servicio (Tipo) / Producto</th>
-                    <th className="py-2 text-left">Sector Operativo / Distrito</th>
-                    <th className="py-2 text-left">Partner / Cuadrilla</th>
-                    <th className="py-2 text-center">Fecha Solicitud</th>
-                    <th className="py-2 text-center">Estado WSP</th>
-                    <th className="py-2 text-center">Tracking</th>
-                    <th className="py-2 text-right">Link En Ruta</th>
+            {/* Tabla homologada e interactiva */}
+            <div className="overflow-x-auto max-h-[720px]">
+              <table className="w-full text-xs border-collapse">
+                <thead className="sticky top-0 bg-[#111827] z-10">
+                  <tr className="text-gray-400 border-b border-gray-800 text-[10px] uppercase tracking-wider">
+                    <th className="py-2.5 px-2 text-left whitespace-nowrap">N° Orden / Ticket</th>
+                    <th className="py-2.5 px-2 text-left whitespace-nowrap">Fecha</th>
+                    <th className="py-2.5 px-2 text-left">Cliente / Doc. / Cód. Seg.</th>
+                    <th className="py-2.5 px-2 text-left">Operación / Producto</th>
+                    <th className="py-2.5 px-2 text-left">Sector / Distrito</th>
+                    <th className="py-2.5 px-2 text-left">Partner / Cuadrilla</th>
+                    <th className="py-2.5 px-1.5 text-center whitespace-nowrap">Estado OT</th>
+                    <th className="py-2.5 px-1.5 text-center whitespace-nowrap">WhatsApp</th>
+                    <th className="py-2.5 px-1.5 text-center whitespace-nowrap">Tracking</th>
+                    <th className="py-2.5 px-2 text-right whitespace-nowrap">Detalle</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-800/60">
-                  {filteredOrders.map((o) => (
-                    <tr key={o.orden_id} className="hover:bg-gray-800/30 transition">
-                      <td className="py-2.5">
-                        <div className="font-bold text-[#FF6B00]">#{o.orden_id}</div>
-                        <div className="text-[10px] text-gray-400">Ticket: {o.ticket || '-'}</div>
-                      </td>
-                      <td className="py-2.5">
-                        <div className="font-semibold text-white max-w-[200px] truncate" title={o.cliente}>{o.cliente}</div>
-                        <div className="text-[10px] text-gray-400">{o.telefono}</div>
-                      </td>
-                      <td className="py-2.5">
-                        <div className="text-emerald-300 font-medium">{o.servicio_tipo}</div>
-                        <div className="text-[10px] text-gray-400 max-w-[180px] truncate">{o.producto}</div>
-                      </td>
-                      <td className="py-2.5">
-                        <div className="text-gray-200">{o.sector_operativo}</div>
-                        <div className="text-[10px] text-gray-400">{o.distrito}</div>
-                      </td>
-                      <td className="py-2.5">
-                        <div className="font-semibold text-white">{o.partner}</div>
-                        <div className="text-[10px] text-gray-400 flex items-center gap-1"><User size={10} /> {o.cuadrilla}</div>
-                      </td>
-                      <td className="py-2.5 text-center text-gray-300">{o.fecha_solicitud_fmt}</td>
-                      <td className="py-2.5 text-center">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                          (o.estado_wsp || '').toLowerCase() === 'read' ? 'bg-emerald-500/20 text-emerald-300' :
-                          (o.estado_wsp || '').toLowerCase().includes('deliver') ? 'bg-cyan-500/20 text-cyan-300' :
-                          (o.estado_wsp || '').toLowerCase() === 'sent' ? 'bg-blue-500/20 text-blue-300' :
-                          (o.estado_wsp || '').toLowerCase() === 'failed' ? 'bg-red-500/20 text-red-400' :
-                          'bg-gray-800 text-gray-400'
-                        }`}>
-                          {o.estado_wsp || 'NO ENVIADO'}
-                        </span>
-                      </td>
-                      <td className="py-2.5 text-center">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${o.ingreso_tracking === 'SI' ? 'bg-amber-500/20 text-amber-300' : 'text-gray-500'}`}>
-                          {o.ingreso_tracking}
-                        </span>
-                      </td>
-                      <td className="py-2.5 text-right">
-                        {o.link_tracking ? (
-                          <a
-                            href={o.link_tracking}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#1F2937] hover:bg-[#FF6B00] hover:text-white text-gray-300 rounded text-[11px] transition"
+                  {filteredOrders.map((o) => {
+                    const stOtLower = String(o.estado_ot || '').toLowerCase();
+                    const otBadge =
+                      stOtLower.includes('iniciada') || stOtLower.includes('finalizada')
+                        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                        : stOtLower.includes('agendada')
+                        ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+                        : stOtLower.includes('cancel') || stOtLower.includes('anul')
+                        ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                        : 'bg-amber-500/15 text-amber-300 border-amber-500/30';
+
+                    const stWspLower = String(o.estado_wsp || '').toLowerCase();
+                    const wspLabel =
+                      stWspLower === 'read' ? 'LEÍDO' :
+                      stWspLower.includes('deliver') ? 'ENTREGADO' :
+                      stWspLower === 'sent' ? 'ENVIADO' :
+                      stWspLower === 'failed' ? 'FALLIDO' : 'NO ENVIADO';
+
+                    const docCliente = o.numero_documento || '-';
+                    const codSegui = o.codi_segui_clien || o.codi_clien || '-';
+                    const nombreCuadrillaCompleto = o.cuadrilla_completa || o.cuadrilla || '-';
+
+                    return (
+                      <tr
+                        key={o.orden_id}
+                        onClick={() => setSelectedOrder(o)}
+                        className="hover:bg-[#FF6B00]/10 cursor-pointer transition group"
+                      >
+                        <td className="py-2 px-2 whitespace-nowrap">
+                          <div className="font-extrabold text-[#FF6B00] group-hover:underline">#{o.orden_id}</div>
+                          <div className="text-[10px] text-gray-400">{o.ticket || o.codi_segui_ot || 'Sin ticket'}</div>
+                        </td>
+                        <td className="py-2 px-2 text-left text-gray-300 font-medium whitespace-nowrap">
+                          {o.fecha_solicitud_fmt || '-'}
+                        </td>
+                        <td className="py-2 px-2">
+                          <div className="font-bold text-white leading-snug">
+                            {o.cliente || '-'}
+                          </div>
+                          <div className="text-[10px] text-gray-400 flex flex-wrap items-center gap-x-2 mt-0.5">
+                            <span>DNI/Doc: <strong className="text-gray-200">{docCliente}</strong></span>
+                            <span>•</span>
+                            <span>Cód.Clie: <strong className="text-cyan-300">{codSegui}</strong></span>
+                            {o.telefono && (
+                              <>
+                                <span>•</span>
+                                <span>Tel: <strong className="text-gray-300">{o.telefono}</strong></span>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-2 px-2">
+                          <div className="text-emerald-300 font-bold text-[11px] uppercase leading-tight">{o.servicio_tipo}</div>
+                          <div className="text-[10px] text-gray-400">{o.producto || o.tipo_trabajo || '-'}</div>
+                        </td>
+                        <td className="py-2 px-2">
+                          <div className="text-gray-200 font-medium leading-tight">{o.sector_operativo || '-'}</div>
+                          <div className="text-[10px] text-gray-400">{o.distrito || '-'}</div>
+                        </td>
+                        <td className="py-2 px-2 min-w-[260px]">
+                          <div className="font-semibold text-white leading-tight">{o.partner || o.proveedor_ot || '-'}</div>
+                          <div className="text-[10px] text-gray-300 flex items-start gap-1 mt-0.5 whitespace-normal break-words">
+                            <User size={11} className="shrink-0 mt-0.5 text-[#FF6B00]" />
+                            <span>{nombreCuadrillaCompleto}</span>
+                          </div>
+                        </td>
+                        <td className="py-2 px-1.5 text-center whitespace-nowrap">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${otBadge}`}>
+                            {o.estado_ot || 'Sin estado'}
+                          </span>
+                        </td>
+                        <td className="py-2 px-1.5 text-center whitespace-nowrap">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            stWspLower === 'read' ? 'bg-emerald-500/20 text-emerald-300' :
+                            stWspLower.includes('deliver') ? 'bg-cyan-500/20 text-cyan-300' :
+                            stWspLower === 'sent' ? 'bg-blue-500/20 text-blue-300' :
+                            stWspLower === 'failed' ? 'bg-red-500/20 text-red-400' :
+                            'bg-gray-800 text-gray-400'
+                          }`}>
+                            {wspLabel}
+                          </span>
+                        </td>
+                        <td className="py-2 px-1.5 text-center whitespace-nowrap">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            o.ingreso_tracking === 'SI'
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                              : 'bg-gray-800/60 text-gray-500'
+                          }`}>
+                            {o.ingreso_tracking === 'SI' ? 'SÍ INGRESÓ' : 'NO'}
+                          </span>
+                        </td>
+                        <td className="py-2 px-2 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            onClick={() => setSelectedOrder(o)}
+                            className="px-2.5 py-1 bg-[#1F2937] hover:bg-[#FF6B00] text-gray-200 hover:text-white rounded text-[11px] font-semibold transition"
                           >
-                            <span>Abrir</span><ExternalLink size={11} />
-                          </a>
-                        ) : (
-                          <span className="text-gray-600 text-[10px]">Sin link</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                            Ver detalle
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL / DRAWER LATERAL CON TODO EL DETALLE 360° DE LA ORDEN */}
+        {selectedOrder && (
+          <div
+            className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex justify-end"
+            onClick={() => setSelectedOrder(null)}
+          >
+            <div
+              className="w-full max-w-2xl bg-[#0B101B] border-l border-gray-800 h-full overflow-y-auto p-6 space-y-5 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Cabecera del Modal */}
+              <div className="flex items-start justify-between border-b border-gray-800 pb-4">
+                <div>
+                  <div className="flex items-center gap-2.5">
+                    <span className="px-2.5 py-1 rounded-lg bg-[#FF6B00] text-white font-black text-sm">
+                      Orden #{selectedOrder.orden_id}
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-500/15 text-blue-300 border border-blue-500/30">
+                      {selectedOrder.estado_ot || 'Sin Estado OT'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1.5">
+                    Ticket: <strong className="text-gray-200">{selectedOrder.ticket || '-'}</strong> • Fecha Solicitud:{' '}
+                    <strong className="text-gray-200">{selectedOrder.fecha_solicitud_fmt || '-'}</strong>
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => setSelectedOrder(null)}
+                  className="px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold transition"
+                >
+                  ✕ Cerrar
+                </button>
+              </div>
+
+              {/* Resumen del Funnel de la Orden */}
+              <div className="grid grid-cols-4 gap-2.5">
+                <div className="bg-[#111827] border border-gray-800 rounded-lg p-3">
+                  <div className="text-[10px] text-gray-400 uppercase">Envío WhatsApp</div>
+                  <div className={`text-sm font-extrabold mt-1 ${selectedOrder.se_envio_wsp === 'SI' ? 'text-emerald-400' : 'text-gray-400'}`}>
+                    {selectedOrder.se_envio_wsp || 'NO'}
+                  </div>
+                </div>
+                <div className="bg-[#111827] border border-gray-800 rounded-lg p-3">
+                  <div className="text-[10px] text-gray-400 uppercase">Estado Mensaje</div>
+                  <div className="text-sm font-extrabold text-cyan-400 mt-1 uppercase">
+                    {selectedOrder.estado_wsp || 'NO ENVIADO'}
+                  </div>
+                </div>
+                <div className="bg-[#111827] border border-gray-800 rounded-lg p-3">
+                  <div className="text-[10px] text-gray-400 uppercase">Ingreso Tracking</div>
+                  <div className={`text-sm font-extrabold mt-1 ${selectedOrder.ingreso_tracking === 'SI' ? 'text-amber-400' : 'text-gray-400'}`}>
+                    {selectedOrder.ingreso_tracking || 'NO'}
+                  </div>
+                </div>
+                <div className="bg-[#111827] border border-gray-800 rounded-lg p-3">
+                  <div className="text-[10px] text-gray-400 uppercase">Reprogramó / CSAT</div>
+                  <div className="text-sm font-extrabold text-purple-300 mt-1">
+                    {selectedOrder.reprogramo || 'NO'} / {selectedOrder.respondio_encuesta || 'NO'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Bloques Principales Homologados */}
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 space-y-1.5">
+                  <div className="text-[11px] font-bold text-[#FF6B00] uppercase tracking-wider mb-1">Datos del Cliente y Ubicación</div>
+                  <div><span className="text-gray-400">Cliente:</span> <strong className="text-white">{selectedOrder.cliente || '-'}</strong></div>
+                  <div><span className="text-gray-400">Documento:</span> <strong className="text-white">{selectedOrder.numero_documento || '-'}</strong> <span className="text-gray-500 text-[10px]">({selectedOrder.tipo_documento || 'DNI'})</span></div>
+                  <div><span className="text-gray-400">Cód. Seguimiento Cliente:</span> <strong className="text-cyan-300">{selectedOrder.codi_segui_clien || selectedOrder.codi_clien || '-'}</strong></div>
+                  <div><span className="text-gray-400">Teléfono / Email:</span> <strong className="text-white">{selectedOrder.telefono || '-'}</strong> {selectedOrder.email_cliente ? `• ${selectedOrder.email_cliente}` : ''}</div>
+                  <div><span className="text-gray-400">Sector / Distrito:</span> <strong className="text-white">{selectedOrder.sector_operativo || '-'} • {selectedOrder.distrito || '-'}</strong></div>
+                  <div><span className="text-gray-400">Dirección:</span> <strong className="text-gray-200">{selectedOrder.direccion_cliente || '-'}</strong></div>
+                </div>
+
+                <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 space-y-1.5">
+                  <div className="text-[11px] font-bold text-[#FF6B00] uppercase tracking-wider mb-1">Asignación Técnica</div>
+                  <div><span className="text-gray-400">Tipo Operación:</span> <strong className="text-emerald-300">{selectedOrder.servicio_tipo || '-'}</strong></div>
+                  <div><span className="text-gray-400">Producto / Plan:</span> <strong className="text-white">{selectedOrder.producto || '-'} {selectedOrder.plan_contratado ? `• ${selectedOrder.plan_contratado}` : ''}</strong></div>
+                  <div><span className="text-gray-400">Tipo Trabajo:</span> <strong className="text-white">{selectedOrder.tipo_trabajo || '-'}</strong></div>
+                  <div><span className="text-gray-400">Partner:</span> <strong className="text-white">{selectedOrder.partner || selectedOrder.proveedor_ot || '-'}</strong></div>
+                  <div><span className="text-gray-400">Cuadrilla Completa:</span> <strong className="text-amber-300">{selectedOrder.cuadrilla_completa || selectedOrder.cuadrilla || '-'}</strong></div>
+                  <div><span className="text-gray-400">Datos Técnicos (CTO/Puerto):</span> <strong className="text-gray-200">{selectedOrder.datos_tecnicos || '-'}</strong></div>
+                </div>
+              </div>
+
+              {/* Botón directo a Link de Tracking si existe */}
+              {selectedOrder.link_tracking && (
+                <div className="bg-[#111827] border border-gray-800 rounded-xl p-3.5 flex items-center justify-between">
+                  <div className="text-xs">
+                    <div className="font-bold text-white">Enlace de Seguimiento WIN en Ruta</div>
+                    <div className="text-[11px] text-gray-400 truncate max-w-md">{selectedOrder.link_tracking}</div>
+                  </div>
+                  <a
+                    href={selectedOrder.link_tracking}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#FF6B00] hover:bg-[#e66000] text-white font-bold rounded-lg text-xs transition shrink-0"
+                  >
+                    <span>Abrir Tracking</span>
+                    <ExternalLink size={13} />
+                  </a>
+                </div>
+              )}
+
+              {/* Todos los campos adicionales de la vista vw_reporte_funnel_casos_360 */}
+              <div className="bg-[#111827]/80 border border-gray-800 rounded-xl p-4">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-300 mb-3 border-b border-gray-800 pb-2">
+                  Ficha Completa de Campos (vw_reporte_funnel_casos_360)
+                </h4>
+                <div className="grid grid-cols-2 gap-2.5 text-xs">
+                  {Object.entries(selectedOrder)
+                    .filter(([k]) => k !== 'fecha_solicitud_fmt')
+                    .map(([key, val]) => (
+                      <div key={key} className="bg-[#090D16] border border-gray-800/80 rounded-lg p-2.5">
+                        <div className="text-[10px] font-semibold uppercase text-gray-400">
+                          {key.replace(/_/g, ' ')}
+                        </div>
+                        <div className="text-xs font-bold text-gray-100 mt-0.5 break-all">
+                          {val !== null && val !== undefined && String(val) !== '' ? String(val) : '-'}
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </div>
             </div>
           </div>
         )}

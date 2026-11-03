@@ -183,13 +183,14 @@ app.get('/api/dashboard', async (req, res) => {
     const filterSql = extraFilters.join(' ');
     const avListSql = DISTRITOS_ALTO_VALOR.map((d) => `'${d.trim().toUpperCase()}'`).join(',');
 
-    // Consultas principales a vw_reporte_funnel_casos_360
-    const [dailyResult, orderResult]: any = await Promise.all([
+    // Consultas principales y desgloses operativos desde vw_reporte_funnel_casos_360
+    const [dailyResult, orderResult, estadoOtResult, sectorResult, productoResult]: any = await Promise.all([
       pool.query(
         `
         SELECT 
           DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
           DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m') AS fecha,
+          DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_full,
           COUNT(*) AS total,
           COALESCE(SUM(v.se_envio_wsp = 'SI'), 0) AS enviados,
           COALESCE(SUM(v.estado_wsp = 'read'), 0) AS leidos,
@@ -198,6 +199,8 @@ app.get('/api/dashboard', async (req, res) => {
           COALESCE(SUM(v.estado_wsp = 'failed'), 0) AS failed,
           COALESCE(SUM(v.se_envio_wsp = 'NO' OR v.estado_wsp = 'NO ENVIADO' OR v.estado_wsp IS NULL), 0) AS no_enviado,
           COALESCE(SUM(v.ingreso_tracking = 'SI'), 0) AS tracking,
+          COALESCE(SUM(v.reprogramo = 'SI'), 0) AS reprogramaciones,
+          COALESCE(SUM(v.respondio_encuesta = 'SI'), 0) AS encuestas,
           COALESCE(SUM(v.estado_wsp = 'read' AND v.ingreso_tracking = 'NO'), 0) AS leidos_sin_ingreso,
           COALESCE(SUM(UPPER(TRIM(v.distrito)) IN (${avListSql})), 0) AS av_total,
           COALESCE(SUM(UPPER(TRIM(v.distrito)) IN (${avListSql}) AND v.se_envio_wsp = 'SI'), 0) AS av_enviados,
@@ -218,15 +221,79 @@ app.get('/api/dashboard', async (req, res) => {
       pool.query(
         `
         SELECT 
-          v.orden_id, v.ticket, v.cliente, v.telefono, v.producto,
-          v.tipo_trabajo, v.estado_ot,
+          v.*,
           DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_solicitud_fmt,
-          v.sector_operativo, v.distrito, v.partner, v.cuadrilla,
-          v.se_envio_wsp, v.estado_wsp, v.ingreso_tracking, v.link_tracking
+          w.\`Número Documento\` AS numero_documento,
+          w.\`Tipo Documento\` AS tipo_documento,
+          w.CodiSeguiClien AS codi_segui_clien,
+          w.CodiClien AS codi_clien,
+          w.CodiSegui AS codi_segui_ot,
+          w.Cuadrilla AS cuadrilla_completa,
+          w.Proveedeor AS proveedor_ot,
+          w.Direccion AS direccion_cliente,
+          w.IdenServi AS plan_contratado,
+          w.Email AS email_cliente,
+          w.\`Diagnóstico Técnico\` AS diagnostico_tecnico,
+          w.\`Observaciones Tareas\` AS observaciones_tareas,
+          w.\`Historial Estados\` AS historial_estados,
+          w.\`Datos Técnicos\` AS datos_tecnicos,
+          w.\`Motivo Finalización\` AS motivo_finalizacion,
+          w.\`Usuario Asignó\` AS usuario_asigno
+        FROM vw_reporte_funnel_casos_360 v
+        LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
+        WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
+        ${filterSql}
+        ORDER BY v.orden_id DESC
+        LIMIT 300
+        `,
+        [startDate, endDate, ...extraParams]
+      ),
+      // Desglose por Estado OT (Para Vista Operativa)
+      pool.query(
+        `
+        SELECT 
+          COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'Sin estado') AS estado_ot,
+          COUNT(*) AS total,
+          COALESCE(SUM(v.se_envio_wsp = 'SI'), 0) AS enviados,
+          COALESCE(SUM(v.estado_wsp = 'read'), 0) AS leidos,
+          COALESCE(SUM(v.ingreso_tracking = 'SI'), 0) AS tracking
         FROM vw_reporte_funnel_casos_360 v
         WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
         ${filterSql}
-        LIMIT 80
+        GROUP BY COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'Sin estado')
+        ORDER BY total DESC
+        `,
+        [startDate, endDate, ...extraParams]
+      ),
+      // Desglose por Sector Operativo (Para Vista Operativa)
+      pool.query(
+        `
+        SELECT 
+          COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR') AS sector_operativo,
+          COUNT(*) AS total,
+          COALESCE(SUM(v.se_envio_wsp = 'SI'), 0) AS enviados,
+          COALESCE(SUM(v.se_envio_wsp = 'NO' OR v.estado_wsp = 'NO ENVIADO' OR v.estado_wsp IS NULL), 0) AS no_enviados,
+          COALESCE(SUM(v.ingreso_tracking = 'SI'), 0) AS tracking,
+          COALESCE(SUM(v.estado_wsp = 'read'), 0) AS leidos
+        FROM vw_reporte_funnel_casos_360 v
+        WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
+        ${filterSql}
+        GROUP BY COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR')
+        ORDER BY total DESC
+        `,
+        [startDate, endDate, ...extraParams]
+      ),
+      // Desglose por Producto para agrupar en Tipo de Operación
+      pool.query(
+        `
+        SELECT 
+          UPPER(TRIM(COALESCE(v.producto, ''))) AS producto,
+          COUNT(*) AS total,
+          COALESCE(SUM(v.se_envio_wsp = 'SI'), 0) AS enviados
+        FROM vw_reporte_funnel_casos_360 v
+        WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
+        ${filterSql}
+        GROUP BY UPPER(TRIM(COALESCE(v.producto, '')))
         `,
         [startDate, endDate, ...extraParams]
       ),
@@ -380,10 +447,33 @@ app.get('/api/dashboard', async (req, res) => {
         servicioToTipoMap.get(String(o.producto || '').trim().toUpperCase()) || o.producto || '-',
     }));
 
+    // Agrupamos productoResult por su Tipo de Operación (INSTA - LIMA, AVER - LIMA, POSTVENTA, etc.)
+    const tipoOpMap = new Map<string, { total: number; enviados: number }>();
+    for (const r of productoResult[0] || []) {
+      const prodKey = String(r.producto || '').trim().toUpperCase();
+      const tipoNombre = servicioToTipoMap.get(prodKey) || prodKey || 'OTROS';
+      const cur = tipoOpMap.get(tipoNombre) || { total: 0, enviados: 0 };
+      cur.total += Number(r.total || 0);
+      cur.enviados += Number(r.enviados || 0);
+      tipoOpMap.set(tipoNombre, cur);
+    }
+
+    const byTipoOperacion = Array.from(tipoOpMap.entries())
+      .map(([tipo, val]) => ({
+        tipo,
+        total: val.total,
+        enviados: val.enviados,
+      }))
+      .sort((a, b) => b.total - a.total);
+
     const responsePayload = {
       ok: true,
       kpis,
       evolution: dailyRows,
+      dailyInRange: kpiRowsInRange,
+      byEstadoOt: estadoOtResult[0] || [],
+      bySector: sectorResult[0] || [],
+      byTipoOperacion,
       orders: ordersWithTipo,
       partners: partnersRanking,
     };
