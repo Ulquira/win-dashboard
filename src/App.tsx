@@ -22,10 +22,23 @@ interface KpiData {
   reprogramaciones: number;
   encuestas_respondidas: number;
   leidos_sin_ingreso: number;
+  av_total: number;
   av_enviados: number;
+  av_leidos: number;
   av_tracking: number;
+  csat_avg?: number;
+  pref_total: number;
   pref_enviados: number;
+  pref_leidos: number;
   pref_tracking: number;
+}
+
+interface PartnerRankItem {
+  rank: number;
+  name: string;
+  surveys: number;
+  score: string;
+  csat: string;
 }
 
 interface EvolutionPoint {
@@ -60,7 +73,6 @@ export default function App() {
   const [activeNav, setActiveNav] = useState<NavSection>('WIN en RUTA');
   const [viewMode, setViewMode] = useState<ViewMode>('ejecutiva');
 
-  // Por defecto carga el día actual para máxima velocidad (y el gráfico muestra los últimos 7 días)
   const todayStr = new Date().toLocaleDateString('en-CA');
   const [startDate, setStartDate] = useState<string>(todayStr);
   const [endDate, setEndDate] = useState<string>(todayStr);
@@ -73,6 +85,7 @@ export default function App() {
   const [kpis, setKpis] = useState<KpiData | null>(null);
   const [evolution, setEvolution] = useState<EvolutionPoint[]>([]);
   const [orders, setOrders] = useState<RealOrder[]>([]);
+  const [partners, setPartners] = useState<PartnerRankItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [dbOnline, setDbOnline] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -80,7 +93,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('Todos');
 
-  const fetchDashboardData = (sDate = startDate, eDate = endDate, srv = service, zn = zone) => {
+  const fetchDashboardData = (sDate = startDate, eDate = endDate, srv = service, zn = zone, forceRefresh = false) => {
     setLoading(true);
     setErrorMsg(null);
     const params = new URLSearchParams({
@@ -88,6 +101,7 @@ export default function App() {
       endDate: eDate,
       service: srv,
       zone: zn,
+      refresh: forceRefresh ? 'true' : 'false',
     });
 
     fetch(`http://localhost:3001/api/dashboard?${params.toString()}`)
@@ -97,6 +111,7 @@ export default function App() {
           setKpis(data.kpis);
           setEvolution(data.evolution || []);
           setOrders(data.orders || []);
+          setPartners(data.partners || []);
           setDbOnline(true);
         } else {
           setDbOnline(false);
@@ -137,9 +152,13 @@ export default function App() {
     const encuestas = Number(kpis?.encuestas_respondidas || 0);
     const leidosSinIngreso = Number(kpis?.leidos_sin_ingreso || 0);
 
+    const avTotal = Number(kpis?.av_total || 0);
     const avEnviados = Number(kpis?.av_enviados || 0);
+    const avLeidos = Number(kpis?.av_leidos || 0);
     const avTracking = Number(kpis?.av_tracking || 0);
+    const prefTotal = Number(kpis?.pref_total || 0);
     const prefEnviados = Number(kpis?.pref_enviados || 0);
+    const prefLeidos = Number(kpis?.pref_leidos || 0);
     const prefTracking = Number(kpis?.pref_tracking || 0);
 
     const fmt = (n: number) => n.toLocaleString('es-PE');
@@ -170,14 +189,18 @@ export default function App() {
       noEnviadoPct: pct(noEnviado, total),
       leidosSinIngreso: fmt(leidosSinIngreso),
       leidosSinIngresoPct: pct(leidosSinIngreso, enviados),
-      avTrackingFmt: fmt(avTracking),
+      avTotalFmt: fmt(avTotal),
       avEnviadosFmt: fmt(avEnviados),
+      avTrackingFmt: fmt(avTracking),
       avPct: pct(avTracking, avEnviados),
-      avBarWidth: Math.min(100, Math.max(6, Math.round(avPctNum * 2.2))),
-      prefTrackingFmt: fmt(prefTracking),
+      avOverReadPct: pct(avTracking, avLeidos),
+      avBarWidth: avTracking > 0 ? Math.min(100, Math.max(8, Math.round(avPctNum * 2.2))) : 0,
+      prefTotalFmt: fmt(prefTotal),
       prefEnviadosFmt: fmt(prefEnviados),
+      prefTrackingFmt: fmt(prefTracking),
       prefPct: pct(prefTracking, prefEnviados),
-      prefBarWidth: Math.min(100, Math.max(6, Math.round(prefPctNum * 2.2))),
+      prefOverReadPct: pct(prefTracking, prefLeidos),
+      prefBarWidth: prefTracking > 0 ? Math.min(100, Math.max(8, Math.round(prefPctNum * 2.2))) : 0,
     };
   }, [kpis]);
 
@@ -327,11 +350,10 @@ export default function App() {
       {/* CONTENIDO PRINCIPAL */}
       <main className="flex-1 p-5 overflow-y-auto space-y-4">
         
-        {/* BANNER DE ERROR SI EL BACKEND ESTÁ APAGADO */}
         {errorMsg && (
           <div className="bg-red-500/10 border border-red-500/40 text-red-300 px-4 py-2.5 rounded-xl text-xs flex items-center justify-between">
             <span><strong>Aviso de conexión:</strong> {errorMsg}</span>
-            <button onClick={() => fetchDashboardData()} className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 rounded font-semibold">
+            <button onClick={() => fetchDashboardData(startDate, endDate, service, zone, true)} className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 rounded font-semibold">
               Reintentar
             </button>
           </div>
@@ -405,7 +427,7 @@ export default function App() {
             </div>
 
             <button
-              onClick={() => fetchDashboardData()}
+              onClick={() => fetchDashboardData(startDate, endDate, service, zone, true)}
               disabled={loading}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-[#FF6B00] hover:bg-[#e66000] disabled:opacity-50 text-white font-semibold rounded-lg transition"
             >
@@ -446,7 +468,6 @@ export default function App() {
         {/* FILA 1: 6 TARJETAS KPI HOMOLOGADAS */}
         <div className="grid grid-cols-6 gap-3">
           
-          {/* KPI 1: Órdenes evaluadas */}
           <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
             <div className="flex items-center gap-2.5">
               <div className="p-2 rounded-lg bg-blue-500/10 text-blue-400">
@@ -459,7 +480,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* KPI 2: Envío de WhatsApp */}
           <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
             <div className="flex items-center gap-2.5">
               <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
@@ -475,7 +495,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* KPI 3: Lectura del mensaje */}
           <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
             <div className="flex items-center gap-2.5">
               <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400">
@@ -491,7 +510,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* KPI 4: Ingreso a Tracking */}
           <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
             <div className="flex items-center gap-2.5">
               <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400">
@@ -512,7 +530,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* KPI 5: Reprogramaciones */}
           <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
             <div className="flex items-center gap-2.5">
               <div className="p-2 rounded-lg bg-purple-500/10 text-purple-400">
@@ -525,7 +542,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* KPI 6: Encuestas (CSAT) */}
           <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
             <div className="flex items-center gap-2.5">
               <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400">
@@ -533,8 +549,13 @@ export default function App() {
               </div>
               <span className="text-xs text-gray-300 font-medium">Encuestas (CSAT)</span>
             </div>
-            <div className="mt-3">
+            <div className="mt-3 flex items-baseline gap-2.5">
               <span className="text-2xl font-extrabold text-white tracking-tight">{calc.csatCount}</span>
+              {Number(kpis?.csat_avg || 0) > 0 && (
+                <span className="text-xs font-bold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300">
+                  {Number(kpis?.csat_avg).toFixed(1).replace('.', ',')} ★ ({((Number(kpis?.csat_avg) / 5) * 100).toFixed(1).replace('.', ',')}%)
+                </span>
+              )}
             </div>
           </div>
 
@@ -545,7 +566,6 @@ export default function App() {
             {/* FILA 2: EMBUDO ALINEADO + EVOLUCIÓN CON PUNTOS DIARIOS + EFICIENCIA */}
             <div className="grid grid-cols-12 gap-4">
               
-              {/* Embudo de Interacción del Cliente */}
               <div className="col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-between">
                 <div className="border-b border-gray-800 pb-2.5 mb-3">
                   <div className="flex items-center gap-2">
@@ -557,7 +577,6 @@ export default function App() {
                 </div>
 
                 <div className="space-y-2 my-auto py-1">
-                  {/* Nivel 1: Órdenes */}
                   <div className="flex items-center gap-4">
                     <div className="relative flex-1 h-12 flex items-center justify-center">
                       <div
@@ -580,7 +599,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Nivel 2: Mensajes enviados */}
                   <div className="flex items-center gap-4">
                     <div className="relative flex-1 h-12 flex items-center justify-center">
                       <div
@@ -603,7 +621,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Nivel 3: Mensajes leídos */}
                   <div className="flex items-center gap-4">
                     <div className="relative flex-1 h-12 flex items-center justify-center">
                       <div
@@ -626,7 +643,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Nivel 4: Ingreso a tracking */}
                   <div className="flex items-center gap-4">
                     <div className="relative flex-1 h-12 flex items-center justify-center">
                       <div
@@ -793,7 +809,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* FILA 3: DONA DE ESTADOS + TRACKING POR SEGMENTO (CONECTADO POR DISTRITO) + RANKING */}
+            {/* FILA 3: DONA + SEGMENTO POR DISTRITO + RANKING */}
             <div className="grid grid-cols-12 gap-4">
               <div className="col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4">
                 <div className="flex items-center gap-2 border-b border-gray-800 pb-2.5 mb-3">
@@ -821,7 +837,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* TARJETA INGRESO A TRACKING POR SEGMENTO (CONECTADA A DISTRITOS DE AZURE) */}
+              {/* TARJETA INGRESO A TRACKING POR SEGMENTO */}
               <div className="col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-between">
                 <div className="flex items-center justify-between border-b border-gray-800 pb-2.5">
                   <div className="flex items-center gap-2">
@@ -834,9 +850,12 @@ export default function App() {
                 <div className="space-y-5 my-auto py-2">
                   {/* Segmento Alto Valor */}
                   <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 w-28 shrink-0">
+                    <div className="flex items-center gap-2 w-32 shrink-0">
                       <Crown size={18} className="text-amber-400 shrink-0" />
-                      <span className="text-xs font-semibold text-white">Alto Valor</span>
+                      <div className="leading-tight">
+                        <div className="text-xs font-semibold text-white">Alto Valor</div>
+                        <div className="text-[10px] text-gray-400">{calc.avTotalFmt} casos</div>
+                      </div>
                     </div>
                     <div className="flex-1 h-3 bg-gray-800 rounded-full overflow-hidden">
                       <div
@@ -844,19 +863,24 @@ export default function App() {
                         style={{ width: `${calc.avBarWidth}%` }}
                       />
                     </div>
-                    <div className="text-right w-28 leading-tight shrink-0">
-                      <div className="font-extrabold text-xs text-white">{calc.avPct}%</div>
+                    <div className="text-right w-36 leading-tight shrink-0">
+                      <div className="font-extrabold text-xs text-white">
+                        {calc.avPct}% <span className="text-[10px] font-normal text-amber-300">({calc.avOverReadPct}% leído)</span>
+                      </div>
                       <div className="text-[10px] text-gray-400">
-                        ({calc.avTrackingFmt} ingresos)
+                        {calc.avTrackingFmt} ing. / {calc.avEnviadosFmt} env.
                       </div>
                     </div>
                   </div>
 
                   {/* Segmento Preferente */}
                   <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 w-28 shrink-0">
+                    <div className="flex items-center gap-2 w-32 shrink-0">
                       <Gem size={18} className="text-amber-500 shrink-0" />
-                      <span className="text-xs font-semibold text-white">Preferente</span>
+                      <div className="leading-tight">
+                        <div className="text-xs font-semibold text-white">Preferente</div>
+                        <div className="text-[10px] text-gray-400">{calc.prefTotalFmt} casos</div>
+                      </div>
                     </div>
                     <div className="flex-1 h-3 bg-gray-800 rounded-full overflow-hidden">
                       <div
@@ -864,10 +888,12 @@ export default function App() {
                         style={{ width: `${calc.prefBarWidth}%` }}
                       />
                     </div>
-                    <div className="text-right w-28 leading-tight shrink-0">
-                      <div className="font-extrabold text-xs text-white">{calc.prefPct}%</div>
+                    <div className="text-right w-36 leading-tight shrink-0">
+                      <div className="font-extrabold text-xs text-white">
+                        {calc.prefPct}% <span className="text-[10px] font-normal text-yellow-300">({calc.prefOverReadPct}% leído)</span>
+                      </div>
                       <div className="text-[10px] text-gray-400">
-                        ({calc.prefTrackingFmt} ingresos)
+                        {calc.prefTrackingFmt} ing. / {calc.prefEnviadosFmt} env.
                       </div>
                     </div>
                   </div>
@@ -888,11 +914,17 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-800/50">
-                    <PartnerRow rank={1} name="OLMA" surveys={32} score="4,8" csat="96,0%" />
-                    <PartnerRow rank={2} name="AVANTEL" surveys={29} score="4,7" csat="94,0%" />
-                    <PartnerRow rank={3} name="DOMINION" surveys={27} score="4,6" csat="92,0%" />
-                    <PartnerRow rank={4} name="EJAS" surveys={27} score="4,5" csat="90,0%" />
-                    <PartnerRow rank={5} name="HODELPE" surveys={28} score="4,4" csat="88,0%" />
+                    {partners.length > 0 ? (
+                      partners.map((p) => (
+                        <PartnerRow key={p.name} rank={p.rank} name={p.name} surveys={p.surveys} score={p.score} csat={p.csat} />
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={5} className="py-6 text-center text-gray-500 text-xs">
+                          Sin encuestas registradas en este rango
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>

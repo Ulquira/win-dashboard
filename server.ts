@@ -12,7 +12,6 @@ app.use(cors());
 app.use(compression());
 app.use(express.json());
 
-// Caché en RAM por 5 minutos (300 segundos)
 const queryCache = new NodeCache({ stdTTL: 300 });
 
 const pool = mysql.createPool({
@@ -26,8 +25,9 @@ const pool = mysql.createPool({
   connectionLimit: 10,
 });
 
-// Distritos catalogados como Alto Valor (Lima Top / Lima Moderna)
-// Todo distrito fuera de esta lista (periferias y resto) se agrupa en Preferente
+// Lista de distritos de Alto Valor.
+// Como en el SQL usamos UPPER(TRIM(v.distrito)), detectará automáticamente
+// "Santiago de Surco", "santiago de surco", "SANTIAGO DE SURCO", con o sin tildes.
 const DISTRITOS_ALTO_VALOR = [
   'MIRAFLORES',
   'SAN ISIDRO',
@@ -72,7 +72,6 @@ async function loadTipoServicioCache() {
 
 loadTipoServicioCache();
 
-// 1. Endpoint de catálogos para filtros desplegables
 app.get('/api/filters', async (_req, res) => {
   try {
     const cachedFilters = queryCache.get('catalog_filters');
@@ -104,7 +103,6 @@ app.get('/api/filters', async (_req, res) => {
   }
 });
 
-// 2. Endpoint principal del Dashboard
 app.get('/api/dashboard', async (req, res) => {
   const startTime = Date.now();
   const todayDefault = new Date().toLocaleDateString('en-CA');
@@ -126,7 +124,6 @@ app.get('/api/dashboard', async (req, res) => {
   }
 
   try {
-    // Aseguramos mínimo los últimos 7 días hasta endDate para el gráfico evolutivo
     const endObj = new Date(`${endDate}T00:00:00`);
     const min7StartObj = new Date(endObj);
     min7StartObj.setDate(min7StartObj.getDate() - 6);
@@ -158,9 +155,45 @@ app.get('/api/dashboard', async (req, res) => {
     }
 
     const filterSql = extraFilters.join(' ');
-    const avListSql = DISTRITOS_ALTO_VALOR.map((d) => `'${d}'`).join(',');
+    const avListSql = DISTRITOS_ALTO_VALOR.map((d) => `'${d.trim().toUpperCase()}'`).join(',');
 
-    const [dailyResult, orderResult]: any = await Promise.all([
+    // Construimos los mismos filtros equivalentes para Reprogramaciones (r) y Encuestas (e)
+    const reprogFilters: string[] = [];
+    const reprogParams: any[] = [];
+    const encFilters: string[] = [];
+    const encParams: any[] = [];
+
+    if (service && service !== 'Todos los servicios') {
+      const productosDelTipo: string[] = [];
+      servicioToTipoMap.forEach((tipoVal, prodKey) => {
+        if (tipoVal === service) productosDelTipo.push(prodKey);
+      });
+
+      if (productosDelTipo.length > 0) {
+        const placeholders = productosDelTipo.map(() => '?').join(',');
+        reprogFilters.push(`AND (r.producto_servicio IN (${placeholders}) OR r.tipo_servicio = ?)`);
+        reprogParams.push(...productosDelTipo, service);
+
+        encFilters.push(`AND (e.producto IN (${placeholders}) OR e.tipo_servicio = ?)`);
+        encParams.push(...productosDelTipo, service);
+      } else {
+        reprogFilters.push(`AND (r.producto_servicio = ? OR r.tipo_servicio = ?)`);
+        reprogParams.push(service, service);
+
+        encFilters.push(`AND (e.producto = ? OR e.tipo_servicio = ?)`);
+        encParams.push(service, service);
+      }
+    }
+
+    if (zone && zone !== 'Todas las zonas') {
+      reprogFilters.push(`AND r.sector_operativo = ?`);
+      reprogParams.push(zone);
+
+      encFilters.push(`AND e.sector_operativo = ?`);
+      encParams.push(zone);
+    }
+
+    const [dailyResult, orderResult, reprogResult, encResult]: any = await Promise.all([
       pool.query(
         `
         SELECT 
@@ -174,12 +207,14 @@ app.get('/api/dashboard', async (req, res) => {
           COALESCE(SUM(v.estado_wsp = 'failed'), 0) AS failed,
           COALESCE(SUM(v.se_envio_wsp = 'NO' OR v.estado_wsp = 'NO ENVIADO' OR v.estado_wsp IS NULL), 0) AS no_enviado,
           COALESCE(SUM(v.ingreso_tracking = 'SI'), 0) AS tracking,
-          COALESCE(SUM(v.reprogramo = 'SI'), 0) AS reprogramaciones,
-          COALESCE(SUM(v.respondio_encuesta = 'SI'), 0) AS encuestas,
           COALESCE(SUM(v.estado_wsp = 'read' AND v.ingreso_tracking = 'NO'), 0) AS leidos_sin_ingreso,
+          COALESCE(SUM(UPPER(TRIM(v.distrito)) IN (${avListSql})), 0) AS av_total,
           COALESCE(SUM(UPPER(TRIM(v.distrito)) IN (${avListSql}) AND v.se_envio_wsp = 'SI'), 0) AS av_enviados,
+          COALESCE(SUM(UPPER(TRIM(v.distrito)) IN (${avListSql}) AND v.estado_wsp = 'read'), 0) AS av_leidos,
           COALESCE(SUM(UPPER(TRIM(v.distrito)) IN (${avListSql}) AND v.ingreso_tracking = 'SI'), 0) AS av_tracking,
+          COALESCE(SUM(UPPER(TRIM(v.distrito)) NOT IN (${avListSql}) OR v.distrito IS NULL), 0) AS pref_total,
           COALESCE(SUM((UPPER(TRIM(v.distrito)) NOT IN (${avListSql}) OR v.distrito IS NULL) AND v.se_envio_wsp = 'SI'), 0) AS pref_enviados,
+          COALESCE(SUM((UPPER(TRIM(v.distrito)) NOT IN (${avListSql}) OR v.distrito IS NULL) AND v.estado_wsp = 'read'), 0) AS pref_leidos,
           COALESCE(SUM((UPPER(TRIM(v.distrito)) NOT IN (${avListSql}) OR v.distrito IS NULL) AND v.ingreso_tracking = 'SI'), 0) AS pref_tracking
         FROM vw_reporte_funnel_casos_360 v
         WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
@@ -204,11 +239,64 @@ app.get('/api/dashboard', async (req, res) => {
         `,
         [startDate, endDate, ...extraParams]
       ),
+      // 3. Conteo desde vw_reprogramaciones_detalle con los mismos filtros
+      pool.query(
+        `
+        SELECT COUNT(*) AS total_reprog
+        FROM vw_reprogramaciones_detalle r
+        WHERE r.fecha_registro >= ? AND r.fecha_registro < DATE_ADD(?, INTERVAL 1 DAY)
+        ${reprogFilters.join(' ')}
+        `,
+        [startDate, endDate, ...reprogParams]
+      ),
+      // 4. Ranking por Partner y total desde vw_reporte_encuestas_enriquecido
+      pool.query(
+        `
+        SELECT 
+          COALESCE(NULLIF(TRIM(e.partner), ''), 'SIN PARTNER') AS partner,
+          COUNT(*) AS surveys,
+          AVG(
+            CASE 
+              WHEN CAST(e.satisfaccion_general AS DECIMAL(10,2)) > 0 
+              THEN CAST(e.satisfaccion_general AS DECIMAL(10,2))
+              ELSE NULL 
+            END
+          ) AS avg_score
+        FROM vw_reporte_encuestas_enriquecido e
+        WHERE COALESCE(e.fecha_registro_encuesta_dia, DATE(e.fecha_registro_encuesta), e.fecha_cita_dia) >= ?
+          AND COALESCE(e.fecha_registro_encuesta_dia, DATE(e.fecha_registro_encuesta), e.fecha_cita_dia) <= ?
+        ${encFilters.join(' ')}
+        GROUP BY COALESCE(NULLIF(TRIM(e.partner), ''), 'SIN PARTNER')
+        ORDER BY avg_score DESC, surveys DESC
+        `,
+        [startDate, endDate, ...encParams]
+      ),
     ]);
 
     const dailyRows: any[] = dailyResult[0] || [];
+    const totalReprogReal = Number(reprogResult[0]?.[0]?.total_reprog || 0);
 
-    // Sumamos para los KPIs únicamente los días dentro del rango exacto seleccionado (startDate..endDate)
+    const partnerRowsRaw: any[] = encResult[0] || [];
+    console.log(`📊 Encuestas encontradas (${startDate} a ${endDate}):`, partnerRowsRaw);
+    const totalEncuestasReal = partnerRowsRaw.reduce((acc, r) => acc + Number(r.surveys || 0), 0);
+    const sumaNotasPonderada = partnerRowsRaw.reduce(
+      (acc, r) => acc + Number(r.avg_score || 0) * Number(r.surveys || 0),
+      0
+    );
+    const csatAvgGlobal = totalEncuestasReal > 0 ? sumaNotasPonderada / totalEncuestasReal : 0;
+
+    const partnersRanking = partnerRowsRaw.slice(0, 6).map((r, idx) => {
+      const avg = Number(r.avg_score || 0);
+      const csatPct = (avg / 5) * 100;
+      return {
+        rank: idx + 1,
+        name: r.partner,
+        surveys: Number(r.surveys || 0),
+        score: avg.toFixed(1).replace('.', ','),
+        csat: `${csatPct.toFixed(1).replace('.', ',')}%`,
+      };
+    });
+
     const kpiRowsInRange = dailyRows.filter(
       (r) => r.raw_date >= startDate && r.raw_date <= endDate
     );
@@ -223,12 +311,17 @@ app.get('/api/dashboard', async (req, res) => {
         whs_failed: acc.whs_failed + Number(row.failed || 0),
         whs_no_enviado: acc.whs_no_enviado + Number(row.no_enviado || 0),
         ingreso_tracking: acc.ingreso_tracking + Number(row.tracking || 0),
-        reprogramaciones: acc.reprogramaciones + Number(row.reprogramaciones || 0),
-        encuestas_respondidas: acc.encuestas_respondidas + Number(row.encuestas || 0),
+        reprogramaciones: totalReprogReal,
+        encuestas_respondidas: totalEncuestasReal,
+        csat_avg: csatAvgGlobal,
         leidos_sin_ingreso: acc.leidos_sin_ingreso + Number(row.leidos_sin_ingreso || 0),
+        av_total: acc.av_total + Number(row.av_total || 0),
         av_enviados: acc.av_enviados + Number(row.av_enviados || 0),
+        av_leidos: acc.av_leidos + Number(row.av_leidos || 0),
         av_tracking: acc.av_tracking + Number(row.av_tracking || 0),
+        pref_total: acc.pref_total + Number(row.pref_total || 0),
         pref_enviados: acc.pref_enviados + Number(row.pref_enviados || 0),
+        pref_leidos: acc.pref_leidos + Number(row.pref_leidos || 0),
         pref_tracking: acc.pref_tracking + Number(row.pref_tracking || 0),
       }),
       {
@@ -240,12 +333,16 @@ app.get('/api/dashboard', async (req, res) => {
         whs_failed: 0,
         whs_no_enviado: 0,
         ingreso_tracking: 0,
-        reprogramaciones: 0,
-        encuestas_respondidas: 0,
+        reprogramaciones: totalReprogReal,
+        encuestas_respondidas: totalEncuestasReal,
         leidos_sin_ingreso: 0,
+        av_total: 0,
         av_enviados: 0,
+        av_leidos: 0,
         av_tracking: 0,
+        pref_total: 0,
         pref_enviados: 0,
+        pref_leidos: 0,
         pref_tracking: 0,
       }
     );
@@ -261,6 +358,7 @@ app.get('/api/dashboard', async (req, res) => {
       kpis,
       evolution: dailyRows,
       orders: ordersWithTipo,
+      partners: partnersRanking,
     };
 
     queryCache.set(cacheKey, responsePayload);
