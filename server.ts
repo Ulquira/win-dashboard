@@ -237,6 +237,8 @@ app.get('/api/dashboard', async (req, res) => {
           w.\`Observaciones Tareas\` AS observaciones_tareas,
           w.\`Historial Estados\` AS historial_estados,
           w.\`Datos Técnicos\` AS datos_tecnicos,
+          w.Georeferencia AS georeferencia_cliente,
+          w.Georeferencia_tecnico AS georeferencia_tecnico,
           w.\`Motivo Finalización\` AS motivo_finalizacion,
           w.\`Usuario Asignó\` AS usuario_asigno
         FROM vw_reporte_funnel_casos_360 v

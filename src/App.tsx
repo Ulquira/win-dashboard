@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { 
-  Home, BarChart2, Layers, CheckCircle, Activity, Smile, FileText, 
-  Calendar, ChevronDown, ClipboardList, Send, CheckCheck, 
+import {
+  Home, BarChart2, Layers, CheckCircle, Activity, Smile, FileText,
+  Calendar, ChevronDown, ClipboardList, Send, CheckCheck,
   MapPin, CalendarClock, MessageSquare, TrendingUp,
   Filter, Info, Settings, Laptop, Clock, Crown, Gem, Award, AlertTriangle, Target,
   Search, User, ExternalLink, Database, RefreshCw
@@ -344,7 +344,7 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen bg-[#090D16] text-gray-100 font-sans select-none">
-      
+
       {/* SIDEBAR IZQUIERDO */}
       <aside className="w-60 bg-[#0B101B] border-r border-gray-800/80 flex flex-col justify-between p-4 shrink-0">
         <div>
@@ -360,7 +360,7 @@ export default function App() {
 
           <nav className="space-y-1 text-xs font-medium">
             <NavItem icon={<Home size={16} />} label="Inicio" active={activeNav === 'Inicio'} onClick={() => { setActiveNav('Inicio'); setViewMode('ejecutiva'); }} />
-            
+
             {/* Desplegable Dashboard con las 2 vistas configuradas */}
             <div>
               <div
@@ -368,11 +368,10 @@ export default function App() {
                   setActiveNav('Dashboard');
                   setDashOpen(!dashOpen);
                 }}
-                className={`flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer transition ${
-                  activeNav === 'Dashboard'
-                    ? 'bg-gradient-to-r from-[#FF6B00] to-[#FF8533] text-white font-semibold shadow-md shadow-orange-500/20'
-                    : 'text-gray-400 hover:text-white hover:bg-gray-800/40'
-                }`}
+                className={`flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer transition ${activeNav === 'Dashboard'
+                  ? 'bg-gradient-to-r from-[#FF6B00] to-[#FF8533] text-white font-semibold shadow-md shadow-orange-500/20'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-800/40'
+                  }`}
               >
                 <div className="flex items-center gap-3">
                   <BarChart2 size={16} />
@@ -391,11 +390,10 @@ export default function App() {
                       setActiveNav('Dashboard');
                       setViewMode('ejecutiva');
                     }}
-                    className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition text-[11px] ${
-                      activeNav === 'Dashboard' && viewMode === 'ejecutiva'
-                        ? 'bg-[#FF6B00]/15 text-[#FF6B00] font-bold border border-[#FF6B00]/30'
-                        : 'text-gray-400 hover:text-white hover:bg-gray-800/30'
-                    }`}
+                    className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition text-[11px] ${activeNav === 'Dashboard' && viewMode === 'ejecutiva'
+                      ? 'bg-[#FF6B00]/15 text-[#FF6B00] font-bold border border-[#FF6B00]/30'
+                      : 'text-gray-400 hover:text-white hover:bg-gray-800/30'
+                      }`}
                   >
                     <Activity size={13} />
                     <span>Vista Ejecutiva</span>
@@ -406,11 +404,10 @@ export default function App() {
                       setActiveNav('Dashboard');
                       setViewMode('operativa');
                     }}
-                    className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition text-[11px] ${
-                      activeNav === 'Dashboard' && viewMode === 'operativa'
-                        ? 'bg-[#FF6B00]/15 text-[#FF6B00] font-bold border border-[#FF6B00]/30'
-                        : 'text-gray-400 hover:text-white hover:bg-gray-800/30'
-                    }`}
+                    className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition text-[11px] ${activeNav === 'Dashboard' && viewMode === 'operativa'
+                      ? 'bg-[#FF6B00]/15 text-[#FF6B00] font-bold border border-[#FF6B00]/30'
+                      : 'text-gray-400 hover:text-white hover:bg-gray-800/30'
+                      }`}
                   >
                     <ClipboardList size={13} />
                     <span>Vista Operativa</span>
@@ -449,7 +446,7 @@ export default function App() {
 
       {/* CONTENIDO PRINCIPAL */}
       <main className="flex-1 p-5 overflow-y-auto space-y-4">
-        
+
         {errorMsg && (
           <div className="bg-red-500/10 border border-red-500/40 text-red-300 px-4 py-2.5 rounded-xl text-xs flex items-center justify-between">
             <span><strong>Aviso de conexión:</strong> {errorMsg}</span>
@@ -539,137 +536,135 @@ export default function App() {
 
         {/* TABS SUPERIORES (Solo visibles en sección Dashboard) */}
         {activeNav !== 'Órdenes' && (
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setViewMode('ejecutiva')}
-              className={`flex items-center gap-2 px-4 py-1.5 font-semibold text-xs rounded-lg transition ${
-                viewMode === 'ejecutiva'
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setViewMode('ejecutiva')}
+                className={`flex items-center gap-2 px-4 py-1.5 font-semibold text-xs rounded-lg transition ${viewMode === 'ejecutiva'
                   ? 'bg-[#FF6B00] text-white shadow-md shadow-orange-500/10'
                   : 'bg-[#111827] text-gray-400 hover:text-gray-200 border border-gray-800'
-              }`}
-            >
-              <Activity size={14} />
-              Vista Ejecutiva
-            </button>
-            <button
-              onClick={() => setViewMode('operativa')}
-              className={`flex items-center gap-2 px-4 py-1.5 font-semibold text-xs rounded-lg transition ${
-                viewMode === 'operativa'
+                  }`}
+              >
+                <Activity size={14} />
+                Vista Ejecutiva
+              </button>
+              <button
+                onClick={() => setViewMode('operativa')}
+                className={`flex items-center gap-2 px-4 py-1.5 font-semibold text-xs rounded-lg transition ${viewMode === 'operativa'
                   ? 'bg-[#FF6B00] text-white shadow-md shadow-orange-500/10'
                   : 'bg-[#111827] text-gray-400 hover:text-gray-200 border border-gray-800'
-              }`}
-            >
-              <ClipboardList size={14} />
-              Vista Operativa
-            </button>
+                  }`}
+              >
+                <ClipboardList size={14} />
+                Vista Operativa
+              </button>
+            </div>
           </div>
-        </div>
         )}
 
         {/* FILA 1: 6 TARJETAS KPI HOMOLOGADAS (Solo visibles fuera de Órdenes) */}
         {activeNav !== 'Órdenes' && (
-        <div className="grid grid-cols-6 gap-3">
-          
-          <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-lg bg-blue-500/10 text-blue-400">
-                <ClipboardList size={18} />
-              </div>
-              <span className="text-xs text-gray-300 font-medium">Órdenes evaluadas</span>
-            </div>
-            <div className="mt-3">
-              <span className="text-2xl font-extrabold text-white tracking-tight">{calc.ordenes}</span>
-            </div>
-          </div>
+          <div className="grid grid-cols-6 gap-3">
 
-          <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
-                <Send size={18} />
+            <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-blue-500/10 text-blue-400">
+                  <ClipboardList size={18} />
+                </div>
+                <span className="text-xs text-gray-300 font-medium">Órdenes evaluadas</span>
               </div>
-              <span className="text-xs text-gray-300 font-medium">Envío de WhatsApp</span>
+              <div className="mt-3">
+                <span className="text-2xl font-extrabold text-white tracking-tight">{calc.ordenes}</span>
+              </div>
             </div>
-            <div className="mt-3 flex items-baseline gap-2.5">
-              <span className="text-2xl font-extrabold text-white tracking-tight">{calc.whsEnviados}</span>
-              <span className="text-xs font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
-                {calc.whsPct}%
-              </span>
-            </div>
-          </div>
 
-          <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400">
-                <CheckCheck size={18} />
+            <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
+                  <Send size={18} />
+                </div>
+                <span className="text-xs text-gray-300 font-medium">Envío de WhatsApp</span>
               </div>
-              <span className="text-xs text-gray-300 font-medium">Lectura del mensaje</span>
-            </div>
-            <div className="mt-3 flex items-baseline gap-2.5">
-              <span className="text-2xl font-extrabold text-white tracking-tight">{calc.leidos}</span>
-              <span className="text-xs font-bold px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300">
-                {calc.readPct}%
-              </span>
-            </div>
-          </div>
-
-          <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400">
-                <MapPin size={18} />
-              </div>
-              <span className="text-xs text-gray-300 font-medium">Ingreso a Tracking</span>
-            </div>
-            <div className="mt-2 flex items-center gap-3">
-              <span className="text-2xl font-extrabold text-white tracking-tight">{calc.tracking}</span>
-              <div className="flex flex-col gap-1">
-                <span className="w-[82px] text-center text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 leading-none">
-                  {calc.trackPct}% env.
-                </span>
-                <span className="w-[82px] text-center text-[10px] font-bold px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-200 border border-yellow-500/30 leading-none">
-                  {calc.trackOverReadPct}% leído
+              <div className="mt-3 flex items-baseline gap-2.5">
+                <span className="text-2xl font-extrabold text-white tracking-tight">{calc.whsEnviados}</span>
+                <span className="text-xs font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
+                  {calc.whsPct}%
                 </span>
               </div>
             </div>
-          </div>
 
-          <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-lg bg-purple-500/10 text-purple-400">
-                <CalendarClock size={18} />
+            <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400">
+                  <CheckCheck size={18} />
+                </div>
+                <span className="text-xs text-gray-300 font-medium">Lectura del mensaje</span>
               </div>
-              <span className="text-xs text-gray-300 font-medium">Reprogramaciones</span>
-            </div>
-            <div className="mt-3">
-              <span className="text-2xl font-extrabold text-white tracking-tight">{calc.reprog}</span>
-            </div>
-          </div>
-
-          <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400">
-                <MessageSquare size={18} />
-              </div>
-              <span className="text-xs text-gray-300 font-medium">Encuestas (CSAT)</span>
-            </div>
-            <div className="mt-3 flex items-baseline gap-2">
-              <span className="text-2xl font-extrabold text-white tracking-tight">{calc.csatCount}</span>
-              {Number(kpis?.csat_avg || 0) > 0 && (
-                <span className="text-[11px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300">
-                  {Number(kpis?.csat_avg).toFixed(1).replace('.', ',')} ★
+              <div className="mt-3 flex items-baseline gap-2.5">
+                <span className="text-2xl font-extrabold text-white tracking-tight">{calc.leidos}</span>
+                <span className="text-xs font-bold px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300">
+                  {calc.readPct}%
                 </span>
-              )}
+              </div>
             </div>
-          </div>
 
-        </div>
+            <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400">
+                  <MapPin size={18} />
+                </div>
+                <span className="text-xs text-gray-300 font-medium">Ingreso a Tracking</span>
+              </div>
+              <div className="mt-2 flex items-center gap-3">
+                <span className="text-2xl font-extrabold text-white tracking-tight">{calc.tracking}</span>
+                <div className="flex flex-col gap-1">
+                  <span className="w-[82px] text-center text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 leading-none">
+                    {calc.trackPct}% env.
+                  </span>
+                  <span className="w-[82px] text-center text-[10px] font-bold px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-200 border border-yellow-500/30 leading-none">
+                    {calc.trackOverReadPct}% leído
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-purple-500/10 text-purple-400">
+                  <CalendarClock size={18} />
+                </div>
+                <span className="text-xs text-gray-300 font-medium">Reprogramaciones</span>
+              </div>
+              <div className="mt-3">
+                <span className="text-2xl font-extrabold text-white tracking-tight">{calc.reprog}</span>
+              </div>
+            </div>
+
+            <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 flex flex-col justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400">
+                  <MessageSquare size={18} />
+                </div>
+                <span className="text-xs text-gray-300 font-medium">Encuestas (CSAT)</span>
+              </div>
+              <div className="mt-3 flex items-baseline gap-2">
+                <span className="text-2xl font-extrabold text-white tracking-tight">{calc.csatCount}</span>
+                {Number(kpis?.csat_avg || 0) > 0 && (
+                  <span className="text-[11px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300">
+                    {Number(kpis?.csat_avg).toFixed(1).replace('.', ',')} ★
+                  </span>
+                )}
+              </div>
+            </div>
+
+          </div>
         )}
 
         {activeNav === 'Órdenes' ? null : viewMode === 'ejecutiva' ? (
           <>
             {/* FILA 2: EMBUDO ALINEADO + EVOLUCIÓN CON PUNTOS DIARIOS + EFICIENCIA */}
             <div className="grid grid-cols-12 gap-4">
-              
+
               <div className="col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-between">
                 <div className="border-b border-gray-800 pb-2.5 mb-3">
                   <div className="flex items-center gap-2">
@@ -1227,10 +1222,10 @@ export default function App() {
                         stLower.includes('iniciada') || stLower.includes('finalizada')
                           ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
                           : stLower.includes('agendada')
-                          ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
-                          : stLower.includes('cancel') || stLower.includes('anul')
-                          ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
-                          : 'bg-amber-500/15 text-amber-300 border-amber-500/30';
+                            ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+                            : stLower.includes('cancel') || stLower.includes('anul')
+                              ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                              : 'bg-amber-500/15 text-amber-300 border-amber-500/30';
 
                       return (
                         <tr key={i} className="hover:bg-gray-800/30">
@@ -1355,7 +1350,7 @@ export default function App() {
               </div>
             </div>
 
-            </div>
+          </div>
         )}
 
         {/* SECCIÓN PESTAÑA "ÓRDENES": TABLA FUNNEL HOMOLOGADA + DRAWER DE DETALLE 360° */}
@@ -1452,17 +1447,17 @@ export default function App() {
                       stOtLower.includes('iniciada') || stOtLower.includes('finalizada')
                         ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
                         : stOtLower.includes('agendada')
-                        ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
-                        : stOtLower.includes('cancel') || stOtLower.includes('anul')
-                        ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
-                        : 'bg-amber-500/15 text-amber-300 border-amber-500/30';
+                          ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+                          : stOtLower.includes('cancel') || stOtLower.includes('anul')
+                            ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                            : 'bg-amber-500/15 text-amber-300 border-amber-500/30';
 
                     const stWspLower = String(o.estado_wsp || '').toLowerCase();
                     const wspLabel =
                       stWspLower === 'read' ? 'LEÍDO' :
-                      stWspLower.includes('deliver') ? 'ENTREGADO' :
-                      stWspLower === 'sent' ? 'ENVIADO' :
-                      stWspLower === 'failed' ? 'FALLIDO' : 'NO ENVIADO';
+                        stWspLower.includes('deliver') ? 'ENTREGADO' :
+                          stWspLower === 'sent' ? 'ENVIADO' :
+                            stWspLower === 'failed' ? 'FALLIDO' : 'NO ENVIADO';
 
                     const docCliente = o.numero_documento || '-';
                     const codSegui = o.codi_segui_clien || o.codi_clien || '-';
@@ -1518,22 +1513,20 @@ export default function App() {
                           </span>
                         </td>
                         <td className="py-2 px-1.5 text-center whitespace-nowrap">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            stWspLower === 'read' ? 'bg-emerald-500/20 text-emerald-300' :
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${stWspLower === 'read' ? 'bg-emerald-500/20 text-emerald-300' :
                             stWspLower.includes('deliver') ? 'bg-cyan-500/20 text-cyan-300' :
-                            stWspLower === 'sent' ? 'bg-blue-500/20 text-blue-300' :
-                            stWspLower === 'failed' ? 'bg-red-500/20 text-red-400' :
-                            'bg-gray-800 text-gray-400'
-                          }`}>
+                              stWspLower === 'sent' ? 'bg-blue-500/20 text-blue-300' :
+                                stWspLower === 'failed' ? 'bg-red-500/20 text-red-400' :
+                                  'bg-gray-800 text-gray-400'
+                            }`}>
                             {wspLabel}
                           </span>
                         </td>
                         <td className="py-2 px-1.5 text-center whitespace-nowrap">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            o.ingreso_tracking === 'SI'
-                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                              : 'bg-gray-800/60 text-gray-500'
-                          }`}>
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${o.ingreso_tracking === 'SI'
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                            : 'bg-gray-800/60 text-gray-500'
+                            }`}>
                             {o.ingreso_tracking === 'SI' ? 'SÍ INGRESÓ' : 'NO'}
                           </span>
                         </td>
@@ -1632,13 +1625,20 @@ export default function App() {
                 <div className="bg-[#111827]/90 border border-gray-800 rounded-xl p-3.5 space-y-1.5">
                   <div className="text-[11px] font-bold text-[#FF6B00] uppercase tracking-wider mb-1">Asignación Técnica</div>
                   <div><span className="text-gray-400">Tipo Operación:</span> <strong className="text-emerald-300">{selectedOrder.servicio_tipo || '-'}</strong></div>
-                  <div><span className="text-gray-400">Producto / Plan:</span> <strong className="text-white">{selectedOrder.producto || '-'} {selectedOrder.plan_contratado ? `• ${selectedOrder.plan_contratado}` : ''}</strong></div>
-                  <div><span className="text-gray-400">Tipo Trabajo:</span> <strong className="text-white">{selectedOrder.tipo_trabajo || '-'}</strong></div>
+                  <div><span className="text-gray-400">Producto / Trabajo:</span> <strong className="text-white">{selectedOrder.producto || '-'} ({selectedOrder.tipo_trabajo || '-'})</strong></div>
                   <div><span className="text-gray-400">Partner:</span> <strong className="text-white">{selectedOrder.partner || selectedOrder.proveedor_ot || '-'}</strong></div>
                   <div><span className="text-gray-400">Cuadrilla Completa:</span> <strong className="text-amber-300">{selectedOrder.cuadrilla_completa || selectedOrder.cuadrilla || '-'}</strong></div>
-                  <div><span className="text-gray-400">Datos Técnicos (CTO/Puerto):</span> <strong className="text-gray-200">{selectedOrder.datos_tecnicos || '-'}</strong></div>
+                  {selectedOrder.plan_contratado && (
+                    <div className="pt-1 border-t border-gray-800/80 text-[11px]">
+                      <span className="text-gray-400">Detalle Plan:</span>{' '}
+                      <span className="text-gray-300">{String(selectedOrder.plan_contratado).replace(/<br\s*\/?>/gi, ' • ')}</span>
+                    </div>
+                  )}
                 </div>
               </div>
+
+              {/* MAPA INTERACTIVO TIPO GOOGLE MAPS CON PUNTOS CTO, CLIENTE Y TÉCNICO */}
+              <OrderGeoMap order={selectedOrder} />
 
               {/* Botón directo a Link de Tracking si existe */}
               {selectedOrder.link_tracking && (
@@ -1716,3 +1716,287 @@ function PartnerRow({ rank, name, surveys, score, csat }: { rank: number; name: 
     </tr>
   );
 }
+
+interface GeoPoint {
+    id: string;
+    kind: 'cliente' | 'tecnico' | 'cto';
+    label: string;
+    detail?: string;
+    lat: number;
+    lng: number;
+  }
+
+  function parseCoordPair(raw?: string | null): { lat: number; lng: number } | null {
+    if (!raw) return null;
+    const matches = String(raw).match(/-?\d+\.\d+/g);
+    if (!matches || matches.length < 2) return null;
+    const lat = parseFloat(matches[0]);
+    const lng = parseFloat(matches[1]);
+    if (isNaN(lat) || isNaN(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+    return { lat, lng };
+  }
+
+  function parseTechnicalData(rawDatos?: string | null, geoCliente?: string | null, geoTecnico?: string | null) {
+    const points: GeoPoint[] = [];
+    const attributes: { key: string; value: string }[] = [];
+    const ctoNames: Record<string, string> = {};
+
+    // 1. Coordenada del Cliente
+    const cliCoord = parseCoordPair(geoCliente);
+    if (cliCoord) {
+      points.push({
+        id: 'cliente',
+        kind: 'cliente',
+        label: 'Domicilio Cliente',
+        detail: `${cliCoord.lat}, ${cliCoord.lng}`,
+        lat: cliCoord.lat,
+        lng: cliCoord.lng,
+      });
+    }
+
+    // 2. Coordenada del Técnico
+    const tecCoord = parseCoordPair(geoTecnico);
+    if (tecCoord) {
+      points.push({
+        id: 'tecnico',
+        kind: 'tecnico',
+        label: 'Ubicación Técnico',
+        detail: `${tecCoord.lat}, ${tecCoord.lng}`,
+        lat: tecCoord.lat,
+        lng: tecCoord.lng,
+      });
+    }
+
+    // 3. Parsear el campo Datos Técnicos (ej. CTO1/Alfanumérico/WN-11C...;COORDENADA CTO1/Númerico/-11.961892-77.0107)
+    if (rawDatos) {
+      const segments = String(rawDatos)
+        .split(';')
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      for (const seg of segments) {
+        const parts = seg.split('/');
+        const rawKey = (parts[0] || '').trim();
+        const rawVal = (parts.slice(2).join('/') || parts[1] || '').trim();
+        if (!rawKey || !rawVal) continue;
+
+        if (/^CTO\d*$/i.test(rawKey)) {
+          ctoNames[rawKey.toUpperCase()] = rawVal;
+          attributes.push({ key: rawKey.toUpperCase(), value: rawVal });
+        } else if (/COORDENADA\s*(CTO\d*)/i.test(rawKey)) {
+          const matchCto = rawKey.match(/(CTO\d*)/i);
+          const ctoKey = matchCto ? matchCto[1].toUpperCase() : 'CTO';
+          const coord = parseCoordPair(rawVal);
+          if (coord) {
+            points.push({
+              id: `coord_${ctoKey}_${points.length}`,
+              kind: 'cto',
+              label: ctoKey,
+              detail: ctoNames[ctoKey] ? `Código: ${ctoNames[ctoKey]}` : `${coord.lat}, ${coord.lng}`,
+              lat: coord.lat,
+              lng: coord.lng,
+            });
+          }
+        } else {
+          attributes.push({ key: rawKey, value: rawVal });
+        }
+      }
+    }
+
+    return { points, attributes };
+  }
+
+  function OrderGeoMap({ order }: { order: RealOrder }) {
+    const mapContainerRef = React.useRef<HTMLDivElement | null>(null);
+    const mapInstanceRef = React.useRef<any>(null);
+    const [mapStyle, setMapStyle] = useState<'google_streets' | 'google_hybrid' | 'dark'>('google_streets');
+
+    const { points, attributes } = useMemo(
+      () =>
+        parseTechnicalData(
+          order.datos_tecnicos,
+          order.georeferencia_cliente || order.Georeferencia,
+          order.georeferencia_tecnico || order.Georeferencia_tecnico
+        ),
+      [order]
+    );
+
+    useEffect(() => {
+      const L = (window as any).L;
+      if (!L || !mapContainerRef.current || points.length === 0) return;
+
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+
+      const map = L.map(mapContainerRef.current, {
+        zoomControl: true,
+        attributionControl: false,
+      });
+      mapInstanceRef.current = map;
+
+      const tileUrl =
+        mapStyle === 'google_streets'
+          ? 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}'
+          : mapStyle === 'google_hybrid'
+            ? 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'
+            : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+
+      L.tileLayer(tileUrl, { maxZoom: 20 }).addTo(map);
+
+      const bounds: [number, number][] = [];
+
+      points.forEach((pt) => {
+        bounds.push([pt.lat, pt.lng]);
+
+        const color =
+          pt.kind === 'cliente' ? '#10B981' : pt.kind === 'tecnico' ? '#3B82F6' : '#FF6B00';
+        const badgeText =
+          pt.kind === 'cliente' ? '🏠' : pt.kind === 'tecnico' ? '🚐' : pt.label.replace('CTO', '');
+
+        const customIcon = L.divIcon({
+          className: 'custom-geo-pin',
+          html: `
+          <div style="
+            display:flex;align-items:center;gap:4px;
+            background:${color};color:#fff;font-weight:800;font-size:10px;
+            padding:3px 7px;border-radius:9999px;border:2px solid #0B101B;
+            box-shadow:0 4px 10px rgba(0,0,0,0.45);white-space:nowrap;
+            transform:translate(-50%, -50%);
+          ">
+            <span>${badgeText}</span>
+            <span>${pt.label}</span>
+          </div>
+        `,
+          iconSize: [0, 0],
+        });
+
+        const marker = L.marker([pt.lat, pt.lng], { icon: customIcon }).addTo(map);
+        marker.bindPopup(`
+        <div style="font-family:sans-serif;font-size:12px;line-height:1.4;color:#111827;">
+          <strong>${pt.label}</strong><br/>
+          ${pt.detail ? `<span>${pt.detail}</span><br/>` : ''}
+          <span style="color:#4B5563;font-size:11px;">${pt.lat}, ${pt.lng}</span><br/>
+          <a href="https://www.google.com/maps?q=${pt.lat},${pt.lng}" target="_blank" rel="noreferrer" style="color:#FF6B00;font-weight:bold;text-decoration:none;">
+            Abrir en Google Maps ↗
+          </a>
+        </div>
+      `);
+      });
+
+      if (bounds.length === 1) {
+        map.setView(bounds[0], 17);
+      } else if (bounds.length > 1) {
+        map.fitBounds(bounds, { padding: [45, 45], maxZoom: 18 });
+      }
+
+      return () => {
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.remove();
+          mapInstanceRef.current = null;
+        }
+      };
+    }, [points, mapStyle]);
+
+    return (
+      <div className="bg-[#111827]/95 border border-gray-800 rounded-xl p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-800 pb-2.5">
+          <div>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-white flex items-center gap-2">
+              <MapPin size={15} className="text-[#FF6B00]" />
+              Mapa de Georreferencia (Cliente, Técnico y CTOs)
+            </h4>
+            <p className="text-[11px] text-gray-400 mt-0.5">
+              Ubicación espacial de cajas terminales ópticas (CTO), domicilio y técnico asignado
+            </p>
+          </div>
+
+          {/* Selector de capa tipo Google Maps / Satélite / Oscuro */}
+          <div className="flex items-center gap-1 bg-[#090D16] p-1 rounded-lg border border-gray-800 text-[10px]">
+            <button
+              onClick={() => setMapStyle('google_streets')}
+              className={`px-2 py-1 rounded font-semibold transition ${mapStyle === 'google_streets' ? 'bg-[#FF6B00] text-white' : 'text-gray-400 hover:text-white'
+                }`}
+            >
+              Google Calles
+            </button>
+            <button
+              onClick={() => setMapStyle('google_hybrid')}
+              className={`px-2 py-1 rounded font-semibold transition ${mapStyle === 'google_hybrid' ? 'bg-[#FF6B00] text-white' : 'text-gray-400 hover:text-white'
+                }`}
+            >
+              Satélite
+            </button>
+            <button
+              onClick={() => setMapStyle('dark')}
+              className={`px-2 py-1 rounded font-semibold transition ${mapStyle === 'dark' ? 'bg-[#FF6B00] text-white' : 'text-gray-400 hover:text-white'
+                }`}
+            >
+              Oscuro
+            </button>
+          </div>
+        </div>
+
+        {/* Etiquetas limpias de Datos Técnicos (CTOs, Puerto, DNI, RRINST, etc.) */}
+        {attributes.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {attributes.map((attr, idx) => (
+              <div
+                key={idx}
+                className="px-2.5 py-1 rounded-lg bg-[#090D16] border border-gray-800 text-[11px] flex items-center gap-1.5"
+              >
+                <span className="text-gray-400 font-semibold">{attr.key}:</span>
+                <span className="text-amber-300 font-bold">{attr.value}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Contenedor del Mapa */}
+        {points.length > 0 ? (
+          <>
+            <div
+              ref={mapContainerRef}
+              className="w-full h-72 rounded-xl overflow-hidden border border-gray-700/80 z-0"
+            />
+
+            {/* Leyenda interactiva y enlaces directos a Google Maps */}
+            <div className="grid grid-cols-3 gap-2 pt-1">
+              {points.map((pt) => {
+                const badgeColor =
+                  pt.kind === 'cliente'
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                    : pt.kind === 'tecnico'
+                      ? 'border-blue-500/40 bg-blue-500/10 text-blue-300'
+                      : 'border-orange-500/40 bg-[#FF6B00]/10 text-amber-300';
+
+                return (
+                  <a
+                    key={pt.id}
+                    href={`https://www.google.com/maps?q=${pt.lat},${pt.lng}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={`p-2 rounded-lg border ${badgeColor} hover:brightness-125 transition flex items-center justify-between text-[11px]`}
+                  >
+                    <div className="truncate pr-1">
+                      <div className="font-bold text-white flex items-center gap-1">
+                        <span>{pt.kind === 'cliente' ? '🏠' : pt.kind === 'tecnico' ? '🚐' : '📦'}</span>
+                        <span>{pt.label}</span>
+                      </div>
+                      <div className="text-[10px] opacity-80 truncate">{pt.detail}</div>
+                    </div>
+                    <ExternalLink size={12} className="shrink-0 opacity-75" />
+                  </a>
+                );
+              })}
+            </div>
+          </>
+        ) : (
+          <div className="py-8 text-center text-xs text-gray-500 bg-[#090D16]/60 rounded-xl border border-gray-800/60">
+            Esta orden no registra coordenadas geográficas en Datos Técnicos ni en Georeferencia.
+          </div>
+        )}
+      </div>
+    );
+  }
