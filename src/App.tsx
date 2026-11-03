@@ -21,24 +21,16 @@ interface KpiData {
   ingreso_tracking: number;
   reprogramaciones: number;
   encuestas_respondidas: number;
+  csat_avg?: number;
   leidos_sin_ingreso: number;
   av_total: number;
   av_enviados: number;
   av_leidos: number;
   av_tracking: number;
-  csat_avg?: number;
   pref_total: number;
   pref_enviados: number;
   pref_leidos: number;
   pref_tracking: number;
-}
-
-interface PartnerRankItem {
-  rank: number;
-  name: string;
-  surveys: number;
-  score: string;
-  csat: string;
 }
 
 interface EvolutionPoint {
@@ -69,6 +61,14 @@ interface RealOrder {
   link_tracking: string;
 }
 
+interface PartnerRankItem {
+  rank: number;
+  name: string;
+  surveys: number;
+  score: string;
+  csat: string;
+}
+
 export default function App() {
   const [activeNav, setActiveNav] = useState<NavSection>('WIN en RUTA');
   const [viewMode, setViewMode] = useState<ViewMode>('ejecutiva');
@@ -93,7 +93,13 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('Todos');
 
-  const fetchDashboardData = (sDate = startDate, eDate = endDate, srv = service, zn = zone, forceRefresh = false) => {
+  const fetchDashboardData = (
+    sDate = startDate,
+    eDate = endDate,
+    srv = service,
+    zn = zone,
+    forceRefresh = false
+  ) => {
     setLoading(true);
     setErrorMsg(null);
     const params = new URLSearchParams({
@@ -156,6 +162,7 @@ export default function App() {
     const avEnviados = Number(kpis?.av_enviados || 0);
     const avLeidos = Number(kpis?.av_leidos || 0);
     const avTracking = Number(kpis?.av_tracking || 0);
+
     const prefTotal = Number(kpis?.pref_total || 0);
     const prefEnviados = Number(kpis?.pref_enviados || 0);
     const prefLeidos = Number(kpis?.pref_leidos || 0);
@@ -549,11 +556,11 @@ export default function App() {
               </div>
               <span className="text-xs text-gray-300 font-medium">Encuestas (CSAT)</span>
             </div>
-            <div className="mt-3 flex items-baseline gap-2.5">
+            <div className="mt-3 flex items-baseline gap-2">
               <span className="text-2xl font-extrabold text-white tracking-tight">{calc.csatCount}</span>
               {Number(kpis?.csat_avg || 0) > 0 && (
-                <span className="text-xs font-bold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300">
-                  {Number(kpis?.csat_avg).toFixed(1).replace('.', ',')} ★ ({((Number(kpis?.csat_avg) / 5) * 100).toFixed(1).replace('.', ',')}%)
+                <span className="text-[11px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300">
+                  {Number(kpis?.csat_avg).toFixed(1).replace('.', ',')} ★
                 </span>
               )}
             </div>
@@ -809,7 +816,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* FILA 3: DONA + SEGMENTO POR DISTRITO + RANKING */}
+            {/* FILA 3: DONA + SEGMENTO POR DISTRITO (CON CASOS TOTALES) + RANKING DE PARTNERS REAL */}
             <div className="grid grid-cols-12 gap-4">
               <div className="col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4">
                 <div className="flex items-center gap-2 border-b border-gray-800 pb-2.5 mb-3">
@@ -900,6 +907,7 @@ export default function App() {
                 </div>
               </div>
 
+              {/* TARJETA RANKING DE PARTNERS (CSAT) CONECTADA A vw_reporte_encuestas_enriquecido */}
               <div className="col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4">
                 <div className="flex items-center justify-between border-b border-gray-800 pb-2 mb-2">
                   <div className="flex items-center gap-2">
@@ -921,7 +929,7 @@ export default function App() {
                     ) : (
                       <tr>
                         <td colSpan={5} className="py-6 text-center text-gray-500 text-xs">
-                          Sin encuestas registradas en este rango
+                          Sin encuestas en este rango
                         </td>
                       </tr>
                     )}
