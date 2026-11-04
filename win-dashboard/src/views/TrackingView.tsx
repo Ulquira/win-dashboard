@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  User, Sparkles, Headset, ExternalLink, Search, MessageSquare,
-  Code2, ChevronLeft, ChevronRight, RefreshCw, CheckCheck,
-  MapPin, Phone, ShieldCheck, Globe, Copy, Check, Layers, Wrench,
-  ChevronDown, ChevronUp, Clock, AlertCircle
+  User, Sparkles, Headset, ExternalLink, MessageSquare,
+  ChevronLeft, ChevronRight, RefreshCw, CheckCheck,
+  MapPin, Phone, ShieldCheck, Copy, Check, Layers, Wrench,
+  ChevronDown, ChevronUp, Bot
 } from 'lucide-react';
 import { RealOrder } from '../types/dashboard';
+import { apiFetch } from '../config/api';
 
 export interface RawChatMessage {
   id?: string | number;
@@ -35,7 +36,8 @@ interface TrackingViewProps {
   startDate: string;
   endDate: string;
   service: string;
-  zone: string;
+  globalSearch: string;
+  ignoreDates: boolean;
   onSelectOrder: (order: RealOrder) => void;
 }
 
@@ -44,13 +46,11 @@ export function TrackingView({
   startDate,
   endDate,
   service,
-  zone,
+  globalSearch,
+  ignoreDates,
   onSelectOrder,
 }: TrackingViewProps) {
-  // Estados de Búsqueda Server-Side y Filtros en Bandeja Izquierda
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [debouncedQuery, setDebouncedQuery] = useState<string>('');
-  const [ignoreDates, setIgnoreDates] = useState<boolean>(false);
+  const [debouncedQuery, setDebouncedQuery] = useState<string>(globalSearch);
   const [soloConChat, setSoloConChat] = useState<boolean>(true);
   const [slaFilter, setSlaFilter] = useState<string>('Todos');
   const [turnoFilter, setTurnoFilter] = useState<string>('Todos');
@@ -66,28 +66,26 @@ export function TrackingView({
   // Estados del Visor Derecho y Ficha Técnica Colapsable
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
   const [showTechCard, setShowTechCard] = useState<boolean>(true);
-  const [chatLimit, setChatLimit] = useState<15 | 30>(15);
-  const [viewType, setViewType] = useState<'chat' | 'json'>('chat');
   const [loadingChat, setLoadingChat] = useState<boolean>(false);
   const [dataSource, setDataSource] = useState<'live_api' | 'db_fallback' | 'snapshot'>('snapshot');
   const [liveMessages, setLiveMessages] = useState<RawChatMessage[] | null>(null);
   const [chatMeta, setChatMeta] = useState<any>(null);
-  const [copiedOt, setCopiedOt] = useState<boolean>(false);
+  const [copiedCode, setCopiedCode] = useState<boolean>(false);
 
-  // Debounce 350ms para búsqueda global en BD
+  // Sincronización con el buscador dinámico del Header superior
   useEffect(() => {
     const timer = setTimeout(() => {
-      setDebouncedQuery(searchQuery);
+      setDebouncedQuery(globalSearch);
       setPage(1);
       setSelectedIndex(0);
     }, 350);
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [globalSearch]);
 
   useEffect(() => {
     setPage(1);
     setSelectedIndex(0);
-  }, [soloConChat, slaFilter, turnoFilter, startDate, endDate, service, zone, ignoreDates]);
+  }, [soloConChat, slaFilter, turnoFilter, startDate, endDate, service, ignoreDates]);
 
   const fetchPaginatedTracking = useCallback(() => {
     setLoadingPage(true);
@@ -95,7 +93,6 @@ export function TrackingView({
       startDate,
       endDate,
       service,
-      zone,
       q: debouncedQuery,
       ignoreDates: ignoreDates ? 'true' : 'false',
       soloConChat: soloConChat ? 'true' : 'false',
@@ -105,8 +102,7 @@ export function TrackingView({
       pageSize: String(pageSize),
     });
 
-    fetch(`http://localhost:3001/api/tracking/search?${params.toString()}`)
-      .then((res) => res.json())
+    apiFetch(`/api/tracking/search?${params.toString()}`)
       .then((data) => {
         if (data.ok && Array.isArray(data.orders)) {
           setServerOrders(data.orders);
@@ -115,9 +111,9 @@ export function TrackingView({
           setSelectedIndex(0);
         }
       })
-      .catch((err) => console.error('Error en /api/tracking/search:', err))
+      .catch((err) => console.error('Error en /api/tracking/search (API):', err))
       .finally(() => setLoadingPage(false));
-  }, [startDate, endDate, service, zone, debouncedQuery, ignoreDates, soloConChat, slaFilter, turnoFilter, page]);
+  }, [startDate, endDate, service, debouncedQuery, ignoreDates, soloConChat, slaFilter, turnoFilter, page]);
 
   useEffect(() => {
     fetchPaginatedTracking();
@@ -125,62 +121,53 @@ export function TrackingView({
 
   const selectedRow: RealOrder | null = serverOrders[selectedIndex] || serverOrders[0] || null;
 
-  // Consumo Híbrido: Live API (config_plantillas_mantra) -> Fallback BD (historial_chats_mantra)
-  const fetchChatConversation = useCallback(
-    async (row: RealOrder | null, limitVal: 15 | 30) => {
-      if (!row) return;
-      const phone = String(row.mantra_phone || row.telefono || '').replace(/\D/g, '');
-      const grupo = String(row.servicio_tipo || row.producto || 'GENERAL');
+  // Consumo completo de todos los mensajes sin límite de 15/30
+  const fetchChatConversation = useCallback(async (row: RealOrder | null) => {
+    if (!row) return;
+    const phone = String(row.mantra_phone || row.telefono || '').replace(/\D/g, '');
+    const grupo = String(row.servicio_tipo || row.producto || 'GENERAL');
 
-      if (!phone && !row.orden_id) {
-        setLiveMessages(null);
-        setChatMeta(null);
-        setDataSource('snapshot');
+    if (!phone && !row.orden_id) {
+      setLiveMessages(null);
+      setChatMeta(null);
+      setDataSource('snapshot');
+      return;
+    }
+
+    setLoadingChat(true);
+    try {
+      const data = await apiFetch(
+        `/api/4dm1n_/mantra-chat?phone=${encodeURIComponent(
+          phone
+        )}&ordenId=${encodeURIComponent(String(row.orden_id || ''))}&grupoServicio=${encodeURIComponent(
+          grupo
+        )}&limit=1000`
+      );
+      if (data.chatMeta) setChatMeta(data.chatMeta);
+      if (data.ok && Array.isArray(data.messages) && data.messages.length > 0) {
+        setLiveMessages(data.messages);
+        setDataSource(data.source === 'live_api' ? 'live_api' : 'db_fallback');
+        setLoadingChat(false);
         return;
       }
+    } catch (_) {}
 
-      setLoadingChat(true);
-      try {
-        const res = await fetch(
-          `http://localhost:3001/api/4dm1n_/mantra-chat?phone=${encodeURIComponent(
-            phone
-          )}&ordenId=${encodeURIComponent(String(row.orden_id || ''))}&grupoServicio=${encodeURIComponent(
-            grupo
-          )}&limit=${limitVal}`
-        );
-        if (res.ok) {
-          const data = await res.json();
-          if (data.chatMeta) setChatMeta(data.chatMeta);
-          if (data.ok && Array.isArray(data.messages) && data.messages.length > 0) {
-            setLiveMessages(data.messages);
-            setDataSource(data.source === 'live_api' ? 'live_api' : 'db_fallback');
-            setLoadingChat(false);
-            return;
-          }
-        }
-      } catch (_) {}
-
-      setLiveMessages(null);
-      setDataSource('snapshot');
-      setLoadingChat(false);
-    },
-    []
-  );
+    setLiveMessages(null);
+    setDataSource('snapshot');
+    setLoadingChat(false);
+  }, []);
 
   useEffect(() => {
-    fetchChatConversation(selectedRow, chatLimit);
-  }, [selectedRow?.orden_id, chatLimit, fetchChatConversation]);
+    fetchChatConversation(selectedRow);
+  }, [selectedRow?.orden_id, fetchChatConversation]);
 
-  // Atajos de teclado: V (Chat/JSON), F (Expandir/Colapsar Ficha), ← / → / ↑ / ↓ (Recorrer bandeja), ESC
+  // Atajos de teclado: F (Expandir/Colapsar Ficha), ← / → / ↑ / ↓ (Recorrer bandeja)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-      if (e.key.toLowerCase() === 'v') {
-        e.preventDefault();
-        setViewType((prev) => (prev === 'chat' ? 'json' : 'chat'));
-      } else if (e.key.toLowerCase() === 'f') {
+      if (e.key.toLowerCase() === 'f') {
         e.preventDefault();
         setShowTechCard((prev) => !prev);
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
@@ -189,9 +176,6 @@ export function TrackingView({
       } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
         e.preventDefault();
         setSelectedIndex((prev) => Math.min(serverOrders.length - 1, prev + 1));
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        setViewType('chat');
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -230,20 +214,18 @@ export function TrackingView({
           nombre_plantilla: 'WIN - Seguimiento de VT',
           emisor: 'HSM_META',
           estado: selectedRow.estado_wsp || 'SENT',
-          texto: `Hola *${selectedRow.cliente || 'Cliente'}*, te informamos sobre la Confirmación de Visita Técnica para tu orden *#${selectedRow.orden_id}* (${selectedRow.producto || selectedRow.servicio_tipo || 'Servicio WIN'}).\n\n📍 *Dirección:* ${selectedRow.direccion_cliente || selectedRow.distrito || '-'}\n👷 *Cuadrilla:* ${selectedRow.cuadrilla_completa || selectedRow.cuadrilla || '-'} | [Ver Tracking en Vivo,${linkTrk}] | [Reprogramar Visita]`,
+          texto: `Hola *${selectedRow.cliente || 'Cliente'}*, te informamos sobre la Confirmación de Visita Técnica (${selectedRow.producto || selectedRow.servicio_tipo || 'Servicio WIN'}).\n\n📍 *Dirección:* ${selectedRow.direccion_cliente || selectedRow.distrito || '-'}\n👷 *Cuadrilla:* ${selectedRow.cuadrilla_completa || selectedRow.cuadrilla || '-'} | [Ver Tracking en Vivo,${linkTrk}] | [Reprogramar Visita]`,
         },
       ];
     }
 
-    return [...rawList]
-      .slice(-chatLimit)
-      .sort((a, b) => {
-        const tA = new Date(a.fecha_utc || a.fecha || a.timestamp || 0).getTime() || 0;
-        const tB = new Date(b.fecha_utc || b.fecha || b.timestamp || 0).getTime() || 0;
-        if (tA !== tB) return tA - tB;
-        return Number(a.orden || 0) - Number(b.orden || 0);
-      });
-  }, [selectedRow, liveMessages, chatLimit]);
+    return [...rawList].sort((a, b) => {
+      const tA = new Date(a.fecha_utc || a.fecha || a.timestamp || 0).getTime() || 0;
+      const tB = new Date(b.fecha_utc || b.fecha || b.timestamp || 0).getTime() || 0;
+      if (tA !== tB) return tA - tB;
+      return Number(a.orden || 0) - Number(b.orden || 0);
+    });
+  }, [selectedRow, liveMessages]);
 
   const activeTurno =
     chatMeta?.quien_tiene_la_palabra ||
@@ -257,24 +239,60 @@ export function TrackingView({
           .toLowerCase()
           .includes('cli')
         ? 'CLIENTE'
-        : 'ASESOR/EMPRESA'
-      : 'SIN MENSAJES');
+        : 'ASESOR'
+      : 'BOT');
 
-  const activeSla = chatMeta?.semaforo_sla || selectedRow?.semaforo_sla || null;
+  const activeSla = chatMeta?.semaforo_sla || selectedRow?.semaforo_sla || 'VERDE';
   const activeEstadoChat = chatMeta?.estado_chat || selectedRow?.estado_chat || null;
 
-  const getSlaBadgeStyle = (slaRaw?: string | null) => {
-    const s = String(slaRaw || '').toUpperCase();
-    if (s.includes('ROJO') || s.includes('CRIT') || s.includes('VENC')) {
-      return 'bg-rose-500/20 text-rose-300 border-rose-500/40';
+  // Ícono circular de semáforo (sin texto ROJO/AMARILLO/VERDE)
+  const renderSlaTrafficDot = (slaRaw?: string | null) => {
+    const s = String(slaRaw || 'VERDE').toUpperCase();
+    const isRed = s.includes('ROJO') || s.includes('CRIT') || s.includes('VENC');
+    const isYellow = s.includes('AMAR') || s.includes('ALERT');
+
+    const dotCls = isRed
+      ? 'bg-rose-500 shadow-[0_0_8px_#f43f5e] ring-rose-500/30'
+      : isYellow
+      ? 'bg-amber-400 shadow-[0_0_8px_#fbbf24] ring-amber-400/30'
+      : 'bg-emerald-400 shadow-[0_0_8px_#34d399] ring-emerald-400/30';
+
+    return (
+      <span
+        title={`Semáforo SLA: ${s}`}
+        className={`inline-block w-2.5 h-2.5 rounded-full ring-2 shrink-0 ${dotCls}`}
+      />
+    );
+  };
+
+  // Etiqueta visual del último que escribió (Cliente, Asesor o Bot)
+  const renderLastWriterBadge = (turnoRaw?: string | null) => {
+    const t = String(turnoRaw || 'BOT').toUpperCase();
+    const isCli = t.includes('CLI');
+    const isBot = t.includes('BOT') || t.includes('HSM') || t.includes('SIST');
+
+    if (isCli) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[9.5px] font-extrabold uppercase">
+          <User size={10} />
+          <span>CLIENTE</span>
+        </span>
+      );
     }
-    if (s.includes('AMAR') || s.includes('ALERT')) {
-      return 'bg-amber-500/20 text-amber-300 border-amber-500/40';
+    if (isBot) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[9.5px] font-extrabold uppercase">
+          <Bot size={10} />
+          <span>BOT</span>
+        </span>
+      );
     }
-    if (s.includes('VERD') || s.includes('OK') || s.includes('TIEMPO')) {
-      return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40';
-    }
-    return 'bg-slate-800 text-slate-300 border-slate-700';
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-orange-500/20 text-orange-300 border border-orange-500/30 text-[9.5px] font-extrabold uppercase">
+        <Headset size={10} />
+        <span>{t}</span>
+      </span>
+    );
   };
 
   const renderFormattedChatMessage = (rawText: string) => {
@@ -328,17 +346,16 @@ export function TrackingView({
     );
   };
 
-  const copyOtToClipboard = (otId: number | string) => {
-    navigator.clipboard.writeText(String(otId));
-    setCopiedOt(true);
-    setTimeout(() => setCopiedOt(false), 1500);
+  const copyToClipboard = (val: string) => {
+    navigator.clipboard.writeText(val);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 1500);
   };
 
   return (
     <div className="grid grid-cols-12 gap-4 h-[calc(100vh-140px)] min-h-[640px]">
-      {/* PANEL IZQUIERDO: BANDEJA PAGINADA DE CONVERSACIONES (NAVEGACIÓN CÓMODA Y RÁPIDA) */}
+      {/* PANEL IZQUIERDO: BANDEJA DE CONVERSACIONES CONECTADA AL FILTRO GLOBAL SUPERIOR */}
       <div className="col-span-4 bg-[#111827]/95 border border-gray-800 rounded-xl flex flex-col overflow-hidden shadow-xl">
-        {/* Cabecera + Buscador Global + Filtros */}
         <div className="p-3 border-b border-gray-800 space-y-2.5">
           <div className="flex items-center justify-between">
             <h3 className="font-bold text-sm text-white flex items-center gap-2">
@@ -346,110 +363,114 @@ export function TrackingView({
               <span>Bandeja Mantra / WhatsApp</span>
               {loadingPage && <RefreshCw size={12} className="text-[#FF6B00] animate-spin" />}
             </h3>
-            <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-[#FF6B00]/15 text-[#FF6B00] border border-[#FF6B00]/30">
-              {totalRecords.toLocaleString('es-PE')} casos
-            </span>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setSoloConChat(!soloConChat)}
+                className={`px-2 py-0.5 rounded-md border text-[10px] font-bold transition ${
+                  soloConChat
+                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                    : 'bg-[#090D16] text-gray-400 border-gray-800 hover:text-gray-200'
+                }`}
+                title="Alternar entre órdenes con chat en Mantra o todas las órdenes"
+              >
+                {soloConChat ? '💬 Con Chat' : '📋 Todas'}
+              </button>
+              <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-[#FF6B00]/15 text-[#FF6B00] border border-[#FF6B00]/30">
+                {totalRecords.toLocaleString('es-PE')} casos
+              </span>
+            </div>
           </div>
 
-          <div className="flex items-center bg-[#090D16] border border-gray-700/80 rounded-lg px-2.5 py-1.5 focus-within:border-[#FF6B00]">
-            <Search size={13} className="text-gray-400 mr-2 shrink-0" />
-            <input
-              type="text"
-              placeholder="Buscar teléfono, DNI, orden, ticket, cliente..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="bg-transparent text-xs text-gray-200 focus:outline-none w-full"
-            />
+          {/* Botoncitos rápidos para filtrar por quién escribió último */}
+          <div className="grid grid-cols-4 gap-1 bg-[#090D16] p-1 rounded-lg border border-gray-800 text-[10px]">
+            {[
+              { id: 'Todos', label: 'Todos' },
+              { id: 'CLIENTE', label: '👤 Cliente' },
+              { id: 'ASESOR', label: '🎧 Asesor' },
+              { id: 'BOT', label: '🤖 Bot' },
+            ].map((btn) => (
+              <button
+                key={btn.id}
+                onClick={() => setTurnoFilter(btn.id)}
+                className={`py-1 px-1.5 rounded-md font-bold transition truncate ${
+                  turnoFilter === btn.id
+                    ? 'bg-[#FF6B00] text-white shadow'
+                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
+                }`}
+              >
+                {btn.label}
+              </button>
+            ))}
           </div>
 
-          {/* Botones rápidos de alcance: Con Chat vs Todos + Histórico BD */}
-          <div className="grid grid-cols-2 gap-1.5 text-[10px]">
-            <button
-              onClick={() => setSoloConChat(!soloConChat)}
-              className={`py-1.5 px-2 rounded-lg font-bold border transition flex items-center justify-center gap-1 ${
-                soloConChat
-                  ? 'bg-[#FF6B00]/20 text-[#FF6B00] border-[#FF6B00]/40'
-                  : 'bg-[#090D16] text-gray-400 border-gray-800 hover:text-gray-200'
-              }`}
-            >
-              <span>{soloConChat ? '💬 Solo con Chat Mantra' : '📋 Todas las Órdenes'}</span>
-            </button>
-
-            <button
-              onClick={() => setIgnoreDates(!ignoreDates)}
-              className={`py-1.5 px-2 rounded-lg font-bold border transition flex items-center justify-center gap-1 ${
-                ignoreDates
-                  ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
-                  : 'bg-[#090D16] text-gray-400 border-gray-800 hover:text-gray-200'
-              }`}
-            >
-              <Globe size={11} />
-              <span>{ignoreDates ? 'Histórico Total BD' : 'Rango Fechas'}</span>
-            </button>
-          </div>
-
-          {/* Filtros de SLA y Turno de Palabra */}
-          <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+          {/* Selector de Semáforo SLA */}
+          <div className="grid grid-cols-1 text-[11px]">
             <select
               value={slaFilter}
               onChange={(e) => setSlaFilter(e.target.value)}
-              className="bg-[#090D16] border border-gray-800 rounded-lg px-2 py-1 text-gray-300 focus:outline-none focus:border-[#FF6B00]"
+              className="bg-[#090D16] border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-300 focus:outline-none focus:border-[#FF6B00]"
             >
-              <option value="Todos">SLA: Todos</option>
-              <option value="ROJO">🔴 SLA Rojo / Crítico</option>
-              <option value="AMARILLO">🟡 SLA Amarillo</option>
-              <option value="VERDE">🟢 SLA Verde</option>
-            </select>
-
-            <select
-              value={turnoFilter}
-              onChange={(e) => setTurnoFilter(e.target.value)}
-              className="bg-[#090D16] border border-gray-800 rounded-lg px-2 py-1 text-gray-300 focus:outline-none focus:border-[#FF6B00]"
-            >
-              <option value="Todos">Palabra: Todos</option>
-              <option value="CLIENTE">👤 Espera Cliente</option>
-              <option value="ASESOR">🎧 Turno Asesor</option>
+              <option value="Todos">Semáforo SLA: Todos</option>
+              <option value="ROJO">🔴 Crítico / Vencido</option>
+              <option value="AMARILLO">🟡 En Alerta</option>
+              <option value="VERDE">🟢 En Tiempo</option>
             </select>
           </div>
         </div>
 
-        {/* Lista de Conversaciones Scrolleable */}
+        {/* Lista de Conversaciones */}
         <div className="flex-1 overflow-y-auto divide-y divide-gray-800/60">
           {serverOrders.length > 0 ? (
             serverOrders.map((item, idx) => {
               const isSelected = selectedRow?.orden_id === item.orden_id;
               const stWsp = String(item.estado_wsp || 'NO ENVIADO').toUpperCase();
-              const itemSla = item.semaforo_sla;
-              const itemTurno = item.quien_tiene_la_palabra;
+              const docVal = item.numero_documento || '-';
+              const codSeguiVal = item.codi_segui_ot || item.ticket || item.CodiSegui || '-';
+              const lastWriter = item.quien_tiene_la_palabra || 'BOT';
 
               return (
                 <div
                   key={item.orden_id}
-                  onClick={() => setSelectedIndex(idx)}
+                  onClick={() => {
+                    const selection = window.getSelection()?.toString();
+                    if (selection && selection.length > 0) return;
+                    setSelectedIndex(idx);
+                  }}
                   className={`p-3 cursor-pointer transition ${
                     isSelected
                       ? 'bg-[#FF6B00]/15 border-l-4 border-l-[#FF6B00]'
                       : 'hover:bg-gray-800/40'
                   }`}
                 >
-                  <div className="flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-extrabold text-[#FF6B00]">#{item.orden_id}</span>
-                      <span className="text-[10px] text-gray-500 font-mono">
-                        {item.ticket || item.codi_segui_ot || ''}
+                  <div className="flex items-center justify-between text-xs gap-2">
+                    {/* Documento y CodiSegui en lugar de OT */}
+                    <div className="flex items-center gap-1.5 truncate">
+                      <span className="font-extrabold text-[#FF6B00]">Doc: {docVal}</span>
+                      <span className="text-gray-600">•</span>
+                      <span className="text-[10.5px] font-bold text-cyan-300 font-mono">
+                        Cód: {codSeguiVal}
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-1">
-                      {itemSla && (
-                        <span
-                          className={`px-1.5 py-0.5 rounded border text-[9px] font-bold uppercase ${getSlaBadgeStyle(
-                            itemSla
-                          )}`}
-                        >
-                          {itemSla}
-                        </span>
-                      )}
+                    {/* Ícono de Semáforo + Etiqueta del último que escribió */}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {renderSlaTrafficDot(item.semaforo_sla)}
+                      {renderLastWriterBadge(lastWriter)}
+                    </div>
+                  </div>
+
+                  <div className="font-bold text-white text-xs mt-1.5 truncate">
+                    {item.cliente || '-'}
+                  </div>
+
+                  <div className="flex items-center justify-between text-[10px] text-gray-400 mt-1">
+                    <span className="flex items-center gap-1 text-emerald-400 font-semibold">
+                      <Phone size={10} />
+                      {item.mantra_phone || item.telefono || 'Sin teléfono'}
+                    </span>
+
+                    <div className="flex items-center gap-1.5">
                       {item.ingreso_tracking === 'SI' && (
                         <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-bold">
                           TRK
@@ -472,31 +493,17 @@ export function TrackingView({
                       </span>
                     </div>
                   </div>
-
-                  <div className="font-bold text-white text-xs mt-1 truncate">
-                    {item.cliente || '-'}
-                  </div>
-
-                  <div className="flex items-center justify-between text-[10px] text-gray-400 mt-1">
-                    <span className="flex items-center gap-1 text-emerald-400 font-semibold">
-                      <Phone size={10} />
-                      {item.mantra_phone || item.telefono || 'Sin teléfono'}
-                    </span>
-                    <span className="truncate max-w-[130px]">
-                      {itemTurno ? `Turno: ${itemTurno}` : item.distrito || '-'}
-                    </span>
-                  </div>
                 </div>
               );
             })
           ) : (
             <div className="p-8 text-center text-xs text-gray-500">
-              No se encontraron conversaciones. Desactiva <strong>"Solo con Chat Mantra"</strong> o activa <strong>"Histórico Total BD"</strong>.
+              No se encontraron conversaciones con los filtros actuales. Cambia el botón <strong>"💬 Con Chat"</strong> a <strong>"📋 Todas"</strong> o activa <strong>"Todo el Histórico"</strong> arriba.
             </div>
           )}
         </div>
 
-        {/* Pie de Paginación de la Bandeja Izquierda (50 en 50) */}
+        {/* Paginación de 50 en 50 */}
         <div className="p-2.5 bg-[#090D16] border-t border-gray-800 flex items-center justify-between text-[11px] text-gray-300">
           <button
             onClick={() => setPage((p) => Math.max(1, p - 1))}
@@ -521,26 +528,19 @@ export function TrackingView({
         </div>
       </div>
 
-      {/* PANEL DERECHO: FICHA TÉCNICA RESUMIDA + VISOR CONVERSACIONAL WHATSAPP MANTRA */}
+      {/* PANEL DERECHO: FICHA TÉCNICA + VISOR CONVERSACIONAL COMPLETO */}
       <div className="col-span-8 bg-[#0B101B] border border-gray-800 rounded-xl flex flex-col overflow-hidden shadow-2xl">
         {selectedRow ? (
           <>
-            {/* Cabecera del Caso Seleccionado */}
+            {/* Cabecera Limpia con Documento, CodiSegui, Semáforo y Último Emisor */}
             <div className="p-3.5 bg-[#111827] border-b border-gray-800 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div className="relative">
                   <div className="w-10 h-10 rounded-full bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center text-emerald-400 font-extrabold text-sm">
                     {String(selectedRow.cliente || 'C').charAt(0)}
                   </div>
-                  <span className="absolute -bottom-0.5 -right-0.5 flex h-3 w-3">
-                    {loadingChat && (
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    )}
-                    <span
-                      className={`relative inline-flex rounded-full h-3 w-3 ${
-                        loadingChat ? 'bg-amber-400' : 'bg-emerald-500'
-                      }`}
-                    ></span>
+                  <span className="absolute -bottom-0.5 -right-0.5 flex items-center justify-center">
+                    {renderSlaTrafficDot(activeSla)}
                   </span>
                 </div>
 
@@ -549,57 +549,66 @@ export function TrackingView({
                     <h4 className="font-extrabold text-sm text-white uppercase">
                       {selectedRow.cliente || 'Cliente WIN'}
                     </h4>
-                    <button
-                      onClick={() => copyOtToClipboard(selectedRow.orden_id)}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/40 font-extrabold text-[11px] hover:bg-[#FF6B00]/30 transition"
-                      title="Copiar N° de Orden"
-                    >
-                      <span>OT #{selectedRow.orden_id}</span>
-                      {copiedOt ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
-                    </button>
 
-                    {activeSla && (
-                      <span
-                        className={`px-2 py-0.5 rounded border text-[10px] font-bold uppercase ${getSlaBadgeStyle(
-                          activeSla
-                        )}`}
-                      >
-                        SLA: {activeSla}
+                    {/* Último que escribió */}
+                    {renderLastWriterBadge(activeTurno)}
+
+                    {activeEstadoChat && (
+                      <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 text-[10px] font-bold uppercase">
+                        {activeEstadoChat}
                       </span>
                     )}
 
-                    {activeEstadoChat && (
-                      <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[10px] font-bold uppercase">
-                        {activeEstadoChat}
+                    {loadingChat ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/30 text-[10px] font-bold">
+                        <RefreshCw size={10} className="animate-spin" /> Conectando API...
+                      </span>
+                    ) : dataSource === 'live_api' ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> Mantra Live
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-medium">
+                        Histórico BD
                       </span>
                     )}
                   </div>
 
-                  <div className="text-[11px] text-gray-400 flex flex-wrap items-center gap-x-2.5 mt-0.5">
+                  <div className="text-[11px] text-gray-400 flex flex-wrap items-center gap-x-2.5 mt-1">
                     <span>
                       Móvil: <strong className="text-emerald-400">{selectedRow.mantra_phone || selectedRow.telefono || '-'}</strong>
                     </span>
                     <span>•</span>
                     <span>
-                      DNI: <strong className="text-gray-200">{selectedRow.numero_documento || '-'}</strong>
+                      Doc: <strong className="text-amber-300">{selectedRow.numero_documento || '-'}</strong>
                     </span>
                     <span>•</span>
-                    <span>
-                      Palabra: <strong className="text-amber-300">{activeTurno}</strong>
-                    </span>
-                    <span>•</span>
-                    <span className="text-cyan-300 font-semibold">
-                      {dataSource === 'live_api' ? '⚡ API Mantra En Vivo' : '🗄️ BD historial_chats_mantra'}
-                    </span>
+                    <button
+                      onClick={() =>
+                        copyToClipboard(
+                          String(
+                            selectedRow.codi_segui_ot ||
+                              selectedRow.ticket ||
+                              selectedRow.numero_documento ||
+                              selectedRow.orden_id
+                          )
+                        )
+                      }
+                      className="inline-flex items-center gap-1 text-cyan-300 hover:text-cyan-200 font-bold transition"
+                      title="Copiar Cód.Segui"
+                    >
+                      <span>Cód.Segui: {selectedRow.codi_segui_ot || selectedRow.ticket || '-'}</span>
+                      {copiedCode ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
+                    </button>
                   </div>
                 </div>
               </div>
 
-              {/* Controles Superiores del Visor */}
+              {/* Controles Superiores Limpios (Ficha Técnica y Detalle) */}
               <div className="flex items-center gap-2 text-xs">
                 <button
                   onClick={() => setShowTechCard(!showTechCard)}
-                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] font-bold transition ${
+                  className={`flex items-center gap-1 px-3 py-1.5 rounded-lg border text-[11px] font-bold transition ${
                     showTechCard
                       ? 'bg-slate-800 text-white border-slate-600'
                       : 'bg-[#090D16] text-gray-400 border-gray-800 hover:text-white'
@@ -610,60 +619,18 @@ export function TrackingView({
                   {showTechCard ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                 </button>
 
-                <div className="flex items-center bg-[#090D16] p-0.5 rounded-lg border border-gray-800 text-[10px]">
-                  <button
-                    onClick={() => setChatLimit(15)}
-                    className={`px-2 py-1 rounded font-bold transition ${
-                      chatLimit === 15 ? 'bg-[#FF6B00] text-white' : 'text-gray-400 hover:text-white'
-                    }`}
-                  >
-                    15 msgs
-                  </button>
-                  <button
-                    onClick={() => setChatLimit(30)}
-                    className={`px-2 py-1 rounded font-bold transition ${
-                      chatLimit === 30 ? 'bg-[#FF6B00] text-white' : 'text-gray-400 hover:text-white'
-                    }`}
-                  >
-                    30 msgs
-                  </button>
-                </div>
-
-                <div className="flex items-center bg-[#090D16] p-0.5 rounded-lg border border-gray-800 text-[10px]">
-                  <button
-                    onClick={() => setViewType('chat')}
-                    className={`flex items-center gap-1 px-2 py-1 rounded font-bold transition ${
-                      viewType === 'chat' ? 'bg-emerald-600 text-white' : 'text-gray-400 hover:text-white'
-                    }`}
-                  >
-                    <MessageSquare size={11} />
-                    <span>Chat</span>
-                  </button>
-                  <button
-                    onClick={() => setViewType('json')}
-                    className={`flex items-center gap-1 px-2 py-1 rounded font-bold transition ${
-                      viewType === 'json' ? 'bg-emerald-600 text-white' : 'text-gray-400 hover:text-white'
-                    }`}
-                  >
-                    <Code2 size={11} />
-                    <span>JSON</span>
-                  </button>
-                </div>
-
                 <button
                   onClick={() => onSelectOrder(selectedRow)}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#FF6B00] hover:bg-[#e66000] text-white font-bold text-[11px] transition shadow-md shadow-orange-500/20"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#FF6B00] hover:bg-[#e66000] text-white font-bold text-[11px] transition shadow-md shadow-orange-500/20"
                 >
-                  <MapPin size={12} />
-                  <span>Mapa / 360°</span>
+                  <span>Detalle</span>
                 </button>
               </div>
             </div>
 
-            {/* FICHA TÉCNICA COMPACTA DE 4 COLUMNAS (COLAPSABLE CON UN CLIC O TECLA F) */}
+            {/* FICHA TÉCNICA DE 4 COLUMNAS */}
             {showTechCard && (
               <div className="p-3 bg-[#090D16]/90 border-b border-gray-800 grid grid-cols-4 gap-2.5 text-xs">
-                {/* 1. Cliente & Contacto */}
                 <div className="bg-[#111827] border border-gray-800/90 rounded-xl p-2.5 space-y-1">
                   <div className="flex items-center justify-between text-[10px] font-extrabold text-blue-400 uppercase">
                     <span className="flex items-center gap-1"><User size={12} /> Cliente</span>
@@ -674,11 +641,10 @@ export function TrackingView({
                   </div>
                   <div className="text-[10px] text-gray-400 flex items-center justify-between pt-1 border-t border-gray-800/80">
                     <span>Doc: <strong className="text-gray-200">{selectedRow.numero_documento || '-'}</strong></span>
-                    <span>Cód: <strong className="text-cyan-300">{selectedRow.codi_segui_clien || '-'}</strong></span>
+                    <span>Cód: <strong className="text-cyan-300">{selectedRow.codi_segui_ot || selectedRow.ticket || '-'}</strong></span>
                   </div>
                 </div>
 
-                {/* 2. Dirección & Zona */}
                 <div className="bg-[#111827] border border-gray-800/90 rounded-xl p-2.5 space-y-1">
                   <div className="flex items-center justify-between text-[10px] font-extrabold text-rose-400 uppercase">
                     <span className="flex items-center gap-1"><MapPin size={12} /> Ubicación</span>
@@ -692,7 +658,6 @@ export function TrackingView({
                   </div>
                 </div>
 
-                {/* 3. Cuadrilla Asignada */}
                 <div className="bg-[#111827] border border-gray-800/90 rounded-xl p-2.5 space-y-1">
                   <div className="flex items-center justify-between text-[10px] font-extrabold text-indigo-400 uppercase">
                     <span className="flex items-center gap-1"><Wrench size={12} /> Cuadrilla</span>
@@ -702,12 +667,11 @@ export function TrackingView({
                     {selectedRow.cuadrilla_completa || selectedRow.cuadrilla || 'Sin cuadrilla asignada'}
                   </div>
                   <div className="text-[10px] text-gray-400 pt-1 border-t border-gray-800/80 flex justify-between">
-                    <span>OT: <strong className="text-emerald-300">{selectedRow.estado_ot || '-'}</strong></span>
+                    <span>Estado: <strong className="text-emerald-300">{selectedRow.estado_ot || '-'}</strong></span>
                     <span>{selectedRow.fecha_solicitud_fmt || '-'}</span>
                   </div>
                 </div>
 
-                {/* 4. Servicio & Detalles */}
                 <div className="bg-[#111827] border border-gray-800/90 rounded-xl p-2.5 space-y-1">
                   <div className="flex items-center justify-between text-[10px] font-extrabold text-emerald-400 uppercase">
                     <span className="flex items-center gap-1"><Layers size={12} /> Servicio</span>
@@ -723,29 +687,9 @@ export function TrackingView({
               </div>
             )}
 
-            {/* LIENZO DE CONVERSACIÓN WHATSAPP / MANTRA */}
+            {/* LIENZO DE CHAT COMPLETO (SIN LÍMITE DE MENSAJES) */}
             <div className="flex-1 overflow-y-auto p-5 space-y-4 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:16px_16px]">
-              {viewType === 'json' ? (
-                <div className="bg-[#090D16] border border-gray-800 rounded-xl p-4 overflow-x-auto">
-                  <pre className="font-mono text-xs text-emerald-400 leading-relaxed">
-                    {JSON.stringify(
-                      {
-                        orden_id: selectedRow.orden_id,
-                        ticket: selectedRow.ticket,
-                        cliente: selectedRow.cliente,
-                        phone: selectedRow.mantra_phone || selectedRow.telefono,
-                        estado_chat: activeEstadoChat,
-                        semaforo_sla: activeSla,
-                        quien_tiene_la_palabra: activeTurno,
-                        source: dataSource,
-                        messages: parsedChatMessages,
-                      },
-                      null,
-                      2
-                    )}
-                  </pre>
-                </div>
-              ) : parsedChatMessages.length > 0 ? (
+              {parsedChatMessages.length > 0 ? (
                 parsedChatMessages.map((msg, idx) => {
                   const textContent = msg.texto || msg.mensaje || msg.body || msg.contenido || '';
                   const senderRaw = String(msg.emisor || msg.rol || msg.direction || '').toLowerCase();
@@ -764,7 +708,6 @@ export function TrackingView({
 
                   const timeLabel = msg.fecha_utc || msg.fecha || msg.timestamp || '';
 
-                  // 1. Burbuja Cliente (Izquierda)
                   if (isCliente) {
                     return (
                       <div key={idx} className="flex flex-col items-start">
@@ -782,7 +725,6 @@ export function TrackingView({
                     );
                   }
 
-                  // 2. Burbuja Plantilla Oficial Meta HSM (Derecha)
                   if (isTemplate) {
                     return (
                       <div key={idx} className="flex flex-col items-end">
@@ -812,7 +754,6 @@ export function TrackingView({
                     );
                   }
 
-                  // 3. Burbuja Asesor WIN (Derecha)
                   return (
                     <div key={idx} className="flex flex-col items-end">
                       <div className="max-w-[78%] rounded-2xl rounded-tr-sm p-3.5 bg-gradient-to-br from-orange-950/70 to-slate-900 border border-orange-500/40 shadow-lg space-y-2">
@@ -831,7 +772,7 @@ export function TrackingView({
               ) : (
                 <div className="h-full flex flex-col items-center justify-center text-center py-12 text-gray-400">
                   <MessageSquare size={32} className="text-gray-600 mb-2" />
-                  <p className="text-sm font-bold text-gray-300">Sin mensajes en historial_chats_mantra para esta orden</p>
+                  <p className="text-sm font-bold text-gray-300">Sin mensajes en historial_chats_mantra para este caso</p>
                   <p className="text-xs text-gray-500 mt-1">
                     Estado WSP: {selectedRow.estado_wsp || 'NO ENVIADO'} • Ingreso Tracking: {selectedRow.ingreso_tracking || 'NO'}
                   </p>
@@ -839,28 +780,25 @@ export function TrackingView({
               )}
             </div>
 
-            {/* Pie del Visor con Atajos Rápidos */}
+            {/* Pie del Visor */}
             <div className="px-4 py-2 bg-[#111827] border-t border-gray-800 flex flex-wrap items-center justify-between text-[11px] text-gray-400">
               <div className="flex items-center gap-3">
                 <span>
                   <kbd className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 font-mono">↑</kbd>{' '}
-                  <kbd className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 font-mono">↓</kbd> Recorrer bandeja
+                  <kbd className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 font-mono">↓</kbd> Recorrer casos
                 </span>
                 <span>
                   <kbd className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 font-mono">F</kbd> Ocultar/Ver Ficha Técnica
                 </span>
-                <span>
-                  <kbd className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 font-mono">V</kbd> Vista Chat/JSON
-                </span>
               </div>
               <div>
-                Mostrando {parsedChatMessages.length} mensajes (Límite: {chatLimit})
+                Historial completo ({parsedChatMessages.length} mensajes)
               </div>
             </div>
           </>
         ) : (
           <div className="h-full flex items-center justify-center text-sm text-gray-500">
-            Selecciona una conversación de la bandeja izquierda para inspeccionar el hilo y su ficha técnica.
+            Selecciona una conversación de la bandeja izquierda para inspeccionar el hilo completo.
           </div>
         )}
       </div>

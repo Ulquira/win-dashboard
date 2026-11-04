@@ -12,6 +12,7 @@ import { ExecutiveView } from './views/ExecutiveView';
 import { OperationalView } from './views/OperationalView';
 import { TrackingView } from './views/TrackingView';
 import { OrdersView } from './views/OrdersView';
+import { apiFetch, API_BASE_URL } from './config/api';
 
 export default function App() {
   const [activeNav, setActiveNav] = useState<NavSection>('Dashboard');
@@ -20,11 +21,16 @@ export default function App() {
   const todayStr = new Date().toLocaleDateString('en-CA');
   const [startDate, setStartDate] = useState<string>(todayStr);
   const [endDate, setEndDate] = useState<string>(todayStr);
-  const [service, setService] = useState<string>('Todos los servicios');
-  const [zone, setZone] = useState<string>('Todas las zonas');
+  const [selectedServices, setSelectedServices] = useState<string[]>([]);
+  const [globalSearch, setGlobalSearch] = useState<string>('');
+  const [ignoreDates, setIgnoreDates] = useState<boolean>(false);
+  const service = selectedServices.length > 0 ? selectedServices.join(',') : 'Todos los servicios';
+  const zone = 'Todas las zonas';
 
   const [serviceOptions, setServiceOptions] = useState<string[]>([]);
   const [zoneOptions, setZoneOptions] = useState<string[]>([]);
+  const [sectorOptions, setSectorOptions] = useState<string[]>([]);
+  const [partnerOptions, setPartnerOptions] = useState<string[]>([]);
 
   const [kpis, setKpis] = useState<KpiData | null>(null);
   const [evolution, setEvolution] = useState<EvolutionPoint[]>([]);
@@ -57,8 +63,7 @@ export default function App() {
       refresh: forceRefresh ? 'true' : 'false',
     });
 
-    fetch(`http://localhost:3001/api/dashboard?${params.toString()}`)
-      .then((res) => res.json())
+    apiFetch(`/api/dashboard?${params.toString()}`)
       .then((data) => {
         if (data.ok) {
           setKpis(data.kpis);
@@ -72,12 +77,12 @@ export default function App() {
           setDbOnline(true);
         } else {
           setDbOnline(false);
-          setErrorMsg(data.error || 'Error desconocido en la consulta');
+          setErrorMsg(data.error || 'Error desconocido en la respuesta de la API');
         }
       })
       .catch((err) => {
         setDbOnline(false);
-        setErrorMsg(`No se pudo conectar a localhost:3001 (${err.message})`);
+        setErrorMsg(`No se pudo conectar a la API ${API_BASE_URL} (${err.message})`);
       })
       .finally(() => setLoading(false));
   };
@@ -85,15 +90,16 @@ export default function App() {
   useEffect(() => {
     fetchDashboardData();
 
-    fetch('http://localhost:3001/api/filters')
-      .then((res) => res.json())
+    apiFetch('/api/filters')
       .then((data) => {
         if (data.ok) {
           setServiceOptions(data.servicios || []);
           setZoneOptions(data.zonas || []);
+          setSectorOptions(data.sectores || data.zonas || []);
+          setPartnerOptions(data.partners || []);
         }
       })
-      .catch((err) => console.error('Error cargando filtros:', err));
+      .catch((err) => console.error('Error cargando filtros desde API:', err));
   }, []);
 
   const calc: CalculatedMetrics = useMemo(() => {
@@ -191,14 +197,15 @@ export default function App() {
           dbOnline={dbOnline}
           startDate={startDate}
           endDate={endDate}
-          service={service}
-          zone={zone}
+          selectedServices={selectedServices}
           serviceOptions={serviceOptions}
-          zoneOptions={zoneOptions}
+          globalSearch={globalSearch}
+          ignoreDates={ignoreDates}
           setStartDate={setStartDate}
           setEndDate={setEndDate}
-          setService={setService}
-          setZone={setZone}
+          setSelectedServices={setSelectedServices}
+          setGlobalSearch={setGlobalSearch}
+          setIgnoreDates={setIgnoreDates}
           onConsult={() => fetchDashboardData(startDate, endDate, service, zone, true)}
         />
 
@@ -254,7 +261,11 @@ export default function App() {
             startDate={startDate}
             endDate={endDate}
             service={service}
-            zone={zone}
+            globalSearch={globalSearch}
+            ignoreDates={ignoreDates}
+            serviceOptions={serviceOptions}
+            sectorOptions={sectorOptions}
+            partnerOptions={partnerOptions}
             onSelectOrder={setSelectedOrder}
           />
         )}
@@ -264,7 +275,8 @@ export default function App() {
             startDate={startDate}
             endDate={endDate}
             service={service}
-            zone={zone}
+            globalSearch={globalSearch}
+            ignoreDates={ignoreDates}
             onSelectOrder={setSelectedOrder}
           />
         )}

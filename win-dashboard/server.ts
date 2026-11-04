@@ -4,8 +4,13 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import NodeCache from 'node-cache';
 import compression from 'compression';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(cors());
@@ -25,6 +30,18 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
 });
+
+// Variables de Capa Intermedia / API en Azure App Service
+const CAPA_INTERMEDIA_URL = (
+  process.env.CAPA_INTERMEDIA_URL ||
+  process.env.MANTRA_API_URL ||
+  'https://webwin-api-service-eus.azurewebsites.net'
+).replace(/\/+$/, '');
+
+const SECRET_API_KEY =
+  process.env.SECRET_API_KEY ||
+  process.env.MANTRA_API_TOKEN ||
+  'LLAVE_SECRETA_DEL_TERCERO_123';
 
 // Lista de distritos catalogados como Alto Valor (insensible a mayúsculas/minúsculas)
 const DISTRITOS_ALTO_VALOR = [
@@ -71,6 +88,36 @@ async function loadTipoServicioCache() {
 
 loadTipoServicioCache();
 
+/**
+ * Helper para resolver lista de productos a partir del filtro de servicio (soporta multiselección separada por comas)
+ */
+function resolveProductosFromServiceFilter(serviceParam: string): {
+  srvList: string[];
+  productosDelTipo: string[];
+} {
+  const srvList =
+    serviceParam &&
+    serviceParam !== 'Todos' &&
+    serviceParam !== 'Todos los servicios'
+      ? serviceParam
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+
+  const productosDelTipo: string[] = [];
+  if (srvList.length > 0) {
+    const srvUpperSet = new Set(srvList.map((s) => s.toUpperCase()));
+    servicioToTipoMap.forEach((tipoVal, prodKey) => {
+      if (srvUpperSet.has(tipoVal.toUpperCase())) {
+        productosDelTipo.push(prodKey);
+      }
+    });
+  }
+
+  return { srvList, productosDelTipo };
+}
+
 // 1. Endpoint de catálogos para filtros desplegables
 app.get('/api/filters', async (_req, res) => {
   try {
@@ -79,20 +126,28 @@ app.get('/api/filters', async (_req, res) => {
 
     if (tiposUnicosList.length === 0) await loadTipoServicioCache();
 
-    const [zonas]: any = await pool.query(`
-      SELECT DISTINCT sector_operativo AS zona
-      FROM vw_reporte_funnel_casos_360
-      WHERE fecha_solicitud_dia >= CURDATE() - INTERVAL 7 DAY
-        AND sector_operativo IS NOT NULL
-        AND sector_operativo != ''
-      ORDER BY sector_operativo
-    `);
+    const [zonas, partners]: any = await Promise.all([
+      pool.query(`
+        SELECT DISTINCT sector_operativo AS zona
+        FROM vw_reporte_funnel_casos_360
+        WHERE sector_operativo IS NOT NULL AND TRIM(sector_operativo) != ''
+        ORDER BY sector_operativo
+      `),
+      pool.query(`
+        SELECT DISTINCT COALESCE(NULLIF(TRIM(partner), ''), 'SIN PARTNER') AS partner
+        FROM vw_reporte_funnel_casos_360
+        WHERE partner IS NOT NULL AND TRIM(partner) != ''
+        ORDER BY partner
+      `),
+    ]);
 
     const todayStr = new Date().toLocaleDateString('en-CA');
     const payload = {
       ok: true,
       servicios: tiposUnicosList,
-      zonas: zonas.map((z: any) => z.zona),
+      zonas: (zonas?.[0] || []).map((z: any) => z.zona),
+      sectores: (zonas?.[0] || []).map((z: any) => z.zona),
+      partners: (partners?.[0] || []).map((p: any) => p.partner),
       dateRange: { minDate: todayStr, maxDate: todayStr },
     };
 
@@ -103,7 +158,7 @@ app.get('/api/filters', async (_req, res) => {
   }
 });
 
-// 2. Endpoint principal del Dashboard
+// 2. Endpoint principal del Dashboard (Ejecutivo + Operativo)
 app.get('/api/dashboard', async (req, res) => {
   const startTime = Date.now();
   const todayDefault = new Date().toLocaleDateString('en-CA');
@@ -125,6 +180,8 @@ app.get('/api/dashboard', async (req, res) => {
   }
 
   try {
+    if (tiposUnicosList.length === 0) await loadTipoServicioCache();
+
     // Calculamos siempre mínimo 7 días hacia atrás desde endDate para la gráfica evolutiva
     const endObj = new Date(`${endDate}T00:00:00`);
     const min7StartObj = new Date(endObj);
@@ -141,31 +198,39 @@ app.get('/api/dashboard', async (req, res) => {
     const encFilters: string[] = [];
     const encParams: any[] = [];
 
-    if (service && service !== 'Todos los servicios') {
-      const productosDelTipo: string[] = [];
-      servicioToTipoMap.forEach((tipoVal, prodKey) => {
-        if (tipoVal === service) productosDelTipo.push(prodKey);
-      });
+    const { srvList, productosDelTipo } = resolveProductosFromServiceFilter(service);
 
+    if (srvList.length > 0) {
       if (productosDelTipo.length > 0) {
-        const placeholders = productosDelTipo.map(() => '?').join(',');
-        extraFilters.push(`AND v.producto IN (${placeholders})`);
+        const prodPh = productosDelTipo.map(() => '?').join(',');
+        const srvPh = srvList.map(() => '?').join(',');
+
+        extraFilters.push(`AND v.producto IN (${prodPh})`);
         extraParams.push(...productosDelTipo);
 
-        reprogFilters.push(`AND (r.producto_servicio IN (${placeholders}) OR r.tipo_servicio = ?)`);
-        reprogParams.push(...productosDelTipo, service);
+        reprogFilters.push(
+          `AND (r.producto_servicio IN (${prodPh}) OR r.tipo_servicio IN (${srvPh}))`
+        );
+        reprogParams.push(...productosDelTipo, ...srvList);
 
-        encFilters.push(`AND (e.producto IN (${placeholders}) OR e.tipo_servicio = ?)`);
-        encParams.push(...productosDelTipo, service);
+        encFilters.push(
+          `AND (e.producto IN (${prodPh}) OR e.tipo_servicio IN (${srvPh}))`
+        );
+        encParams.push(...productosDelTipo, ...srvList);
       } else {
-        extraFilters.push(`AND v.producto = ?`);
-        extraParams.push(service);
+        const srvPh = srvList.map(() => '?').join(',');
+        extraFilters.push(`AND v.producto IN (${srvPh})`);
+        extraParams.push(...srvList);
 
-        reprogFilters.push(`AND (r.producto_servicio = ? OR r.tipo_servicio = ?)`);
-        reprogParams.push(service, service);
+        reprogFilters.push(
+          `AND (r.producto_servicio IN (${srvPh}) OR r.tipo_servicio IN (${srvPh}))`
+        );
+        reprogParams.push(...srvList, ...srvList);
 
-        encFilters.push(`AND (e.producto = ? OR e.tipo_servicio = ?)`);
-        encParams.push(service, service);
+        encFilters.push(
+          `AND (e.producto IN (${srvPh}) OR e.tipo_servicio IN (${srvPh}))`
+        );
+        encParams.push(...srvList, ...srvList);
       }
     }
 
@@ -184,9 +249,10 @@ app.get('/api/dashboard', async (req, res) => {
     const avListSql = DISTRITOS_ALTO_VALOR.map((d) => `'${d.trim().toUpperCase()}'`).join(',');
 
     // Consultas principales y desgloses operativos desde vw_reporte_funnel_casos_360
-    const [dailyResult, orderResult, estadoOtResult, sectorResult, productoResult]: any = await Promise.all([
-      pool.query(
-        `
+    const [dailyResult, orderResult, estadoOtResult, sectorResult, productoResult]: any =
+      await Promise.all([
+        pool.query(
+          `
         SELECT 
           DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
           DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m') AS fecha,
@@ -216,10 +282,10 @@ app.get('/api/dashboard', async (req, res) => {
         GROUP BY v.fecha_solicitud_dia
         ORDER BY v.fecha_solicitud_dia ASC
         `,
-        [chartStartDate, endDate, ...extraParams]
-      ),
-      pool.query(
-        `
+          [chartStartDate, endDate, ...extraParams]
+        ),
+        pool.query(
+          `
         SELECT 
           v.*,
           DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_solicitud_fmt,
@@ -248,11 +314,11 @@ app.get('/api/dashboard', async (req, res) => {
         ORDER BY v.orden_id DESC
         LIMIT 300
         `,
-        [startDate, endDate, ...extraParams]
-      ),
-      // Desglose por Estado OT (Para Vista Operativa)
-      pool.query(
-        `
+          [startDate, endDate, ...extraParams]
+        ),
+        // Desglose por Estado OT (Para Vista Operativa)
+        pool.query(
+          `
         SELECT 
           COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'Sin estado') AS estado_ot,
           COUNT(*) AS total,
@@ -265,11 +331,11 @@ app.get('/api/dashboard', async (req, res) => {
         GROUP BY COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'Sin estado')
         ORDER BY total DESC
         `,
-        [startDate, endDate, ...extraParams]
-      ),
-      // Desglose por Sector Operativo (Para Vista Operativa)
-      pool.query(
-        `
+          [startDate, endDate, ...extraParams]
+        ),
+        // Desglose por Sector Operativo (Para Vista Operativa)
+        pool.query(
+          `
         SELECT 
           COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR') AS sector_operativo,
           COUNT(*) AS total,
@@ -283,11 +349,11 @@ app.get('/api/dashboard', async (req, res) => {
         GROUP BY COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR')
         ORDER BY total DESC
         `,
-        [startDate, endDate, ...extraParams]
-      ),
-      // Desglose por Producto para agrupar en Tipo de Operación
-      pool.query(
-        `
+          [startDate, endDate, ...extraParams]
+        ),
+        // Desglose por Producto para agrupar en Tipo de Operación
+        pool.query(
+          `
         SELECT 
           UPPER(TRIM(COALESCE(v.producto, ''))) AS producto,
           COUNT(*) AS total,
@@ -297,9 +363,9 @@ app.get('/api/dashboard', async (req, res) => {
         ${filterSql}
         GROUP BY UPPER(TRIM(COALESCE(v.producto, '')))
         `,
-        [startDate, endDate, ...extraParams]
-      ),
-    ]);
+          [startDate, endDate, ...extraParams]
+        ),
+      ]);
 
     // 3. Consulta a vw_reprogramaciones_detalle
     let totalReprogReal = 0;
@@ -324,7 +390,6 @@ app.get('/api/dashboard', async (req, res) => {
     let partnersRanking: any[] = [];
 
     try {
-      // Primero buscamos en el rango exacto seleccionado (startDate a endDate)
       let [encRows]: any = await pool.query(
         `
         SELECT 
@@ -352,7 +417,7 @@ app.get('/api/dashboard', async (req, res) => {
       );
       csatAvgGlobal = totalEncuestasReal > 0 ? sumPonderada / totalEncuestasReal : 0;
 
-      // Si hoy todavía hay 0 encuestas, cargamos el Ranking de Partners de los últimos 7 días (chartStartDate a endDate)
+      // Si hoy todavía hay 0 encuestas, cargamos el Ranking de Partners de los últimos 7 días
       if ((!encRows || encRows.length === 0) && chartStartDate < startDate) {
         const [fallbackRows]: any = await pool.query(
           `
@@ -383,15 +448,12 @@ app.get('/api/dashboard', async (req, res) => {
           csat: `${csatPct.toFixed(1).replace('.', ',')}%`,
         };
       });
-
-      console.log(`📊 Ranking Partners CSAT cargado (${partnersRanking.length} partners)`);
     } catch (errEnc: any) {
       console.warn('⚠️ Error consultando vw_reporte_encuestas_enriquecido:', errEnc.message);
     }
 
     const dailyRows: any[] = dailyResult[0] || [];
 
-    // Sumamos para los KPIs únicamente los días dentro del rango exacto seleccionado (startDate..endDate)
     const kpiRowsInRange = dailyRows.filter(
       (r) => r.raw_date >= startDate && r.raw_date <= endDate
     );
@@ -449,7 +511,6 @@ app.get('/api/dashboard', async (req, res) => {
         servicioToTipoMap.get(String(o.producto || '').trim().toUpperCase()) || o.producto || '-',
     }));
 
-    // Agrupamos productoResult por su Tipo de Operación (INSTA - LIMA, AVER - LIMA, POSTVENTA, etc.)
     const tipoOpMap = new Map<string, { total: number; enviados: number }>();
     for (const r of productoResult[0] || []) {
       const prodKey = String(r.producto || '').trim().toUpperCase();
@@ -490,7 +551,236 @@ app.get('/api/dashboard', async (req, res) => {
   }
 });
 
-// 1. Endpoint de Búsqueda Paginada (50 en 50) para Seguimiento (Cruzando con historial_chats_mantra)
+// 3. Endpoint de Búsqueda Paginada de Órdenes (/api/orders/search) requerido por OrdersView.tsx
+app.get('/api/orders/search', async (req, res) => {
+  try {
+    if (tiposUnicosList.length === 0) await loadTipoServicioCache();
+
+    const todayIso = new Date().toLocaleDateString('en-CA');
+    const rawStart = String(req.query.startDate || '').trim();
+    const rawEnd = String(req.query.endDate || '').trim();
+
+    const startDate = /^\d{4}-\d{2}-\d{2}$/.test(rawStart) ? rawStart : todayIso;
+    const endDate = /^\d{4}-\d{2}-\d{2}$/.test(rawEnd) ? rawEnd : todayIso;
+
+    const service = String(req.query.service || 'Todos los servicios').trim();
+    const q = String(req.query.q || '').trim();
+    const ignoreDates = req.query.ignoreDates === 'true';
+
+    // Filtros de cabecera multiselección de OrdersView.tsx
+    const fOrden = String(req.query.orden || '').trim();
+    const fCliente = String(req.query.cliente || '').trim();
+    const fOperacion = String(req.query.operacion || 'Todos').trim();
+    const fSector = String(req.query.sector || 'Todos').trim();
+    const fPartner = String(req.query.partner || 'Todos').trim();
+    const fEstadoOt = String(req.query.estadoOt || 'Todos').trim();
+    const fWsp = String(req.query.wsp || 'Todos').trim();
+    const fTracking = String(req.query.tracking || 'Todos').trim();
+
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(10, Number(req.query.pageSize) || 50));
+    const offset = (page - 1) * pageSize;
+
+    const whereClauses: string[] = [];
+    const params: any[] = [];
+
+    if (!ignoreDates) {
+      whereClauses.push('v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?');
+      params.push(startDate, endDate);
+    }
+
+    const { srvList, productosDelTipo } = resolveProductosFromServiceFilter(service);
+    if (srvList.length > 0) {
+      if (productosDelTipo.length > 0) {
+        const ph = productosDelTipo.map(() => '?').join(',');
+        whereClauses.push(`v.producto IN (${ph})`);
+        params.push(...productosDelTipo);
+      } else {
+        const ph = srvList.map(() => '?').join(',');
+        whereClauses.push(`(v.tipo_operacion IN (${ph}) OR v.producto IN (${ph}))`);
+        params.push(...srvList, ...srvList);
+      }
+    }
+
+    if (fOrden) {
+      const likeOrd = `%${fOrden}%`;
+      whereClauses.push(
+        `(CAST(v.orden_id AS CHAR) LIKE ? OR v.ticket LIKE ? OR w.CodiSegui LIKE ?)`
+      );
+      params.push(likeOrd, likeOrd, likeOrd);
+    }
+
+    if (fCliente) {
+      const likeCli = `%${fCliente}%`;
+      whereClauses.push(
+        `(v.cliente LIKE ? OR v.telefono LIKE ? OR w.\`Número Documento\` LIKE ? OR w.CodiSeguiClien LIKE ? OR w.CodiClien LIKE ?)`
+      );
+      params.push(likeCli, likeCli, likeCli, likeCli, likeCli);
+    }
+
+    if (fOperacion && fOperacion !== 'Todos') {
+      const opItems = fOperacion.split(',').map((s) => s.trim()).filter(Boolean);
+      const { productosDelTipo: opProds } = resolveProductosFromServiceFilter(opItems.join(','));
+      const combined = Array.from(new Set([...opItems, ...opProds]));
+      if (combined.length > 0) {
+        const ph = combined.map(() => '?').join(',');
+        whereClauses.push(`(UPPER(TRIM(v.producto)) IN (${ph}) OR UPPER(TRIM(v.tipo_operacion)) IN (${ph}))`);
+        params.push(...combined.map((x) => x.toUpperCase()), ...combined.map((x) => x.toUpperCase()));
+      }
+    }
+
+    if (fSector && fSector !== 'Todos') {
+      const secItems = fSector.split(',').map((s) => s.trim()).filter(Boolean);
+      if (secItems.length > 0) {
+        const ph = secItems.map(() => '?').join(',');
+        whereClauses.push(`COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR') IN (${ph})`);
+        params.push(...secItems);
+      }
+    }
+
+    if (fPartner && fPartner !== 'Todos') {
+      const partItems = fPartner.split(',').map((s) => s.trim()).filter(Boolean);
+      if (partItems.length > 0) {
+        const ph = partItems.map(() => '?').join(',');
+        whereClauses.push(`COALESCE(NULLIF(TRIM(v.partner), ''), NULLIF(TRIM(w.Proveedeor), ''), 'SIN PARTNER') IN (${ph})`);
+        params.push(...partItems);
+      }
+    }
+
+    if (fEstadoOt && fEstadoOt !== 'Todos') {
+      const estItems = fEstadoOt.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+      if (estItems.length > 0) {
+        const ph = estItems.map(() => '?').join(',');
+        whereClauses.push(`UPPER(TRIM(COALESCE(v.estado_ot, ''))) IN (${ph})`);
+        params.push(...estItems);
+      }
+    }
+
+    if (fWsp && fWsp !== 'Todos') {
+      const wspItems = fWsp.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+      const rawStates: string[] = [];
+      let includeNoEnviado = false;
+
+      for (const item of wspItems) {
+        if (item === 'LEÍDO' || item === 'LEIDO' || item === 'READ') rawStates.push('read');
+        else if (item === 'ENTREGADO' || item === 'DELIVERED') rawStates.push('delivered', 'deliverd');
+        else if (item === 'ENVIADO' || item === 'SENT') rawStates.push('sent');
+        else if (item === 'FALLIDO' || item === 'FAILED') rawStates.push('failed');
+        else if (item === 'NO ENVIADO') includeNoEnviado = true;
+      }
+
+      const wspSubClauses: string[] = [];
+      if (rawStates.length > 0) {
+        const ph = rawStates.map(() => '?').join(',');
+        wspSubClauses.push(`LOWER(TRIM(COALESCE(v.estado_wsp, ''))) IN (${ph})`);
+        params.push(...rawStates);
+      }
+      if (includeNoEnviado) {
+        wspSubClauses.push(
+          `(v.se_envio_wsp = 'NO' OR v.estado_wsp = 'NO ENVIADO' OR v.estado_wsp IS NULL OR TRIM(v.estado_wsp) = '')`
+        );
+      }
+      if (wspSubClauses.length > 0) {
+        whereClauses.push(`(${wspSubClauses.join(' OR ')})`);
+      }
+    }
+
+    if (fTracking && fTracking !== 'Todos') {
+      const trkItems = fTracking.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+      const mappedTrk = trkItems.map((t) => (t.includes('S') ? 'SI' : 'NO'));
+      if (mappedTrk.length > 0) {
+        const ph = mappedTrk.map(() => '?').join(',');
+        whereClauses.push(`COALESCE(v.ingreso_tracking, 'NO') IN (${ph})`);
+        params.push(...mappedTrk);
+      }
+    }
+
+    if (q) {
+      const likeQ = `%${q}%`;
+      whereClauses.push(`(
+        CAST(v.orden_id AS CHAR) LIKE ? OR
+        v.ticket LIKE ? OR
+        v.cliente LIKE ? OR
+        v.telefono LIKE ? OR
+        w.\`Número Documento\` LIKE ? OR
+        w.CodiSeguiClien LIKE ? OR
+        w.CodiSegui LIKE ? OR
+        w.Cuadrilla LIKE ? OR
+        w.\`Datos Técnicos\` LIKE ?
+      )`);
+      params.push(likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+    const [countResult, rowsResult]: any = await Promise.all([
+      pool.query(
+        `
+        SELECT COUNT(*) AS total
+        FROM vw_reporte_funnel_casos_360 v
+        LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
+        ${whereSql}
+        `,
+        params
+      ),
+      pool.query(
+        `
+        SELECT 
+          v.*,
+          DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_solicitud_fmt,
+          w.\`Número Documento\` AS numero_documento,
+          w.\`Tipo Documento\` AS tipo_documento,
+          w.CodiSeguiClien AS codi_segui_clien,
+          w.CodiClien AS codi_clien,
+          w.CodiSegui AS codi_segui_ot,
+          w.Cuadrilla AS cuadrilla_completa,
+          w.Proveedeor AS proveedor_ot,
+          w.Direccion AS direccion_cliente,
+          w.IdenServi AS plan_contratado,
+          w.Email AS email_cliente,
+          w.\`Diagnóstico Técnico\` AS diagnostico_tecnico,
+          w.\`Observaciones Tareas\` AS observaciones_tareas,
+          w.\`Historial Estados\` AS historial_estados,
+          w.\`Datos Técnicos\` AS datos_tecnicos,
+          w.Georeferencia AS georeferencia_cliente,
+          w.Georeferencia_tecnico AS georeferencia_tecnico,
+          w.\`Motivo Finalización\` AS motivo_finalizacion,
+          w.\`Usuario Asignó\` AS usuario_asigno
+        FROM vw_reporte_funnel_casos_360 v
+        LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
+        ${whereSql}
+        ORDER BY v.orden_id DESC
+        LIMIT ${Number(pageSize)} OFFSET ${Number(offset)}
+        `,
+        params
+      ),
+    ]);
+
+    const total = Number(countResult?.[0]?.[0]?.total || 0);
+    const rows = (rowsResult?.[0] || []).map((o: any) => ({
+      ...o,
+      servicio_tipo:
+        servicioToTipoMap.get(String(o.producto || '').trim().toUpperCase()) ||
+        o.tipo_operacion ||
+        o.producto ||
+        '-',
+    }));
+
+    return res.json({
+      ok: true,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      orders: rows,
+    });
+  } catch (error: any) {
+    console.error('❌ Error en /api/orders/search:', error.message);
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// 4. Endpoint de Búsqueda Paginada (50 en 50) para Seguimiento (Cruzando con historial_chats_mantra)
 app.get('/api/tracking/search', async (req, res) => {
   try {
     const todayIso = new Date().toLocaleDateString('en-CA');
@@ -524,9 +814,12 @@ app.get('/api/tracking/search', async (req, res) => {
       params.push(startDate, endDate);
     }
 
-    if (service !== 'Todos los servicios') {
-      whereClauses.push('(v.tipo_operacion = ? OR v.producto = ?)');
-      params.push(service, service);
+    const { srvList, productosDelTipo } = resolveProductosFromServiceFilter(service);
+    if (srvList.length > 0) {
+      const allSrvTokens = Array.from(new Set([...srvList, ...productosDelTipo]));
+      const ph = allSrvTokens.map(() => '?').join(',');
+      whereClauses.push(`(v.tipo_operacion IN (${ph}) OR v.producto IN (${ph}))`);
+      params.push(...allSrvTokens, ...allSrvTokens);
     }
 
     if (zone !== 'Todas las zonas') {
@@ -635,21 +928,21 @@ app.get('/api/tracking/search', async (req, res) => {
   }
 });
 
-// 2. Endpoint Live + Fallback BD usando config_plantillas_mantra e historial_chats_mantra
+// 5. Endpoint Live contra CAPA_INTERMEDIA_URL + Fallback BD usando config_plantillas_mantra e historial_chats_mantra
 app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
   try {
     const rawPhone = String(req.query.phone || '').replace(/\D/g, '');
     const phone9 = rawPhone.slice(-9);
     const ordenId = req.query.ordenId ? Number(req.query.ordenId) : null;
     const grupoServicio = String(req.query.grupoServicio || 'GENERAL').trim();
-    const limit = Math.min(50, Math.max(5, Number(req.query.limit) || 15));
+    const limit = Number(req.query.limit) || 1000;
 
     if (!phone9 && !ordenId) {
       return res.status(400).json({ ok: false, error: 'Parámetro phone u ordenId requerido' });
     }
 
     // A. Consultar credenciales dinámicas en config_plantillas_mantra por tipo_servicio
-    let apiKey: string | null = process.env.MANTRA_API_TOKEN || null;
+    let apiKey: string = SECRET_API_KEY;
     let groupId: string | null = null;
     try {
       const [cfgRows]: any = await pool.query(
@@ -675,18 +968,26 @@ app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
       }
     } catch (_) {}
 
-    // B. Intento en vivo contra API Mantra si existe URL configurada y credenciales de config_plantillas_mantra
-    if (process.env.MANTRA_API_URL && apiKey) {
+    // B. Intento en vivo contra CAPA_INTERMEDIA_URL (Azure) / API Mantra
+    if (CAPA_INTERMEDIA_URL && apiKey) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4500);
+      const timeout = setTimeout(() => controller.abort(), 5000);
       try {
-        const liveUrl = `${process.env.MANTRA_API_URL}?phone=${encodeURIComponent(
+        const baseEndpoint = CAPA_INTERMEDIA_URL.includes('/api/')
+          ? CAPA_INTERMEDIA_URL
+          : `${CAPA_INTERMEDIA_URL}/api/4dm1n_/mantra-chat`;
+
+        const liveUrl = `${baseEndpoint}?phone=${encodeURIComponent(
           rawPhone
-        )}&group_id=${encodeURIComponent(groupId || grupoServicio)}&limit=${limit}`;
+        )}&ordenId=${encodeURIComponent(String(ordenId || ''))}&group_id=${encodeURIComponent(
+          groupId || grupoServicio
+        )}&grupoServicio=${encodeURIComponent(grupoServicio)}&limit=${limit}`;
+
         const liveRes = await fetch(liveUrl, {
           headers: {
             Authorization: `Bearer ${apiKey}`,
             'x-api-key': apiKey,
+            'x-secret-api-key': SECRET_API_KEY,
           },
           signal: controller.signal,
         });
@@ -701,12 +1002,14 @@ app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
               ok: true,
               source: 'live_api',
               groupId,
+              chatMeta: liveData.chatMeta || null,
               messages: msgs.slice(-limit),
             });
           }
         }
-      } catch (_) {
+      } catch (liveErr: any) {
         clearTimeout(timeout);
+        console.warn('⚠️ Falló llamada a API Mantra en vivo:', liveErr.message);
       }
     }
 
@@ -759,82 +1062,18 @@ app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`✅ API Azure MySQL lista en http://localhost:${PORT}`);
+// Servir archivos estáticos del Frontend compilado (dist) en producción (Azure App Service)
+const distPath = path.join(__dirname, 'dist');
+app.use(express.static(distPath));
+
+app.get(/(.*)/, (req, res, next) => {
+  if (req.path.startsWith('/api/')) return next();
+  res.sendFile(path.join(distPath, 'index.html'), (err) => {
+    if (err) next();
+  });
 });
 
-// Endpoint Live + Fallback BD para el Visor de Chats (WhatsApp / Mantra)
-app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
-  try {
-    const phone = String(req.query.phone || '').replace(/\D/g, '');
-    const grupoServicio = String(req.query.grupoServicio || 'GENERAL');
-    const limit = Math.min(50, Math.max(5, Number(req.query.limit) || 15));
-
-    if (!phone) {
-      return res.status(400).json({ ok: false, error: 'Parámetro phone requerido' });
-    }
-
-    // 1. Intento de consumo en vivo si existe URL de API Mantra configurada en .env
-    if (process.env.MANTRA_API_URL) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4500);
-      try {
-        const liveUrl = `${process.env.MANTRA_API_URL}?phone=${encodeURIComponent(phone)}&grupoServicio=${encodeURIComponent(grupoServicio)}&limit=${limit}`;
-        const liveRes = await fetch(liveUrl, {
-          headers: process.env.MANTRA_API_TOKEN
-            ? { Authorization: `Bearer ${process.env.MANTRA_API_TOKEN}` }
-            : {},
-          signal: controller.signal,
-        });
-        clearTimeout(timeout);
-        if (liveRes.ok) {
-          const liveData = await liveRes.json();
-          return res.json({
-            ok: true,
-            source: 'live_api',
-            messages: Array.isArray(liveData) ? liveData : liveData.messages || liveData.data || [],
-          });
-        }
-      } catch (_) {
-        clearTimeout(timeout);
-      }
-    }
-
-    // 2. Fallback a Base de Datos Azure MySQL (vw_reporte_funnel_casos_360)
-    const [rows]: any = await pool.query(
-      `
-      SELECT 
-        orden_id, ticket, cliente, telefono, estado_wsp, se_envio_wsp,
-        ingreso_tracking, link_tracking, fecha_solicitud,
-        ultimos_mensajes_json
-      FROM vw_reporte_funnel_casos_360
-      WHERE telefono LIKE ?
-      ORDER BY orden_id DESC
-      LIMIT 1
-      `,
-      [`%${phone.slice(-9)}%`]
-    );
-
-    const row = rows?.[0];
-    let messages: any[] = [];
-
-    if (row?.ultimos_mensajes_json) {
-      try {
-        const parsed =
-          typeof row.ultimos_mensajes_json === 'string'
-            ? JSON.parse(row.ultimos_mensajes_json)
-            : row.ultimos_mensajes_json;
-        if (Array.isArray(parsed)) messages = parsed.slice(-limit);
-      } catch (_) {}
-    }
-
-    return res.json({
-      ok: true,
-      source: 'db_fallback',
-      messages,
-    });
-  } catch (error: any) {
-    return res.status(500).json({ ok: false, error: error.message });
-  }
+const PORT = Number(process.env.WEBSITES_PORT || process.env.PORT || 3001);
+app.listen(PORT, () => {
+  console.log(`✅ Servidor WIN en RUTA activo en puerto ${PORT} (Capa Intermedia: ${CAPA_INTERMEDIA_URL})`);
 });
