@@ -3,6 +3,9 @@
     "rewrite": "/index.html",
     "exclude": ["/assets/*", "/*.svg", "/*.ico", "/*.png"]
   },
+  "globalHeaders": {
+    "Cache-Control": "no-store"
+  },
   "mimeTypes": {
     ".json": "application/json",
     ".svg": "image/svg+xml"

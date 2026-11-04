@@ -1,0 +1,45 @@
+name: Deploy WIN Backend to Azure App Service
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'server.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig*.json'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Instalar dependencias completas
+        run: npm ci
+
+      - name: Preparar paquete liviano de producción
+        run: |
+          mkdir -p release-backend
+          cp server.ts release-backend/server.ts
+          cp package.json release-backend/package.json
+          cp package-lock.json release-backend/package-lock.json
+          cd release-backend
+          npm ci --omit=dev
+
+      - name: Desplegar backend a Azure App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: 'win-dashboard-api'
+          slot-name: 'production'
+          publish-profile: ${{ secrets.AZURE_APP_SERVICE_BACKEND_PUBLISH_PROFILE }}
+          package: release-backend
+
