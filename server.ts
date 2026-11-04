@@ -31,8 +31,12 @@ const pool = mysql.createPool({
   connectionLimit: 10,
 });
 
-pool.on('error', (err) => {
-  console.error('❌ Error imprevisto en el pool de conexiones MySQL:', err.message);
+pool.on('error' as never, (err: unknown) => {
+  if (err instanceof Error) {
+    console.error('❌ Error imprevisto en el pool de conexiones MySQL:', err.message);
+  } else {
+    console.error('❌ Error imprevisto en el pool de conexiones MySQL:', String(err));
+  }
 });
 
 // Variables de Capa Intermedia / API en Azure App Service
@@ -90,7 +94,7 @@ async function loadTipoServicioCache() {
   }
 }
 
-loadTipoServicioCache();
+await loadTipoServicioCache();
 
 /**
  * Helper para resolver lista de productos a partir del filtro de servicio (soporta multiselección separada por comas)
@@ -265,7 +269,7 @@ app.get('/api/dashboard', async (req, res) => {
           COALESCE(SUM(v.se_envio_wsp = 'SI'), 0) AS enviados,
           COALESCE(SUM(v.estado_wsp = 'read'), 0) AS leidos,
           COALESCE(SUM(v.estado_wsp = 'sent'), 0) AS sent,
-          COALESCE(SUM(v.estado_wsp IN ('delivered', 'deliverd')), 0) AS delivered,
+          COALESCE(SUM(v.estado_wsp = 'delivered'), 0) AS delivered,
           COALESCE(SUM(v.estado_wsp = 'failed'), 0) AS failed,
           COALESCE(SUM(v.se_envio_wsp = 'NO' OR v.estado_wsp = 'NO ENVIADO' OR v.estado_wsp IS NULL), 0) AS no_enviado,
           COALESCE(SUM(v.ingreso_tracking = 'SI'), 0) AS tracking,
@@ -674,7 +678,7 @@ app.get('/api/orders/search', async (req, res) => {
 
       for (const item of wspItems) {
         if (item === 'LEÍDO' || item === 'LEIDO' || item === 'READ') rawStates.push('read');
-        else if (item === 'ENTREGADO' || item === 'DELIVERED') rawStates.push('delivered', 'deliverd');
+        else if (item === 'ENTREGADO' || item === 'DELIVERED') rawStates.push('delivered');
         else if (item === 'ENVIADO' || item === 'SENT') rawStates.push('sent');
         else if (item === 'FALLIDO' || item === 'FAILED') rawStates.push('failed');
         else if (item === 'NO ENVIADO') includeNoEnviado = true;
