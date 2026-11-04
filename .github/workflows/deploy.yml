@@ -18,11 +18,21 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Instalar dependencias
+      - name: Instalar dependencias completas
         run: npm ci
 
       - name: Compilar Frontend Vite y Typecheck
         run: npm run build
+
+      - name: Preparar paquete liviano de producción
+        run: |
+          mkdir -p release
+          cp -r dist release/dist
+          cp server.ts release/server.ts
+          cp package.json release/package.json
+          cp package-lock.json release/package-lock.json
+          cd release
+          npm ci --omit=dev
 
       - name: Desplegar a Azure App Service
         uses: azure/webapps-deploy@v2
@@ -30,5 +40,4 @@ jobs:
           app-name: 'Trakingwin-dashboard-fronted'
           slot-name: 'production'
           publish-profile: ${{ secrets.AZURE_APP_SERVICE_PUBLISH_PROFILE }}
-          package: .
-
+          package: release
