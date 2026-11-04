@@ -1,16 +1,25 @@
-name: Deploy WIN Dashboard to Azure App Service
+name: Deploy WIN Dashboard to Azure Static Web Apps
 
 on:
   push:
     branches:
       - main
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches:
+      - main
 
 jobs:
-  build-and-deploy:
+  build_and_deploy_job:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
     runs-on: ubuntu-latest
+    name: Build and Deploy
     steps:
       - name: Checkout del repositorio
         uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: false
 
       - name: Configurar Node.js 20
         uses: actions/setup-node@v4
@@ -18,26 +27,33 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Instalar dependencias completas
+      - name: Instalar dependencias limpias
         run: npm ci
 
       - name: Compilar Frontend Vite y Typecheck
         run: npm run build
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || '' }}
 
-      - name: Preparar paquete liviano de producción
-        run: |
-          mkdir -p release
-          cp -r dist release/dist
-          cp server.ts release/server.ts
-          cp package.json release/package.json
-          cp package-lock.json release/package-lock.json
-          cd release
-          npm ci --omit=dev
-
-      - name: Desplegar a Azure App Service
-        uses: azure/webapps-deploy@v2
+      - name: Desplegar a Azure Static Web Apps
+        id: builddeploy
+        uses: Azure/static-web-apps-deploy@v1
         with:
-          app-name: 'Trakingwin-dashboard-backend'
-          slot-name: 'production'
-          publish-profile: ${{ secrets.AZURE_APP_SERVICE_PUBLISH_PROFILE }}
-          package: release
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_POLITE_ISLAND_018B43B0F }}
+          action: "upload"
+          app_location: "/"
+          api_location: ""
+          output_location: "dist"
+          skip_app_build: true
+
+  close_pull_request_job:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    name: Close Pull Request
+    steps:
+      - name: Close Pull Request
+        id: closepullrequest
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_POLITE_ISLAND_018B43B0F }}
+          action: "close"
