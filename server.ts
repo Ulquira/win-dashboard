@@ -186,12 +186,12 @@ app.get('/api/dashboard', async (req, res) => {
   try {
     if (tiposUnicosList.length === 0) await loadTipoServicioCache();
 
-    // Calculamos siempre mínimo 7 días hacia atrás desde endDate para la gráfica evolutiva
-    const endObj = new Date(`${endDate}T00:00:00`);
-    const min7StartObj = new Date(endObj);
-    min7StartObj.setDate(min7StartObj.getDate() - 6);
-    const min7StartStr = min7StartObj.toISOString().split('T')[0];
-
+    // Garantizar siempre mínimo 7 días hacia atrás desde endDate para la gráfica evolutiva (independiente del filtro de inicio)
+    const [ey, em, ed] = endDate.split('-').map(Number);
+    const endTarget = new Date(ey, em - 1, ed);
+    const min7D = new Date(endTarget);
+    min7D.setDate(min7D.getDate() - 6);
+    const min7StartStr = `${min7D.getFullYear()}-${String(min7D.getMonth() + 1).padStart(2, '0')}-${String(min7D.getDate()).padStart(2, '0')}`;
     const chartStartDate = startDate < min7StartStr ? startDate : min7StartStr;
 
     // Filtros para vw_reporte_funnel_casos_360 (v), vw_reprogramaciones_detalle (r) y vw_reporte_encuestas_enriquecido (e)
@@ -472,8 +472,8 @@ app.get('/api/dashboard', async (req, res) => {
         whs_failed: acc.whs_failed + Number(row.failed || 0),
         whs_no_enviado: acc.whs_no_enviado + Number(row.no_enviado || 0),
         ingreso_tracking: acc.ingreso_tracking + Number(row.tracking || 0),
-        reprogramaciones: totalReprogReal,
-        encuestas_respondidas: totalEncuestasReal,
+        reprogramaciones: acc.reprogramaciones + Number(row.reprogramaciones || 0),
+        encuestas_respondidas: acc.encuestas_respondidas + Number(row.encuestas || 0),
         csat_avg: csatAvgGlobal,
         leidos_sin_ingreso: acc.leidos_sin_ingreso + Number(row.leidos_sin_ingreso || 0),
         av_total: acc.av_total + Number(row.av_total || 0),
@@ -494,8 +494,8 @@ app.get('/api/dashboard', async (req, res) => {
         whs_failed: 0,
         whs_no_enviado: 0,
         ingreso_tracking: 0,
-        reprogramaciones: totalReprogReal,
-        encuestas_respondidas: totalEncuestasReal,
+        reprogramaciones: 0,
+        encuestas_respondidas: 0,
         csat_avg: csatAvgGlobal,
         leidos_sin_ingreso: 0,
         av_total: 0,
@@ -508,6 +508,13 @@ app.get('/api/dashboard', async (req, res) => {
         pref_tracking: 0,
       }
     );
+
+    if (kpis.reprogramaciones === 0 && totalReprogReal > 0) {
+      kpis.reprogramaciones = totalReprogReal;
+    }
+    if (kpis.encuestas_respondidas === 0 && totalEncuestasReal > 0) {
+      kpis.encuestas_respondidas = totalEncuestasReal;
+    }
 
     const ordersWithTipo = (orderResult[0] || []).map((o: any) => ({
       ...o,
