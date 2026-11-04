@@ -31,6 +31,10 @@ const pool = mysql.createPool({
   connectionLimit: 10,
 });
 
+pool.on('error', (err) => {
+  console.error('❌ Error imprevisto en el pool de conexiones MySQL:', err.message);
+});
+
 // Variables de Capa Intermedia / API en Azure App Service
 const CAPA_INTERMEDIA_URL = (
   process.env.CAPA_INTERMEDIA_URL ||
@@ -750,9 +754,9 @@ app.get('/api/orders/search', async (req, res) => {
         LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
         ${whereSql}
         ORDER BY v.orden_id DESC
-        LIMIT ${Number(pageSize)} OFFSET ${Number(offset)}
+        LIMIT ? OFFSET ?
         `,
-        params
+        [...params, pageSize, offset]
       ),
     ]);
 
@@ -902,9 +906,9 @@ app.get('/api/tracking/search', async (req, res) => {
         LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
         ${whereSql}
         ORDER BY (h.ultimos_mensajes_json IS NOT NULL) DESC, v.orden_id DESC
-        LIMIT ${Number(pageSize)} OFFSET ${Number(offset)}
+        LIMIT ? OFFSET ?
         `,
-        params
+        [...params, pageSize, offset]
       ),
     ]);
 
@@ -966,7 +970,9 @@ app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
           groupId = fallbackCfg[0].group_id || null;
         }
       }
-    } catch (_) {}
+    } catch (cfgErr: any) {
+      console.warn('⚠️ No se pudieron consultar credenciales dinámicas en config_plantillas_mantra:', cfgErr.message);
+    }
 
     // B. Intento en vivo contra CAPA_INTERMEDIA_URL (Azure) / API Mantra
     if (CAPA_INTERMEDIA_URL && apiKey) {
@@ -1039,7 +1045,9 @@ app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
         } else if (parsed && Array.isArray(parsed.messages)) {
           messages = parsed.messages.slice(-limit);
         }
-      } catch (_) {}
+      } catch (parseErr: any) {
+        console.warn('⚠️ Error al parsear JSON de chat en fallback:', parseErr.message);
+      }
     }
 
     return res.json({

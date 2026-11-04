@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Filter, ChevronDown, User, ChevronLeft, ChevronRight, RefreshCw, Check
 } from 'lucide-react';
@@ -101,12 +101,19 @@ export function OrdersView({
     return () => clearTimeout(timer);
   }, [globalSearch]);
 
-  useEffect(() => {
-    setPage(1);
-  }, [colFilters, startDate, endDate, service, ignoreDates]);
+  const [prevFilterKey, setPrevFilterKey] = useState<string>('');
+  const currentFilterKey = `${startDate}_${endDate}_${service}_${ignoreDates}_${JSON.stringify(colFilters)}`;
+  if (prevFilterKey !== currentFilterKey) {
+    setPrevFilterKey(currentFilterKey);
+    if (page !== 1) setPage(1);
+  }
 
-  const fetchPaginatedOrders = useCallback(() => {
-    setLoadingPage(true);
+  useEffect(() => {
+    let ignore = false;
+    Promise.resolve().then(() => {
+      if (!ignore) setLoadingPage(true);
+    });
+
     const serializeArr = (arr: string[]) => (arr.length > 0 ? arr.join(',') : 'Todos');
 
     const params = new URLSearchParams({
@@ -129,19 +136,24 @@ export function OrdersView({
 
     apiFetch(`/api/orders/search?${params.toString()}`)
       .then((data) => {
+        if (ignore) return;
         if (data.ok && Array.isArray(data.orders)) {
           setServerOrders(data.orders);
           setTotalRecords(Number(data.total || 0));
           setTotalPages(Number(data.totalPages || 1));
         }
       })
-      .catch((err) => console.error('Error buscando órdenes en API:', err))
-      .finally(() => setLoadingPage(false));
-  }, [startDate, endDate, service, debouncedQuery, ignoreDates, colFilters, page]);
+      .catch((err) => {
+        if (!ignore) console.error('Error buscando órdenes en API:', err);
+      })
+      .finally(() => {
+        if (!ignore) setLoadingPage(false);
+      });
 
-  useEffect(() => {
-    fetchPaginatedOrders();
-  }, [fetchPaginatedOrders]);
+    return () => {
+      ignore = true;
+    };
+  }, [startDate, endDate, service, debouncedQuery, ignoreDates, colFilters, page]);
 
   const resetAllOrderFilters = () => {
     setColFilters({

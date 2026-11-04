@@ -150,7 +150,9 @@ export function TrackingView({
         setLoadingChat(false);
         return;
       }
-    } catch (_) {}
+    } catch (err: any) {
+      console.warn('⚠️ Error al consultar chat en vivo:', err.message);
+    }
 
     setLiveMessages(null);
     setDataSource('snapshot');
@@ -159,7 +161,7 @@ export function TrackingView({
 
   useEffect(() => {
     fetchChatConversation(selectedRow);
-  }, [selectedRow?.orden_id, fetchChatConversation]);
+  }, [selectedRow, fetchChatConversation]);
 
   // Atajos de teclado: F (Expandir/Colapsar Ficha), ← / → / ↑ / ↓ (Recorrer bandeja)
   useEffect(() => {
@@ -197,7 +199,9 @@ export function TrackingView({
             : selectedRow.ultimos_mensajes_json;
         if (Array.isArray(parsed)) rawList = parsed;
         else if (parsed && Array.isArray(parsed.messages)) rawList = parsed.messages;
-      } catch (_) {}
+      } catch (parseErr: any) {
+        console.warn('⚠️ Error al parsear JSON de chat:', parseErr.message);
+      }
     }
 
     if (rawList.length === 0 && selectedRow.se_envio_wsp === 'SI') {

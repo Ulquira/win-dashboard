@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Calendar, ChevronDown, Database, RefreshCw, Search, Globe, Check } from 'lucide-react';
+import { Calendar, ChevronDown, RefreshCw, Search, Globe, Check } from 'lucide-react';
 import { NavSection, ViewMode } from '../types/dashboard';
 
 interface HeaderProps {
