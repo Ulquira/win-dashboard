@@ -17,6 +17,7 @@ import { apiFetch, API_BASE_URL } from './config/api';
 export default function App() {
   const [activeNav, setActiveNav] = useState<NavSection>('Dashboard');
   const [viewMode, setViewMode] = useState<ViewMode>('ejecutiva');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
 
   const [startDate, setStartDate] = useState<string>(() => new Date().toLocaleDateString('en-CA'));
   const [endDate, setEndDate] = useState<string>(() => new Date().toLocaleDateString('en-CA'));
@@ -206,15 +207,25 @@ export default function App() {
   }, [kpis]);
 
   return (
-    <div className="flex min-h-screen bg-[#090D16] text-gray-100 font-sans select-none">
+    <div className="flex min-h-screen bg-[#090D16] text-gray-100 font-sans select-none relative">
+      {/* Backdrop para móviles */}
+      {mobileMenuOpen && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 md:hidden transition-opacity"
+          onClick={() => setMobileMenuOpen(false)}
+        />
+      )}
+
       <Sidebar
         activeNav={activeNav}
         viewMode={viewMode}
         setActiveNav={setActiveNav}
         setViewMode={setViewMode}
+        isOpen={mobileMenuOpen}
+        onClose={() => setMobileMenuOpen(false)}
       />
 
-      <main className="flex-1 p-5 overflow-y-auto space-y-4">
+      <main className="flex-1 p-3 sm:p-5 overflow-y-auto space-y-4 max-w-full min-w-0">
         {errorMsg && (
           <div className="bg-red-500/10 border border-red-500/40 text-red-300 px-4 py-2.5 rounded-xl text-xs flex items-center justify-between">
             <span><strong>Aviso de conexión:</strong> {errorMsg}</span>
@@ -244,6 +255,7 @@ export default function App() {
           setGlobalSearch={setGlobalSearch}
           setIgnoreDates={setIgnoreDates}
           onConsult={() => fetchDashboardData(startDate, endDate, service, zone, true)}
+          onToggleSidebar={() => setMobileMenuOpen(!mobileMenuOpen)}
         />
 
         {activeNav === 'Dashboard' && (
@@ -252,25 +264,25 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setViewMode('ejecutiva')}
-                  className={`flex items-center gap-2 px-4 py-1.5 font-semibold text-xs rounded-lg transition ${
+                  className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 font-semibold text-xs rounded-lg transition ${
                     viewMode === 'ejecutiva'
                       ? 'bg-[#FF6B00] text-white shadow-md shadow-orange-500/10'
                       : 'bg-[#111827] text-gray-400 hover:text-gray-200 border border-gray-800'
                   }`}
                 >
                   <Activity size={14} />
-                  Vista Ejecutiva
+                  <span>Vista Ejecutiva</span>
                 </button>
                 <button
                   onClick={() => setViewMode('operativa')}
-                  className={`flex items-center gap-2 px-4 py-1.5 font-semibold text-xs rounded-lg transition ${
+                  className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 font-semibold text-xs rounded-lg transition ${
                     viewMode === 'operativa'
                       ? 'bg-[#FF6B00] text-white shadow-md shadow-orange-500/10'
                       : 'bg-[#111827] text-gray-400 hover:text-gray-200 border border-gray-800'
                   }`}
                 >
                   <ClipboardList size={14} />
-                  Vista Operativa
+                  <span>Vista Operativa</span>
                 </button>
               </div>
             </div>

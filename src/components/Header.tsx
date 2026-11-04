@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Calendar, ChevronDown, RefreshCw, Search, Globe, Check } from 'lucide-react';
+import { Calendar, ChevronDown, RefreshCw, Search, Globe, Check, Menu } from 'lucide-react';
 import { NavSection, ViewMode } from '../types/dashboard';
 
 interface HeaderProps {
@@ -19,6 +19,7 @@ interface HeaderProps {
   setGlobalSearch: (val: string) => void;
   setIgnoreDates: (val: boolean) => void;
   onConsult: () => void;
+  onToggleSidebar?: () => void;
 }
 
 export function Header({
@@ -38,6 +39,7 @@ export function Header({
   setGlobalSearch,
   setIgnoreDates,
   onConsult,
+  onToggleSidebar,
 }: HeaderProps) {
   const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
@@ -83,11 +85,23 @@ export function Header({
       : 'Vista Operativa';
 
   return (
-    <header className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-800/80 pb-3">
-      <div className="flex items-center gap-3">
-        <h2 className="text-xl font-bold tracking-tight text-white">
-          {titleLabel}
-        </h2>
+    <header className="flex flex-col sm:flex-row flex-wrap items-start sm:items-center justify-between gap-3 border-b border-gray-800/80 pb-3">
+      <div className="flex items-center gap-2.5 sm:gap-3 w-full sm:w-auto justify-between sm:justify-start">
+        <div className="flex items-center gap-2.5">
+          {onToggleSidebar && (
+            <button
+              onClick={onToggleSidebar}
+              className="md:hidden p-1.5 rounded-lg bg-gray-800/80 text-gray-300 hover:text-white hover:bg-gray-700 transition"
+              title="Abrir menú"
+            >
+              <Menu size={18} />
+            </button>
+          )}
+          <h2 className="text-lg sm:text-xl font-bold tracking-tight text-white truncate">
+            {titleLabel}
+          </h2>
+        </div>
+
         <span
           className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-semibold border ${
             loading
@@ -107,9 +121,9 @@ export function Header({
       </div>
 
       {/* BARRA UNIFICADA DE FILTROS GLOBALES */}
-      <div className="flex flex-wrap items-center gap-2 text-xs">
+      <div className="flex flex-wrap items-center gap-2 text-xs w-full lg:w-auto">
         {/* 1. Buscador Dinámico Único */}
-        <div className="flex items-center bg-[#111827] border border-gray-700/80 rounded-lg px-2.5 py-1.5 w-64 focus-within:border-[#FF6B00] transition">
+        <div className="flex items-center bg-[#111827] border border-gray-700/80 rounded-lg px-2.5 py-1.5 flex-1 min-w-[180px] sm:w-64 focus-within:border-[#FF6B00] transition">
           <Search size={13} className="text-gray-400 mr-2 shrink-0" />
           <input
             type="text"
@@ -132,7 +146,7 @@ export function Header({
         {/* Botón Histórico BD (Ignorar rango de fechas al buscar) */}
         <button
           onClick={() => setIgnoreDates(!ignoreDates)}
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition ${
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition shrink-0 ${
             ignoreDates
               ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
               : 'bg-[#111827] text-gray-400 border-gray-700/70 hover:text-gray-200'
@@ -145,7 +159,7 @@ export function Header({
 
         {/* 2. Rango de Fechas */}
         <div
-          className={`flex items-center gap-1.5 bg-[#111827] border border-gray-700/70 rounded-lg px-2.5 py-1 transition ${
+          className={`flex items-center gap-1.5 bg-[#111827] border border-gray-700/70 rounded-lg px-2.5 py-1 transition shrink-0 ${
             ignoreDates ? 'opacity-40 pointer-events-none' : ''
           }`}
         >
@@ -166,11 +180,11 @@ export function Header({
         </div>
 
         {/* 3. Filtro Multiselección de Servicios */}
-        <div className="relative" ref={dropdownRef}>
+        <div className="relative shrink-0 flex-1 sm:flex-initial" ref={dropdownRef}>
           <button
             type="button"
             onClick={() => setDropdownOpen(!dropdownOpen)}
-            className={`flex items-center justify-between gap-2 bg-[#111827] border rounded-lg px-3 py-1.5 text-xs transition min-w-[175px] ${
+            className={`flex items-center justify-between gap-2 bg-[#111827] border rounded-lg px-3 py-1.5 text-xs transition w-full sm:min-w-[175px] ${
               selectedServices.length > 0
                 ? 'border-[#FF6B00] text-white font-semibold'
                 : 'border-gray-700/70 text-gray-200'
@@ -208,16 +222,8 @@ export function Header({
                         : 'text-gray-300 hover:bg-gray-800'
                     }`}
                   >
-                    <span className="truncate pr-2">{srv}</span>
-                    <div
-                      className={`w-4 h-4 rounded flex items-center justify-center border ${
-                        checked
-                          ? 'bg-[#FF6B00] border-[#FF6B00] text-white'
-                          : 'border-gray-600 bg-[#111827]'
-                      }`}
-                    >
-                      {checked && <Check size={11} />}
-                    </div>
+                    <span>{srv}</span>
+                    {checked && <Check size={13} className="text-[#FF6B00]" />}
                   </div>
                 );
               })}
@@ -225,11 +231,11 @@ export function Header({
           )}
         </div>
 
-        {/* 4. Botón Consultar */}
+        {/* 4. Botón Acción Consultar / Refrescar */}
         <button
           onClick={onConsult}
           disabled={loading}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-[#FF6B00] hover:bg-[#e66000] disabled:opacity-50 text-white font-semibold rounded-lg transition"
+          className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-[#FF6B00] hover:bg-[#FF8533] disabled:opacity-50 text-white font-semibold rounded-lg text-xs shadow-md shadow-orange-500/20 transition flex-1 sm:flex-initial"
         >
           <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
           <span>{loading ? 'Cargando...' : 'Consultar'}</span>

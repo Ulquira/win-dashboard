@@ -16,8 +16,8 @@ export function OperationalView({
 }: OperationalViewProps) {
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-12 gap-4">
-        <div className="col-span-8 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <div className="lg:col-span-8 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-start overflow-hidden">
           <div className="flex items-center justify-between border-b border-gray-800 pb-2.5 mb-3">
             <div className="flex items-center gap-2">
               <Calendar size={15} className="text-cyan-400" />
@@ -76,7 +76,7 @@ export function OperationalView({
           </div>
         </div>
 
-        <div className="col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4">
+        <div className="lg:col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 overflow-hidden">
           <div className="flex items-center justify-between border-b border-gray-800 pb-2.5 mb-3">
             <div className="flex items-center gap-2">
               <Send size={14} className="text-emerald-400" />
@@ -183,8 +183,8 @@ export function OperationalView({
         </div>
       </div>
 
-      <div className="grid grid-cols-12 gap-4">
-        <div className="col-span-8 bg-[#111827]/90 border border-gray-800 rounded-xl p-4">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <div className="lg:col-span-8 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 overflow-hidden">
           <div className="flex items-center justify-between border-b border-gray-800 pb-2.5 mb-3">
             <div className="flex items-center gap-2">
               <MapPin size={15} className="text-[#FF6B00]" />

@@ -94,8 +94,8 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-12 gap-4">
-        <div className="col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-between">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <div className="lg:col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-between overflow-hidden">
           <div className="border-b border-gray-800 pb-2.5 mb-3">
             <div className="flex items-center gap-2">
               <Filter size={15} className="text-[#FF6B00]" />
@@ -202,7 +202,7 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
           </div>
         </div>
 
-        <div className="col-span-5 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-between">
+        <div className="lg:col-span-5 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-between overflow-hidden">
           <div className="flex items-center justify-between border-b border-gray-800 pb-2.5 mb-2">
             <div className="flex items-center gap-2">
               <TrendingUp size={16} className="text-[#FF6B00]" />
@@ -292,7 +292,7 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
           </div>
         </div>
 
-        <div className="col-span-3 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-between space-y-2.5">
+        <div className="lg:col-span-3 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-between space-y-2.5 overflow-hidden">
           <div className="flex items-center justify-between border-b border-gray-800 pb-2">
             <div className="flex items-center gap-2">
               <Settings size={15} className="text-[#FF6B00]" />
@@ -332,8 +332,8 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
         </div>
       </div>
 
-      <div className="grid grid-cols-12 gap-4">
-        <div className="col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-4">
+        <div className="lg:col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 overflow-hidden">
           <div className="flex items-center gap-2 border-b border-gray-800 pb-2.5 mb-3">
             <Send size={15} className="text-[#FF6B00]" />
             <h3 className="font-bold text-sm text-white">Distribución por Estado del Mensaje</h3>
@@ -359,7 +359,7 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
           </div>
         </div>
 
-        <div className="col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-between">
+        <div className="lg:col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 flex flex-col justify-between overflow-hidden">
           <div className="flex items-center justify-between border-b border-gray-800 pb-2.5">
             <div className="flex items-center gap-2">
               <MapPin size={15} className="text-[#FF6B00]" />
@@ -419,7 +419,7 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
           </div>
         </div>
 
-        <div className="col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4">
+        <div className="md:col-span-2 lg:col-span-4 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 overflow-hidden">
           <div className="flex items-center justify-between border-b border-gray-800 pb-2 mb-2">
             <div className="flex items-center gap-2">
               <Award size={15} className="text-[#FF6B00]" />
@@ -449,8 +449,8 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
         </div>
       </div>
 
-      <div className="grid grid-cols-12 gap-4">
-        <div className="col-span-8 bg-[#111827]/90 border border-gray-800 rounded-xl p-4">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <div className="lg:col-span-8 bg-[#111827]/90 border border-gray-800 rounded-xl p-4 overflow-hidden">
           <div className="flex items-center gap-2 border-b border-gray-800 pb-2 mb-2">
             <AlertTriangle size={15} className="text-amber-500" />
             <h3 className="font-bold text-sm text-white">Alertas Operativas</h3>
