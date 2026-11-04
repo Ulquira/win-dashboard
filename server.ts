@@ -475,9 +475,6 @@ app.get('/api/dashboard', async (req, res) => {
           csat: `${csatPct.toFixed(1).replace('.', ',')}%`,
         };
       });
-    } catch (errEnc: any) {
-      console.warn('⚠️ Error consultando vw_reporte_encuestas_enriquecido:', errEnc.message);
-    }
 
     const dailyRows: any[] = dailyResult[0] || [];
 
