@@ -1095,7 +1095,7 @@ app.get(/(.*)/, (req, res, next) => {
   });
 });
 
-const PORT = Number(process.env.WEBSITES_PORT || process.env.PORT || 3001);
+const PORT = Number(process.env.PORT || process.env.WEBSITES_PORT || 8080);
 app.listen(PORT, () => {
   console.log(`✅ Servidor WIN en RUTA activo en puerto ${PORT} (Capa Intermedia: ${CAPA_INTERMEDIA_URL})`);
 });
