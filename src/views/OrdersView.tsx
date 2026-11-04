@@ -3,6 +3,7 @@ import {
   Filter, ChevronDown, User, ChevronLeft, ChevronRight, RefreshCw, Check
 } from 'lucide-react';
 import { RealOrder } from '../types/dashboard';
+import { apiFetch } from '../config/api';
 
 interface OrdersViewProps {
   orders: RealOrder[];
@@ -120,8 +121,7 @@ export function OrdersView({
       pageSize: String(pageSize),
     });
 
-    fetch(`http://localhost:3001/api/orders/search?${params.toString()}`)
-      .then((res) => res.json())
+    apiFetch(`/api/orders/search?${params.toString()}`)
       .then((data) => {
         if (data.ok && Array.isArray(data.orders)) {
           setServerOrders(data.orders);
@@ -129,7 +129,7 @@ export function OrdersView({
           setTotalPages(Number(data.totalPages || 1));
         }
       })
-      .catch((err) => console.error('Error buscando órdenes en BD:', err))
+      .catch((err) => console.error('Error buscando órdenes en API:', err))
       .finally(() => setLoadingPage(false));
   }, [startDate, endDate, service, debouncedQuery, ignoreDates, colFilters, page]);
 

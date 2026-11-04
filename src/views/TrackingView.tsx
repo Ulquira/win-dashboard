@@ -6,6 +6,7 @@ import {
   ChevronDown, ChevronUp, Bot
 } from 'lucide-react';
 import { RealOrder } from '../types/dashboard';
+import { apiFetch } from '../config/api';
 
 export interface RawChatMessage {
   id?: string | number;
@@ -101,8 +102,7 @@ export function TrackingView({
       pageSize: String(pageSize),
     });
 
-    fetch(`http://localhost:3001/api/tracking/search?${params.toString()}`)
-      .then((res) => res.json())
+    apiFetch(`/api/tracking/search?${params.toString()}`)
       .then((data) => {
         if (data.ok && Array.isArray(data.orders)) {
           setServerOrders(data.orders);
@@ -111,7 +111,7 @@ export function TrackingView({
           setSelectedIndex(0);
         }
       })
-      .catch((err) => console.error('Error en /api/tracking/search:', err))
+      .catch((err) => console.error('Error en /api/tracking/search (API):', err))
       .finally(() => setLoadingPage(false));
   }, [startDate, endDate, service, debouncedQuery, ignoreDates, soloConChat, slaFilter, turnoFilter, page]);
 
@@ -136,22 +136,19 @@ export function TrackingView({
 
     setLoadingChat(true);
     try {
-      const res = await fetch(
-        `http://localhost:3001/api/4dm1n_/mantra-chat?phone=${encodeURIComponent(
+      const data = await apiFetch(
+        `/api/4dm1n_/mantra-chat?phone=${encodeURIComponent(
           phone
         )}&ordenId=${encodeURIComponent(String(row.orden_id || ''))}&grupoServicio=${encodeURIComponent(
           grupo
         )}&limit=1000`
       );
-      if (res.ok) {
-        const data = await res.json();
-        if (data.chatMeta) setChatMeta(data.chatMeta);
-        if (data.ok && Array.isArray(data.messages) && data.messages.length > 0) {
-          setLiveMessages(data.messages);
-          setDataSource(data.source === 'live_api' ? 'live_api' : 'db_fallback');
-          setLoadingChat(false);
-          return;
-        }
+      if (data.chatMeta) setChatMeta(data.chatMeta);
+      if (data.ok && Array.isArray(data.messages) && data.messages.length > 0) {
+        setLiveMessages(data.messages);
+        setDataSource('live_api');
+        setLoadingChat(false);
+        return;
       }
     } catch (_) {}
 

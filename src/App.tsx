@@ -12,6 +12,7 @@ import { ExecutiveView } from './views/ExecutiveView';
 import { OperationalView } from './views/OperationalView';
 import { TrackingView } from './views/TrackingView';
 import { OrdersView } from './views/OrdersView';
+import { apiFetch, API_BASE_URL } from './config/api';
 
 export default function App() {
   const [activeNav, setActiveNav] = useState<NavSection>('Dashboard');
@@ -60,8 +61,7 @@ export default function App() {
       refresh: forceRefresh ? 'true' : 'false',
     });
 
-    fetch(`http://localhost:3001/api/dashboard?${params.toString()}`)
-      .then((res) => res.json())
+    apiFetch(`/api/dashboard?${params.toString()}`)
       .then((data) => {
         if (data.ok) {
           setKpis(data.kpis);
@@ -75,12 +75,12 @@ export default function App() {
           setDbOnline(true);
         } else {
           setDbOnline(false);
-          setErrorMsg(data.error || 'Error desconocido en la consulta');
+          setErrorMsg(data.error || 'Error desconocido en la respuesta de la API');
         }
       })
       .catch((err) => {
         setDbOnline(false);
-        setErrorMsg(`No se pudo conectar a localhost:3001 (${err.message})`);
+        setErrorMsg(`No se pudo conectar a la API ${API_BASE_URL} (${err.message})`);
       })
       .finally(() => setLoading(false));
   };
@@ -88,15 +88,14 @@ export default function App() {
   useEffect(() => {
     fetchDashboardData();
 
-    fetch('http://localhost:3001/api/filters')
-      .then((res) => res.json())
+    apiFetch('/api/filters')
       .then((data) => {
         if (data.ok) {
           setServiceOptions(data.servicios || []);
           setZoneOptions(data.zonas || []);
         }
       })
-      .catch((err) => console.error('Error cargando filtros:', err));
+      .catch((err) => console.error('Error cargando filtros desde API:', err));
   }, []);
 
   const calc: CalculatedMetrics = useMemo(() => {
