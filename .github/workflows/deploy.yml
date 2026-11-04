@@ -1,0 +1,33 @@
+name: Deploy WIN Dashboard to Azure App Service
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Compilar Frontend Vite y Typecheck
+        run: npm run build
+
+      - name: Desplegar a Azure App Service
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: 'Trakingwin-dashboard-backend'
+          slot-name: 'production'
+          publish-profile: ${{ secrets.AZURE_APP_SERVICE_PUBLISH_PROFILE }}
+          package: .
