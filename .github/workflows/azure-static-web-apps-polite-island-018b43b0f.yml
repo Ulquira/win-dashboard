@@ -12,6 +12,8 @@ on:
       - 'tailwind.config.js'
       - 'package.json'
       - 'package-lock.json'
+      - 'staticwebapp.config.json'
+      - '.github/workflows/azure-static-web-apps*.yml'
   pull_request:
     types: [opened, synchronize, reopened, closed]
     branches:
@@ -52,6 +54,7 @@ jobs:
           github_id_token: ${{ steps.idtoken.outputs.result }}
         env:
           VITE_API_BASE_URL: https://win-dashboard-api.azurewebsites.net
+          VITE_API_URL: https://win-dashboard-api.azurewebsites.net
 
   close_pull_request_job:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
