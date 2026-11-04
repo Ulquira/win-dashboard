@@ -1,0 +1,28 @@
+{
+  "navigationFallback": {
+    "rewrite": "/index.html",
+    "exclude": ["/api/*", "/*.svg", "/*.ico", "/*.png"]
+  },
+  "routes": [
+    {
+      "route": "/api/*",
+      "rewrite": "/api{path}"
+    },
+    {
+      "route": "/",
+      "rewrite": "/index.html"
+    },
+    {
+      "route": "/favicon.svg",
+      "rewrite": "/favicon.svg"
+    },
+    {
+      "route": "/icons.svg",
+      "rewrite": "/icons.svg"
+    }
+  ],
+  "mimeTypes": {
+    ".json": "application/json",
+    ".svg": "image/svg+xml"
+  }
+}
