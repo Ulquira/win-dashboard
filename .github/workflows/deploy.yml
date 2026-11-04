@@ -37,7 +37,7 @@ jobs:
       - name: Desplegar a Azure App Service
         uses: azure/webapps-deploy@v2
         with:
-          app-name: 'Trakingwin-dashboard-fronted'
+          app-name: 'Trakingwin-dashboard-backend'
           slot-name: 'production'
           publish-profile: ${{ secrets.AZURE_APP_SERVICE_PUBLISH_PROFILE }}
           package: release
