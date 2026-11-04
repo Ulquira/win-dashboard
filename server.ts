@@ -513,10 +513,13 @@ app.get('/api/dashboard', async (req, res) => {
       }
     );
 
-    if (kpis.reprogramaciones === 0 && totalReprogReal > 0) {
+    // Usar las tablas dedicadas como fuente de verdad para reprogramaciones y encuestas
+    // cuando tengan datos, evitando inconsistencias por columnas de fecha diferentes
+    // entre vw_reporte_funnel_casos_360 (fecha_solicitud_dia) y las tablas detalle
+    if (totalReprogReal > 0) {
       kpis.reprogramaciones = totalReprogReal;
     }
-    if (kpis.encuestas_respondidas === 0 && totalEncuestasReal > 0) {
+    if (totalEncuestasReal > 0) {
       kpis.encuestas_respondidas = totalEncuestasReal;
     }
 
