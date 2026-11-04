@@ -18,9 +18,8 @@ export default function App() {
   const [activeNav, setActiveNav] = useState<NavSection>('Dashboard');
   const [viewMode, setViewMode] = useState<ViewMode>('ejecutiva');
 
-  const todayStr = new Date().toLocaleDateString('en-CA');
-  const [startDate, setStartDate] = useState<string>(todayStr);
-  const [endDate, setEndDate] = useState<string>(todayStr);
+  const [startDate, setStartDate] = useState<string>(() => new Date().toLocaleDateString('en-CA'));
+  const [endDate, setEndDate] = useState<string>(() => new Date().toLocaleDateString('en-CA'));
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
   const [globalSearch, setGlobalSearch] = useState<string>('');
   const [ignoreDates, setIgnoreDates] = useState<boolean>(false);
@@ -28,7 +27,8 @@ export default function App() {
   const zone = 'Todas las zonas';
 
   const [serviceOptions, setServiceOptions] = useState<string[]>([]);
-  const [zoneOptions, setZoneOptions] = useState<string[]>([]);
+  const [sectorOptions, setSectorOptions] = useState<string[]>([]);
+  const [partnerOptions, setPartnerOptions] = useState<string[]>([]);
 
   const [kpis, setKpis] = useState<KpiData | null>(null);
   const [evolution, setEvolution] = useState<EvolutionPoint[]>([]);
@@ -86,16 +86,57 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetchDashboardData();
+    let ignore = false;
+    const initialDate = new Date().toLocaleDateString('en-CA');
+    const params = new URLSearchParams({
+      startDate: initialDate,
+      endDate: initialDate,
+      service: 'Todos los servicios',
+      zone: 'Todas las zonas',
+      refresh: 'false',
+    });
+
+    apiFetch(`/api/dashboard?${params.toString()}`)
+      .then((data) => {
+        if (ignore) return;
+        if (data.ok) {
+          setKpis(data.kpis);
+          setEvolution(data.evolution || []);
+          setDailyInRange(data.dailyInRange || []);
+          setByEstadoOt(data.byEstadoOt || []);
+          setBySector(data.bySector || []);
+          setByTipoOperacion(data.byTipoOperacion || []);
+          setOrders(data.orders || []);
+          setPartners(data.partners || []);
+          setDbOnline(true);
+        } else {
+          setDbOnline(false);
+          setErrorMsg(data.error || 'Error desconocido en la respuesta de la API');
+        }
+      })
+      .catch((err) => {
+        if (ignore) return;
+        setDbOnline(false);
+        setErrorMsg(`No se pudo conectar a la API ${API_BASE_URL} (${err.message})`);
+      })
+      .finally(() => {
+        if (!ignore) setLoading(false);
+      });
 
     apiFetch('/api/filters')
       .then((data) => {
+        if (ignore) return;
         if (data.ok) {
           setServiceOptions(data.servicios || []);
-          setZoneOptions(data.zonas || []);
+          setSectorOptions(data.sectores || data.zonas || []);
+          setPartnerOptions(data.partners || []);
         }
       })
       .catch((err) => console.error('Error cargando filtros desde API:', err));
+
+    return () => {
+      ignore = true;
+    };
   }, []);
 
   const calc: CalculatedMetrics = useMemo(() => {
@@ -259,6 +300,9 @@ export default function App() {
             service={service}
             globalSearch={globalSearch}
             ignoreDates={ignoreDates}
+            serviceOptions={serviceOptions}
+            sectorOptions={sectorOptions}
+            partnerOptions={partnerOptions}
             onSelectOrder={setSelectedOrder}
           />
         )}

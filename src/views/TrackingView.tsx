@@ -146,11 +146,13 @@ export function TrackingView({
       if (data.chatMeta) setChatMeta(data.chatMeta);
       if (data.ok && Array.isArray(data.messages) && data.messages.length > 0) {
         setLiveMessages(data.messages);
-        setDataSource('live_api');
+        setDataSource(data.source === 'live_api' ? 'live_api' : 'db_fallback');
         setLoadingChat(false);
         return;
       }
-    } catch (_) {}
+    } catch (err: any) {
+      console.warn('⚠️ Error al consultar chat en vivo:', err.message);
+    }
 
     setLiveMessages(null);
     setDataSource('snapshot');
@@ -159,7 +161,7 @@ export function TrackingView({
 
   useEffect(() => {
     fetchChatConversation(selectedRow);
-  }, [selectedRow?.orden_id, fetchChatConversation]);
+  }, [selectedRow, fetchChatConversation]);
 
   // Atajos de teclado: F (Expandir/Colapsar Ficha), ← / → / ↑ / ↓ (Recorrer bandeja)
   useEffect(() => {
@@ -197,7 +199,9 @@ export function TrackingView({
             : selectedRow.ultimos_mensajes_json;
         if (Array.isArray(parsed)) rawList = parsed;
         else if (parsed && Array.isArray(parsed.messages)) rawList = parsed.messages;
-      } catch (_) {}
+      } catch (parseErr: any) {
+        console.warn('⚠️ Error al parsear JSON de chat:', parseErr.message);
+      }
     }
 
     if (rawList.length === 0 && selectedRow.se_envio_wsp === 'SI') {
@@ -556,6 +560,20 @@ export function TrackingView({
                     {activeEstadoChat && (
                       <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 text-[10px] font-bold uppercase">
                         {activeEstadoChat}
+                      </span>
+                    )}
+
+                    {loadingChat ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/30 text-[10px] font-bold">
+                        <RefreshCw size={10} className="animate-spin" /> Conectando API...
+                      </span>
+                    ) : dataSource === 'live_api' ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> Mantra Live
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-medium">
+                        Histórico BD
                       </span>
                     )}
                   </div>

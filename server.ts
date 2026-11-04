@@ -31,11 +31,15 @@ const pool = mysql.createPool({
   connectionLimit: 10,
 });
 
+pool.on('error', (err) => {
+  console.error('❌ Error imprevisto en el pool de conexiones MySQL:', err.message);
+});
+
 // Variables de Capa Intermedia / API en Azure App Service
 const CAPA_INTERMEDIA_URL = (
   process.env.CAPA_INTERMEDIA_URL ||
   process.env.MANTRA_API_URL ||
-  'https://webwin-capa-service-eus.azurewebsites.net'
+  'https://webwin-api-service-eus.azurewebsites.net'
 ).replace(/\/+$/, '');
 
 const SECRET_API_KEY =
@@ -126,20 +130,28 @@ app.get('/api/filters', async (_req, res) => {
 
     if (tiposUnicosList.length === 0) await loadTipoServicioCache();
 
-    const [zonas]: any = await pool.query(`
-      SELECT DISTINCT sector_operativo AS zona
-      FROM vw_reporte_funnel_casos_360
-      WHERE fecha_solicitud_dia >= CURDATE() - INTERVAL 7 DAY
-        AND sector_operativo IS NOT NULL
-        AND sector_operativo != ''
-      ORDER BY sector_operativo
-    `);
+    const [zonas, partners]: any = await Promise.all([
+      pool.query(`
+        SELECT DISTINCT sector_operativo AS zona
+        FROM vw_reporte_funnel_casos_360
+        WHERE sector_operativo IS NOT NULL AND TRIM(sector_operativo) != ''
+        ORDER BY sector_operativo
+      `),
+      pool.query(`
+        SELECT DISTINCT COALESCE(NULLIF(TRIM(partner), ''), 'SIN PARTNER') AS partner
+        FROM vw_reporte_funnel_casos_360
+        WHERE partner IS NOT NULL AND TRIM(partner) != ''
+        ORDER BY partner
+      `),
+    ]);
 
     const todayStr = new Date().toLocaleDateString('en-CA');
     const payload = {
       ok: true,
       servicios: tiposUnicosList,
-      zonas: zonas.map((z: any) => z.zona),
+      zonas: (zonas?.[0] || []).map((z: any) => z.zona),
+      sectores: (zonas?.[0] || []).map((z: any) => z.zona),
+      partners: (partners?.[0] || []).map((p: any) => p.partner),
       dateRange: { minDate: todayStr, maxDate: todayStr },
     };
 
@@ -742,9 +754,9 @@ app.get('/api/orders/search', async (req, res) => {
         LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
         ${whereSql}
         ORDER BY v.orden_id DESC
-        LIMIT ${Number(pageSize)} OFFSET ${Number(offset)}
+        LIMIT ? OFFSET ?
         `,
-        params
+        [...params, pageSize, offset]
       ),
     ]);
 
@@ -894,9 +906,9 @@ app.get('/api/tracking/search', async (req, res) => {
         LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
         ${whereSql}
         ORDER BY (h.ultimos_mensajes_json IS NOT NULL) DESC, v.orden_id DESC
-        LIMIT ${Number(pageSize)} OFFSET ${Number(offset)}
+        LIMIT ? OFFSET ?
         `,
-        params
+        [...params, pageSize, offset]
       ),
     ]);
 
@@ -958,7 +970,9 @@ app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
           groupId = fallbackCfg[0].group_id || null;
         }
       }
-    } catch (_) {}
+    } catch (cfgErr: any) {
+      console.warn('⚠️ No se pudieron consultar credenciales dinámicas en config_plantillas_mantra:', cfgErr.message);
+    }
 
     // B. Intento en vivo contra CAPA_INTERMEDIA_URL (Azure) / API Mantra
     if (CAPA_INTERMEDIA_URL && apiKey) {
@@ -999,8 +1013,9 @@ app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
             });
           }
         }
-      } catch (_) {
+      } catch (liveErr: any) {
         clearTimeout(timeout);
+        console.warn('⚠️ Falló llamada a API Mantra en vivo:', liveErr.message);
       }
     }
 
@@ -1030,7 +1045,9 @@ app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
         } else if (parsed && Array.isArray(parsed.messages)) {
           messages = parsed.messages.slice(-limit);
         }
-      } catch (_) {}
+      } catch (parseErr: any) {
+        console.warn('⚠️ Error al parsear JSON de chat en fallback:', parseErr.message);
+      }
     }
 
     return res.json({

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Filter, ChevronDown, User, ChevronLeft, ChevronRight, RefreshCw, Check
 } from 'lucide-react';
@@ -12,6 +12,9 @@ interface OrdersViewProps {
   service: string;
   globalSearch: string;
   ignoreDates: boolean;
+  serviceOptions?: string[];
+  sectorOptions?: string[];
+  partnerOptions?: string[];
   onSelectOrder: (order: RealOrder) => void;
 }
 
@@ -22,6 +25,9 @@ export function OrdersView({
   service,
   globalSearch,
   ignoreDates,
+  serviceOptions = [],
+  sectorOptions = [],
+  partnerOptions = [],
   onSelectOrder,
 }: OrdersViewProps) {
   const [debouncedQuery, setDebouncedQuery] = useState<string>(globalSearch);
@@ -95,12 +101,19 @@ export function OrdersView({
     return () => clearTimeout(timer);
   }, [globalSearch]);
 
-  useEffect(() => {
-    setPage(1);
-  }, [colFilters, startDate, endDate, service, ignoreDates]);
+  const [prevFilterKey, setPrevFilterKey] = useState<string>('');
+  const currentFilterKey = `${startDate}_${endDate}_${service}_${ignoreDates}_${JSON.stringify(colFilters)}`;
+  if (prevFilterKey !== currentFilterKey) {
+    setPrevFilterKey(currentFilterKey);
+    if (page !== 1) setPage(1);
+  }
 
-  const fetchPaginatedOrders = useCallback(() => {
-    setLoadingPage(true);
+  useEffect(() => {
+    let ignore = false;
+    Promise.resolve().then(() => {
+      if (!ignore) setLoadingPage(true);
+    });
+
     const serializeArr = (arr: string[]) => (arr.length > 0 ? arr.join(',') : 'Todos');
 
     const params = new URLSearchParams({
@@ -123,19 +136,24 @@ export function OrdersView({
 
     apiFetch(`/api/orders/search?${params.toString()}`)
       .then((data) => {
+        if (ignore) return;
         if (data.ok && Array.isArray(data.orders)) {
           setServerOrders(data.orders);
           setTotalRecords(Number(data.total || 0));
           setTotalPages(Number(data.totalPages || 1));
         }
       })
-      .catch((err) => console.error('Error buscando órdenes en API:', err))
-      .finally(() => setLoadingPage(false));
-  }, [startDate, endDate, service, debouncedQuery, ignoreDates, colFilters, page]);
+      .catch((err) => {
+        if (!ignore) console.error('Error buscando órdenes en API:', err);
+      })
+      .finally(() => {
+        if (!ignore) setLoadingPage(false);
+      });
 
-  useEffect(() => {
-    fetchPaginatedOrders();
-  }, [fetchPaginatedOrders]);
+    return () => {
+      ignore = true;
+    };
+  }, [startDate, endDate, service, debouncedQuery, ignoreDates, colFilters, page]);
 
   const resetAllOrderFilters = () => {
     setColFilters({
@@ -155,8 +173,11 @@ export function OrdersView({
 
   const headerOptions = useMemo(() => {
     const sourceList = serverOrders.length > 0 ? serverOrders : initialOrders;
-    const countMap = (getter: (o: RealOrder) => string) => {
+    const countMap = (getter: (o: RealOrder) => string, defaultList: string[] = []) => {
       const m = new Map<string, number>();
+      defaultList.forEach((d) => {
+        if (d && d.trim()) m.set(d.trim(), 0);
+      });
       sourceList.forEach((o) => {
         const val = getter(o);
         if (val) m.set(val, (m.get(val) || 0) + 1);
@@ -165,11 +186,20 @@ export function OrdersView({
     };
 
     return {
-      operaciones: countMap((o) => String(o.servicio_tipo || '-').trim().toUpperCase()),
-      sectores: countMap((o) => String(o.sector_operativo || 'SIN SECTOR').trim()),
-      partners: countMap((o) => String(o.partner || o.proveedor_ot || 'SIN PARTNER').trim()),
+      operaciones: countMap(
+        (o) => String(o.servicio_tipo || '-').trim().toUpperCase(),
+        (serviceOptions || []).map((s) => s.toUpperCase())
+      ),
+      sectores: countMap(
+        (o) => String(o.sector_operativo || 'SIN SECTOR').trim(),
+        sectorOptions || []
+      ),
+      partners: countMap(
+        (o) => String(o.partner || o.proveedor_ot || 'SIN PARTNER').trim(),
+        partnerOptions || []
+      ),
     };
-  }, [serverOrders, initialOrders]);
+  }, [serverOrders, initialOrders, serviceOptions, sectorOptions, partnerOptions]);
 
   const displayedOrders = useMemo(() => {
     return [...serverOrders].sort((a, b) => {
