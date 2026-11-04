@@ -28,7 +28,11 @@ const pool = mysql.createPool({
   port: Number(process.env.DB_PORT) || 3306,
   ssl: { rejectUnauthorized: false },
   waitForConnections: true,
-  connectionLimit: 10,
+  connectionLimit: 15,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
+  maxIdle: 10,
+  idleTimeout: 60000,
 });
 
 pool.on('error' as never, (err: unknown) => {
@@ -257,7 +261,15 @@ app.get('/api/dashboard', async (req, res) => {
     const avListSql = DISTRITOS_ALTO_VALOR.map((d) => `'${d.trim().toUpperCase()}'`).join(',');
 
     // Consultas principales y desgloses operativos desde vw_reporte_funnel_casos_360
-    const [dailyResult, orderResult, estadoOtResult, sectorResult, productoResult]: any =
+    const [
+      dailyResult,
+      orderResult,
+      estadoOtResult,
+      sectorResult,
+      productoResult,
+      reprogResult,
+      encResult,
+    ]: any =
       await Promise.all([
         pool.query(
           `
@@ -373,60 +385,64 @@ app.get('/api/dashboard', async (req, res) => {
         `,
           [startDate, endDate, ...extraParams]
         ),
+        // 6. Consulta a vw_reprogramaciones_detalle (en paralelo)
+        pool
+          .query(
+            `
+          SELECT COUNT(*) AS total_reprog
+          FROM vw_reprogramaciones_detalle r
+          WHERE r.fecha_registro >= ? AND r.fecha_registro < DATE_ADD(?, INTERVAL 1 DAY)
+          ${reprogFilters.join(' ')}
+          `,
+            [startDate, endDate, ...reprogParams]
+          )
+          .catch((err: any) => {
+            console.warn('⚠️ Error consultando vw_reprogramaciones_detalle:', err.message);
+            return [[{ total_reprog: 0 }]];
+          }),
+        // 7. Consulta a vw_reporte_encuestas_enriquecido (en paralelo)
+        pool
+          .query(
+            `
+          SELECT 
+            TRIM(e.partner) AS partner,
+            COUNT(*) AS surveys,
+            AVG(e.satisfaccion_general + 0) AS avg_score
+          FROM vw_reporte_encuestas_enriquecido e
+          WHERE e.fecha_registro_encuesta_dia >= ? AND e.fecha_registro_encuesta_dia <= ?
+            AND e.partner IS NOT NULL AND TRIM(e.partner) != ''
+          ${encFilters.join(' ')}
+          GROUP BY TRIM(e.partner)
+          ORDER BY avg_score DESC, surveys DESC
+          `,
+            [startDate, endDate, ...encParams]
+          )
+          .catch((err: any) => {
+            console.warn('⚠️ Error consultando vw_reporte_encuestas_enriquecido:', err.message);
+            return [[]];
+          }),
       ]);
 
-    // 3. Consulta a vw_reprogramaciones_detalle
-    let totalReprogReal = 0;
-    try {
-      const [reprogRows]: any = await pool.query(
-        `
-        SELECT COUNT(*) AS total_reprog
-        FROM vw_reprogramaciones_detalle r
-        WHERE r.fecha_registro >= ? AND r.fecha_registro < DATE_ADD(?, INTERVAL 1 DAY)
-        ${reprogFilters.join(' ')}
-        `,
-        [startDate, endDate, ...reprogParams]
-      );
-      totalReprogReal = Number(reprogRows?.[0]?.total_reprog || 0);
-    } catch (errReprog: any) {
-      console.warn('⚠️ Error consultando vw_reprogramaciones_detalle:', errReprog.message);
-    }
+    // 3. Procesar reprogramaciones
+    const totalReprogReal = Number(reprogResult?.[0]?.[0]?.total_reprog || 0);
 
-    // 4. Consulta a vw_reporte_encuestas_enriquecido para KPI y Ranking de Partners
-    let totalEncuestasReal = 0;
-    let csatAvgGlobal = 0;
+    // 4. Procesar encuestas y CSAT
+    let encRows: any[] = encResult?.[0] || [];
+    let totalEncuestasReal = encRows.reduce(
+      (acc: number, r: any) => acc + Number(r.surveys || 0),
+      0
+    );
+
+    const sumPonderada = encRows.reduce(
+      (acc: number, r: any) => acc + Number(r.avg_score || 0) * Number(r.surveys || 0),
+      0
+    );
+    let csatAvgGlobal = totalEncuestasReal > 0 ? sumPonderada / totalEncuestasReal : 0;
     let partnersRanking: any[] = [];
 
-    try {
-      let [encRows]: any = await pool.query(
-        `
-        SELECT 
-          TRIM(e.partner) AS partner,
-          COUNT(*) AS surveys,
-          AVG(e.satisfaccion_general + 0) AS avg_score
-        FROM vw_reporte_encuestas_enriquecido e
-        WHERE e.fecha_registro_encuesta_dia >= ? AND e.fecha_registro_encuesta_dia <= ?
-          AND e.partner IS NOT NULL AND TRIM(e.partner) != ''
-        ${encFilters.join(' ')}
-        GROUP BY TRIM(e.partner)
-        ORDER BY avg_score DESC, surveys DESC
-        `,
-        [startDate, endDate, ...encParams]
-      );
-
-      totalEncuestasReal = (encRows || []).reduce(
-        (acc: number, r: any) => acc + Number(r.surveys || 0),
-        0
-      );
-
-      const sumPonderada = (encRows || []).reduce(
-        (acc: number, r: any) => acc + Number(r.avg_score || 0) * Number(r.surveys || 0),
-        0
-      );
-      csatAvgGlobal = totalEncuestasReal > 0 ? sumPonderada / totalEncuestasReal : 0;
-
-      // Si hoy todavía hay 0 encuestas, cargamos el Ranking de Partners de los últimos 7 días
-      if ((!encRows || encRows.length === 0) && chartStartDate < startDate) {
+    // Fallback: si hoy todavía hay 0 encuestas, cargamos últimos 7 días
+    if (encRows.length === 0 && chartStartDate < startDate) {
+      try {
         const [fallbackRows]: any = await pool.query(
           `
           SELECT 
@@ -442,8 +458,11 @@ app.get('/api/dashboard', async (req, res) => {
           `,
           [chartStartDate, endDate, ...encParams]
         );
-        encRows = fallbackRows;
+        encRows = fallbackRows || [];
+      } catch (errFallback: any) {
+        console.warn('⚠️ Error consultando fallback de encuestas:', errFallback.message);
       }
+    }
 
       partnersRanking = (encRows || []).slice(0, 6).map((r: any, idx: number) => {
         const avg = Number(r.avg_score || 0);
@@ -1095,7 +1114,41 @@ app.get(/(.*)/, (req, res, next) => {
   });
 });
 
+
+async function warmupCache() {
+  try {
+    const today = new Date().toLocaleDateString('en-CA');
+    console.log(`🔥 Precalentando catálogo y caché para: ${today}`);
+    if (tiposUnicosList.length === 0) await loadTipoServicioCache();
+    if (!queryCache.get('catalog_filters')) {
+      const [zonas, partners]: any = await Promise.all([
+        pool.query(`
+          SELECT DISTINCT sector_operativo AS zona
+          FROM vw_reporte_funnel_casos_360
+          WHERE sector_operativo IS NOT NULL AND TRIM(sector_operativo) != ''
+          ORDER BY sector_operativo
+        `),
+        pool.query(`
+          SELECT DISTINCT TRIM(partner) AS partner
+          FROM vw_reporte_encuestas_enriquecido
+          WHERE partner IS NOT NULL AND TRIM(partner) != ''
+          ORDER BY partner
+        `),
+      ]);
+      queryCache.set('catalog_filters', {
+        zonas: (zonas[0] || []).map((r: any) => r.zona).filter(Boolean),
+        partners: (partners[0] || []).map((r: any) => r.partner).filter(Boolean),
+        servicios: tiposUnicosList,
+      }, 3600);
+      console.log('🔥 Catálogo de filtros precalentado en RAM con éxito.');
+    }
+  } catch (err: any) {
+    console.warn('⚠️ Aviso durante warmup:', err.message);
+  }
+}
+
 const PORT = Number(process.env.PORT || process.env.WEBSITES_PORT || 8080);
 app.listen(PORT, () => {
   console.log(`✅ Servidor WIN en RUTA activo en puerto ${PORT} (Capa Intermedia: ${CAPA_INTERMEDIA_URL})`);
+  warmupCache().catch(() => {});
 });
