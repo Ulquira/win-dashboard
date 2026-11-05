@@ -293,7 +293,7 @@ export function TrackingView({
     }
 
     const active = hasSosFlag || msgIndex !== -1;
-    const timestampLabel =
+    const rawTs =
       rawSosDate ||
       (msgIndex !== -1
         ? parsedChatMessages[msgIndex]?.fecha_utc ||
@@ -306,9 +306,38 @@ export function TrackingView({
       active,
       hasSosFlag,
       msgIndex,
-      timestampLabel,
+      timestampLabel: formatChatDateTime(rawTs),
     };
   }, [selectedRow, parsedChatMessages]);
+
+  // Formateador homologado de Fecha y Hora (Ej: "05/11/2026 • 07:34 a. m.")
+  function formatChatDateTime(raw?: string | null): string {
+    if (!raw) return '';
+    const trimmed = String(raw).trim();
+    if (!trimmed) return '';
+
+    const parsed = new Date(trimmed);
+    if (isNaN(parsed.getTime())) {
+      // Si ya viene como "DD/MM/YYYY HH:mm", limpiamos milisegundos/Z si existieran
+      return trimmed.replace('T', ' ').replace(/\.\d+Z?$/, '');
+    }
+
+    const fecha = parsed.toLocaleDateString('es-PE', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      timeZone: 'America/Lima',
+    });
+
+    const hora = parsed.toLocaleTimeString('es-PE', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: 'America/Lima',
+    });
+
+    return `${fecha} • ${hora}`;
+  }
 
   const activeTurno =
     chatMeta?.quien_tiene_la_palabra ||
@@ -686,7 +715,7 @@ export function TrackingView({
                       className="inline-flex items-center gap-1 text-sky-700 hover:text-sky-900 font-bold transition"
                       title="Copiar Cód.Segui"
                     >
-                      <span>Cód.Segui: {selectedRow.codi_segui_ot || selectedRow.ticket || '-'}</span>
+                      <span>Codigo: {selectedRow.codi_segui_ot || selectedRow.ticket || '-'}</span>
                       {copiedCode ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
                     </button>
                   </div>
@@ -792,7 +821,7 @@ export function TrackingView({
                       Boolean(msg.es_plantilla) ||
                       /enruta\.win\.pe|confirmaci[oó]n de visita|plantilla preaprobada|\|\s*\[/i.test(textContent));
 
-                  const timeLabel = msg.fecha_utc || msg.fecha || msg.timestamp || '';
+                  const timeLabel = formatChatDateTime(msg.fecha_utc || msg.fecha || msg.timestamp || '');
                   const showSosMilestoneHere = sosTimelineInfo.active && sosTimelineInfo.msgIndex === idx;
 
                   const sosMilestoneBanner = showSosMilestoneHere ? (
@@ -800,7 +829,7 @@ export function TrackingView({
                       <div className="flex-1 h-px bg-gradient-to-r from-transparent via-rose-300 to-rose-400" />
                       <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-rose-50 border border-rose-200 text-rose-800 text-[11px] font-extrabold shadow-xs">
                         <LifeBuoy size={13} className="text-rose-600 animate-pulse shrink-0" />
-                        <span>CLIENTE PULSÓ BOTÓN SOS / SOPORTE EN TRACKING</span>
+                        <span>SOPORTE TRACKING</span>
                         {sosTimelineInfo.timestampLabel && (
                           <span className="text-[10px] font-semibold text-rose-600 bg-white px-2 py-0.5 rounded-full border border-rose-200">
                             {sosTimelineInfo.timestampLabel}
