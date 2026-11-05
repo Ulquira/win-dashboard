@@ -113,8 +113,8 @@ export function OrderGeoMap({ order }: { order: RealOrder }) {
       mapStyle === 'google_streets'
         ? 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}'
         : mapStyle === 'google_hybrid'
-        ? 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'
-        : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+          ? 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'
+          : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
 
     L.tileLayer(tileUrl, { maxZoom: 20 }).addTo(map);
 
@@ -162,11 +162,10 @@ export function OrderGeoMap({ order }: { order: RealOrder }) {
             <span style="font-size: 14px; line-height: 1;">${emoji}</span>
             <div style="display: flex; flex-direction: column; line-height: 1.15;">
               <span style="font-weight: 800; font-size: 11px; color: #FFFFFF; white-space: nowrap;">${pt.label}</span>
-              ${
-                pt.kind === 'cto' && pt.detail
-                  ? `<span style="font-weight: 600; font-size: 9.5px; color: ${subTextColor}; white-space: nowrap;">${pt.detail.replace('Código: ', '')}</span>`
-                  : ''
-              }
+              ${pt.kind === 'cto' && pt.detail
+            ? `<span style="font-weight: 600; font-size: 9.5px; color: ${subTextColor}; white-space: nowrap;">${pt.detail.replace('Código: ', '')}</span>`
+            : ''
+          }
             </div>
             <div style="
               position: absolute;
@@ -226,40 +225,36 @@ export function OrderGeoMap({ order }: { order: RealOrder }) {
   }, [points, mapStyle]);
 
   return (
-    <div className="bg-[#111827]/95 border border-gray-800 rounded-xl p-4 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-800 pb-2.5">
+    <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3 shadow-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
         <div>
-          <h4 className="text-xs font-bold uppercase tracking-wider text-white flex items-center gap-2">
-            <MapPin size={15} className="text-[#FF6B00]" />
+          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+            <MapPin size={15} className="text-[#FF5500]" />
             Mapa de Georreferencia (Cliente, Técnico y CTOs)
           </h4>
-          <p className="text-[11px] text-gray-400 mt-0.5">
+          <p className="text-[11px] text-slate-500 mt-0.5">
             Ubicación espacial de cajas terminales ópticas (CTO), domicilio y técnico asignado
           </p>
         </div>
-
-        <div className="flex items-center gap-1 bg-[#090D16] p-1 rounded-lg border border-gray-800 text-[10px]">
+        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 text-[10px]">
           <button
             onClick={() => setMapStyle('google_streets')}
-            className={`px-2 py-1 rounded font-semibold transition ${
-              mapStyle === 'google_streets' ? 'bg-[#FF6B00] text-white' : 'text-gray-400 hover:text-white'
-            }`}
+            className={`px-2.5 py-1 rounded-lg font-bold transition ${mapStyle === 'google_streets' ? 'bg-[#FF5500] text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
           >
             Google Calles
           </button>
           <button
             onClick={() => setMapStyle('google_hybrid')}
-            className={`px-2 py-1 rounded font-semibold transition ${
-              mapStyle === 'google_hybrid' ? 'bg-[#FF6B00] text-white' : 'text-gray-400 hover:text-white'
-            }`}
+            className={`px-2.5 py-1 rounded-lg font-bold transition ${mapStyle === 'google_hybrid' ? 'bg-[#FF5500] text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
           >
             Satélite
           </button>
           <button
             onClick={() => setMapStyle('dark')}
-            className={`px-2 py-1 rounded font-semibold transition ${
-              mapStyle === 'dark' ? 'bg-[#FF6B00] text-white' : 'text-gray-400 hover:text-white'
-            }`}
+            className={`px-2.5 py-1 rounded-lg font-bold transition ${mapStyle === 'dark' ? 'bg-[#FF5500] text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
           >
             Oscuro
           </button>
@@ -271,10 +266,10 @@ export function OrderGeoMap({ order }: { order: RealOrder }) {
           {attributes.map((attr, idx) => (
             <div
               key={idx}
-              className="px-2.5 py-1 rounded-lg bg-[#090D16] border border-gray-800 text-[11px] flex items-center gap-1.5"
+              className="px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-[11px] flex items-center gap-1.5"
             >
-              <span className="text-gray-400 font-semibold">{attr.key}:</span>
-              <span className="text-amber-300 font-bold">{attr.value}</span>
+              <span className="text-slate-500 font-semibold">{attr.key}:</span>
+              <span className="text-[#FF5500] font-bold">{attr.value}</span>
             </div>
           ))}
         </div>
@@ -284,29 +279,27 @@ export function OrderGeoMap({ order }: { order: RealOrder }) {
         <>
           <div
             ref={mapContainerRef}
-            className="w-full h-72 rounded-xl overflow-hidden border border-gray-700/80 z-0"
+            className="w-full h-72 rounded-xl overflow-hidden border border-slate-200 z-0"
           />
-
-          <div className="grid grid-cols-3 gap-2 pt-1">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
             {points.map((pt) => {
               const badgeColor =
                 pt.kind === 'cliente'
-                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100/70'
                   : pt.kind === 'tecnico'
-                  ? 'border-blue-500/40 bg-blue-500/10 text-blue-300'
-                  : 'border-orange-500/40 bg-[#FF6B00]/10 text-amber-300';
-
+                    ? 'border-sky-200 bg-sky-50 text-sky-800 hover:bg-sky-100/70'
+                    : 'border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100/70';
               return (
                 <a
                   key={pt.id}
                   href={`https://www.google.com/maps?q=${pt.lat},${pt.lng}`}
                   target="_blank"
                   rel="noreferrer"
-                  className={`p-2 rounded-lg border ${badgeColor} hover:brightness-125 transition flex items-center justify-between text-[11px]`}
+                  className={`p-2.5 rounded-xl border ${badgeColor} transition flex items-center justify-between text-[11px]`}
                 >
                   <div className="truncate pr-1">
-                    <div className="font-bold text-white flex items-center gap-1">
-                      <span>{pt.kind === 'cliente' ? '🏠' : pt.kind === 'tecnico' ? '🚐' : '📦'}</span>
+                    <div className="font-bold text-slate-900 flex items-center gap-1">
+                      <span>{pt.kind === 'cliente' ? '🏠' : pt.kind === 'tecnico' ? '🚐' : '🔌'}</span>
                       <span>{pt.label}</span>
                     </div>
                     <div className="text-[10px] opacity-80 truncate">{pt.detail}</div>
@@ -318,7 +311,7 @@ export function OrderGeoMap({ order }: { order: RealOrder }) {
           </div>
         </>
       ) : (
-        <div className="py-8 text-center text-xs text-gray-500 bg-[#090D16]/60 rounded-xl border border-gray-800/60">
+        <div className="py-8 text-center text-xs text-slate-500 bg-slate-50 rounded-xl border border-slate-200/80">
           Esta orden no registra coordenadas geográficas en Datos Técnicos ni en Georeferencia.
         </div>
       )}

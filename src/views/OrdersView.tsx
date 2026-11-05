@@ -216,26 +216,26 @@ export function OrdersView({
 
   return (
     <div
-      className="bg-[#111827]/90 border border-gray-800 rounded-xl p-4 space-y-3"
+      className="bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-4 sm:p-5 space-y-3"
       onClick={() => setOpenHeaderCol(null)}
     >
-      {/* BARRA COMPACTA DE PAGINACIÓN Y ESTADO DE REGISTROS (SIN ENCABEZADO REDUNDANTE) */}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs bg-[#090D16]/70 border border-gray-800/80 rounded-lg px-3 py-2">
-        <div className="flex flex-wrap items-center gap-2 text-[11px] text-gray-300">
-          <span className="px-2.5 py-0.5 rounded-full bg-[#FF6B00]/15 text-[#FF6B00] border border-[#FF6B00]/30 font-bold">
+      {/* BARRA COMPACTA DE PAGINACIÓN Y ESTADO DE REGISTROS */}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs bg-slate-50 border border-slate-200/80 rounded-xl px-3.5 py-2.5">
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600">
+          <span className="px-2.5 py-0.5 rounded-full bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-bold">
             {totalRecords.toLocaleString('es-PE')} registros
           </span>
-          <span className="text-gray-500">•</span>
+          <span className="text-slate-300">•</span>
           <span>
-            Mostrando <strong className="text-white">{startIdx}–{endIdx}</strong> (Página{' '}
-            <strong className="text-white">{page}</strong> de{' '}
-            <strong className="text-white">{totalPages.toLocaleString('es-PE')}</strong>)
+            Mostrando <strong className="text-slate-900">{startIdx}–{endIdx}</strong> (Página{' '}
+            <strong className="text-slate-900">{page}</strong> de{' '}
+            <strong className="text-slate-900">{totalPages.toLocaleString('es-PE')}</strong>)
           </span>
-          {loadingPage && <RefreshCw size={13} className="text-[#FF6B00] animate-spin ml-1" />}
+          {loadingPage && <RefreshCw size={13} className="text-[#FF5500] animate-spin ml-1" />}
           {activeColFilterCount > 0 && (
             <button
               onClick={resetAllOrderFilters}
-              className="ml-2 px-2.5 py-0.5 rounded bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-semibold transition text-[11px]"
+              className="ml-2 px-2.5 py-0.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold transition text-[11px]"
             >
               ✕ Limpiar filtros de columna ({activeColFilterCount})
             </button>
@@ -246,28 +246,28 @@ export function OrdersView({
           <button
             onClick={() => setPage(1)}
             disabled={page <= 1 || loadingPage}
-            className="px-2 py-1 rounded bg-[#111827] border border-gray-700 text-gray-300 hover:text-white disabled:opacity-40 text-[11px] font-semibold"
+            className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50 disabled:opacity-40 text-[11px] font-semibold transition"
           >
             « Primera
           </button>
           <button
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page <= 1 || loadingPage}
-            className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#111827] border border-gray-700 text-gray-200 hover:bg-[#FF6B00] hover:text-white disabled:opacity-40 text-[11px] font-semibold transition"
+            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-[#FF5500] hover:border-[#FF5500] hover:text-white disabled:opacity-40 text-[11px] font-semibold transition"
           >
             <ChevronLeft size={13} /> Anterior
           </button>
           <button
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             disabled={page >= totalPages || loadingPage}
-            className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#111827] border border-gray-700 text-gray-200 hover:bg-[#FF6B00] hover:text-white disabled:opacity-40 text-[11px] font-semibold transition"
+            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-[#FF5500] hover:border-[#FF5500] hover:text-white disabled:opacity-40 text-[11px] font-semibold transition"
           >
             Siguiente <ChevronRight size={13} />
           </button>
           <button
             onClick={() => setPage(totalPages)}
             disabled={page >= totalPages || loadingPage}
-            className="px-2 py-1 rounded bg-[#111827] border border-gray-700 text-gray-300 hover:text-white disabled:opacity-40 text-[11px] font-semibold"
+            className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50 disabled:opacity-40 text-[11px] font-semibold transition"
           >
             Última »
           </button>
@@ -277,36 +277,35 @@ export function OrdersView({
       {/* TABLA CON CABECERAS MULTISELECCIÓN */}
       <div className="overflow-x-auto min-h-[420px] max-h-[700px]">
         <table className="w-full text-xs border-collapse">
-          <thead className="sticky top-0 bg-[#111827] z-20 shadow-md">
-            <tr className="text-gray-300 border-b border-gray-800 text-[10px] uppercase tracking-wider select-none">
+          <thead className="sticky top-0 bg-white z-20 shadow-[0_1px_0_0_#f1f5f9]">
+            <tr className="text-slate-500 border-b border-slate-200 text-[10px] font-bold uppercase tracking-wider select-none">
               <th className="py-2.5 px-2 text-left whitespace-nowrap relative">
                 <div
                   onClick={(e) => {
                     e.stopPropagation();
                     setOpenHeaderCol(openHeaderCol === 'orden' ? null : 'orden');
                   }}
-                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer transition ${
-                    colFilters.orden
-                      ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/40 font-extrabold'
-                      : 'hover:bg-gray-800/80'
-                  }`}
+                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer transition ${colFilters.orden
+                      ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
+                      : 'hover:bg-slate-100'
+                    }`}
                 >
                   <span>N° Orden / Ticket</span>
-                  <Filter size={11} className={colFilters.orden ? 'text-[#FF6B00]' : 'text-gray-500'} />
+                  <Filter size={11} className={colFilters.orden ? 'text-[#FF5500]' : 'text-slate-400'} />
                 </div>
                 {openHeaderCol === 'orden' && (
                   <div
                     onClick={(e) => e.stopPropagation()}
-                    className="absolute left-0 mt-1.5 w-60 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-3 z-30 space-y-2.5 normal-case font-normal"
+                    className="absolute left-0 mt-1.5 w-60 bg-white border border-slate-200 rounded-2xl shadow-xl p-3 z-30 space-y-2.5 normal-case font-normal"
                   >
-                    <div className="text-[11px] font-bold text-white">Filtrar N° Orden o Ticket</div>
+                    <div className="text-[11px] font-bold text-slate-800">Filtrar N° Orden o Ticket</div>
                     <input
                       type="text"
                       autoFocus
                       placeholder="Ej: 3575583 o VTR..."
                       value={colFilters.orden}
                       onChange={(e) => setColFilters({ ...colFilters, orden: e.target.value })}
-                      className="w-full bg-[#111827] border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-[#FF6B00]"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-[#FF5500]"
                     />
                   </div>
                 )}
@@ -320,28 +319,27 @@ export function OrdersView({
                     e.stopPropagation();
                     setOpenHeaderCol(openHeaderCol === 'cliente' ? null : 'cliente');
                   }}
-                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer transition ${
-                    colFilters.cliente
-                      ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/40 font-extrabold'
-                      : 'hover:bg-gray-800/80'
-                  }`}
+                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer transition ${colFilters.cliente
+                      ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
+                      : 'hover:bg-slate-100'
+                    }`}
                 >
                   <span>Cliente / Doc. / Cód. Seg.</span>
-                  <Filter size={11} className={colFilters.cliente ? 'text-[#FF6B00]' : 'text-gray-500'} />
+                  <Filter size={11} className={colFilters.cliente ? 'text-[#FF5500]' : 'text-slate-400'} />
                 </div>
                 {openHeaderCol === 'cliente' && (
                   <div
                     onClick={(e) => e.stopPropagation()}
-                    className="absolute left-0 mt-1.5 w-64 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-3 z-30 space-y-2.5 normal-case font-normal"
+                    className="absolute left-0 mt-1.5 w-64 bg-white border border-slate-200 rounded-2xl shadow-xl p-3 z-30 space-y-2.5 normal-case font-normal"
                   >
-                    <div className="text-[11px] font-bold text-white">Filtrar Cliente, DNI o Teléfono</div>
+                    <div className="text-[11px] font-bold text-slate-800">Filtrar Cliente, DNI o Teléfono</div>
                     <input
                       type="text"
                       autoFocus
                       placeholder="Nombre, DNI, Cód.Clie o Celular..."
                       value={colFilters.cliente}
                       onChange={(e) => setColFilters({ ...colFilters, cliente: e.target.value })}
-                      className="w-full bg-[#111827] border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-[#FF6B00]"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-[#FF5500]"
                     />
                   </div>
                 )}
@@ -354,15 +352,14 @@ export function OrdersView({
                     e.stopPropagation();
                     setOpenHeaderCol(openHeaderCol === 'operacion' ? null : 'operacion');
                   }}
-                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer transition ${
-                    colFilters.operacion.length > 0
-                      ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/40 font-extrabold'
-                      : 'hover:bg-gray-800/80'
-                  }`}
+                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer transition ${colFilters.operacion.length > 0
+                      ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
+                      : 'hover:bg-slate-100'
+                    }`}
                 >
                   <span>Operación / Producto</span>
                   {colFilters.operacion.length > 0 && (
-                    <span className="px-1.5 rounded-full bg-[#FF6B00] text-white text-[9px]">
+                    <span className="px-1.5 rounded-full bg-[#FF5500] text-white text-[9px]">
                       {colFilters.operacion.length}
                     </span>
                   )}
@@ -371,13 +368,12 @@ export function OrdersView({
                 {openHeaderCol === 'operacion' && (
                   <div
                     onClick={(e) => e.stopPropagation()}
-                    className="absolute left-0 mt-1.5 w-56 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-2 z-30 normal-case font-normal max-h-64 overflow-y-auto"
+                    className="absolute left-0 mt-1.5 w-56 bg-white border border-slate-200 rounded-2xl shadow-xl p-2 z-30 normal-case font-normal max-h-64 overflow-y-auto"
                   >
                     <div
                       onClick={() => setColFilters({ ...colFilters, operacion: [] })}
-                      className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs ${
-                        colFilters.operacion.length === 0 ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'
-                      }`}
+                      className={`px-2.5 py-1.5 rounded-xl cursor-pointer flex justify-between text-xs ${colFilters.operacion.length === 0 ? 'bg-[#FF5500] text-white font-bold' : 'text-slate-700 hover:bg-slate-50'
+                        }`}
                     >
                       <span>Todas las operaciones</span>
                     </div>
@@ -387,14 +383,13 @@ export function OrdersView({
                         <div
                           key={val}
                           onClick={() => toggleMultiFilter('operacion', val)}
-                          className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center justify-between text-xs mt-0.5 ${
-                            active ? 'bg-[#FF6B00]/20 text-white font-bold border border-[#FF6B00]/40' : 'text-gray-300 hover:bg-gray-800'
-                          }`}
+                          className={`px-2.5 py-1.5 rounded-xl cursor-pointer flex items-center justify-between text-xs mt-0.5 ${active ? 'bg-[#FFF0E5] text-[#FF5500] font-bold' : 'text-slate-700 hover:bg-slate-50'
+                            }`}
                         >
                           <span className="truncate pr-2">{val}</span>
                           <div className="flex items-center gap-1.5">
                             <span className="text-[10px] opacity-75">{cnt}</span>
-                            {active && <Check size={12} className="text-[#FF6B00]" />}
+                            {active && <Check size={12} className="text-[#FF5500]" />}
                           </div>
                         </div>
                       );
@@ -410,15 +405,14 @@ export function OrdersView({
                     e.stopPropagation();
                     setOpenHeaderCol(openHeaderCol === 'sector' ? null : 'sector');
                   }}
-                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer transition ${
-                    colFilters.sector.length > 0
-                      ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/40 font-extrabold'
-                      : 'hover:bg-gray-800/80'
-                  }`}
+                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer transition ${colFilters.sector.length > 0
+                      ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
+                      : 'hover:bg-slate-100'
+                    }`}
                 >
                   <span>Sector / Distrito</span>
                   {colFilters.sector.length > 0 && (
-                    <span className="px-1.5 rounded-full bg-[#FF6B00] text-white text-[9px]">
+                    <span className="px-1.5 rounded-full bg-[#FF5500] text-white text-[9px]">
                       {colFilters.sector.length}
                     </span>
                   )}
@@ -427,13 +421,12 @@ export function OrdersView({
                 {openHeaderCol === 'sector' && (
                   <div
                     onClick={(e) => e.stopPropagation()}
-                    className="absolute left-0 mt-1.5 w-60 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-2 z-30 normal-case font-normal max-h-72 overflow-y-auto"
+                    className="absolute left-0 mt-1.5 w-60 bg-white border border-slate-200 rounded-2xl shadow-xl p-2 z-30 normal-case font-normal max-h-72 overflow-y-auto"
                   >
                     <div
                       onClick={() => setColFilters({ ...colFilters, sector: [] })}
-                      className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs ${
-                        colFilters.sector.length === 0 ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'
-                      }`}
+                      className={`px-2.5 py-1.5 rounded-xl cursor-pointer flex justify-between text-xs ${colFilters.sector.length === 0 ? 'bg-[#FF5500] text-white font-bold' : 'text-slate-700 hover:bg-slate-50'
+                        }`}
                     >
                       <span>Todos los sectores</span>
                     </div>
@@ -443,14 +436,13 @@ export function OrdersView({
                         <div
                           key={val}
                           onClick={() => toggleMultiFilter('sector', val)}
-                          className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center justify-between text-xs mt-0.5 ${
-                            active ? 'bg-[#FF6B00]/20 text-white font-bold border border-[#FF6B00]/40' : 'text-gray-300 hover:bg-gray-800'
-                          }`}
+                          className={`px-2.5 py-1.5 rounded-xl cursor-pointer flex items-center justify-between text-xs mt-0.5 ${active ? 'bg-[#FFF0E5] text-[#FF5500] font-bold' : 'text-slate-700 hover:bg-slate-50'
+                            }`}
                         >
                           <span className="truncate pr-2">{val}</span>
                           <div className="flex items-center gap-1.5">
                             <span className="text-[10px] opacity-75">{cnt}</span>
-                            {active && <Check size={12} className="text-[#FF6B00]" />}
+                            {active && <Check size={12} className="text-[#FF5500]" />}
                           </div>
                         </div>
                       );
@@ -466,15 +458,14 @@ export function OrdersView({
                     e.stopPropagation();
                     setOpenHeaderCol(openHeaderCol === 'partner' ? null : 'partner');
                   }}
-                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer transition ${
-                    colFilters.partner.length > 0
-                      ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/40 font-extrabold'
-                      : 'hover:bg-gray-800/80'
-                  }`}
+                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer transition ${colFilters.partner.length > 0
+                      ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
+                      : 'hover:bg-slate-100'
+                    }`}
                 >
                   <span>Partner / Cuadrilla</span>
                   {colFilters.partner.length > 0 && (
-                    <span className="px-1.5 rounded-full bg-[#FF6B00] text-white text-[9px]">
+                    <span className="px-1.5 rounded-full bg-[#FF5500] text-white text-[9px]">
                       {colFilters.partner.length}
                     </span>
                   )}
@@ -483,13 +474,12 @@ export function OrdersView({
                 {openHeaderCol === 'partner' && (
                   <div
                     onClick={(e) => e.stopPropagation()}
-                    className="absolute left-0 mt-1.5 w-60 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-2 z-30 normal-case font-normal max-h-72 overflow-y-auto"
+                    className="absolute left-0 mt-1.5 w-60 bg-white border border-slate-200 rounded-2xl shadow-xl p-2 z-30 normal-case font-normal max-h-72 overflow-y-auto"
                   >
                     <div
                       onClick={() => setColFilters({ ...colFilters, partner: [] })}
-                      className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs ${
-                        colFilters.partner.length === 0 ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'
-                      }`}
+                      className={`px-2.5 py-1.5 rounded-xl cursor-pointer flex justify-between text-xs ${colFilters.partner.length === 0 ? 'bg-[#FF5500] text-white font-bold' : 'text-slate-700 hover:bg-slate-50'
+                        }`}
                     >
                       <span>Todos los partners</span>
                     </div>
@@ -499,14 +489,13 @@ export function OrdersView({
                         <div
                           key={val}
                           onClick={() => toggleMultiFilter('partner', val)}
-                          className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center justify-between text-xs mt-0.5 ${
-                            active ? 'bg-[#FF6B00]/20 text-white font-bold border border-[#FF6B00]/40' : 'text-gray-300 hover:bg-gray-800'
-                          }`}
+                          className={`px-2.5 py-1.5 rounded-xl cursor-pointer flex items-center justify-between text-xs mt-0.5 ${active ? 'bg-[#FFF0E5] text-[#FF5500] font-bold' : 'text-slate-700 hover:bg-slate-50'
+                            }`}
                         >
                           <span className="truncate pr-2">{val}</span>
                           <div className="flex items-center gap-1.5">
                             <span className="text-[10px] opacity-75">{cnt}</span>
-                            {active && <Check size={12} className="text-[#FF6B00]" />}
+                            {active && <Check size={12} className="text-[#FF5500]" />}
                           </div>
                         </div>
                       );
@@ -522,15 +511,14 @@ export function OrdersView({
                     e.stopPropagation();
                     setOpenHeaderCol(openHeaderCol === 'estadoOt' ? null : 'estadoOt');
                   }}
-                  className={`inline-flex items-center gap-1 px-2 py-1 rounded cursor-pointer transition ${
-                    colFilters.estadoOt.length > 0
-                      ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/40 font-extrabold'
-                      : 'hover:bg-gray-800/80'
-                  }`}
+                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg cursor-pointer transition ${colFilters.estadoOt.length > 0
+                      ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
+                      : 'hover:bg-slate-100'
+                    }`}
                 >
                   <span>Estado OT</span>
                   {colFilters.estadoOt.length > 0 && (
-                    <span className="px-1.5 rounded-full bg-[#FF6B00] text-white text-[9px]">
+                    <span className="px-1.5 rounded-full bg-[#FF5500] text-white text-[9px]">
                       {colFilters.estadoOt.length}
                     </span>
                   )}
@@ -539,13 +527,12 @@ export function OrdersView({
                 {openHeaderCol === 'estadoOt' && (
                   <div
                     onClick={(e) => e.stopPropagation()}
-                    className="absolute right-0 mt-1.5 w-48 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-2 z-30 normal-case font-normal text-left max-h-64 overflow-y-auto"
+                    className="absolute right-0 mt-1.5 w-48 bg-white border border-slate-200 rounded-2xl shadow-xl p-2 z-30 normal-case font-normal text-left max-h-64 overflow-y-auto"
                   >
                     <div
                       onClick={() => setColFilters({ ...colFilters, estadoOt: [] })}
-                      className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs ${
-                        colFilters.estadoOt.length === 0 ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'
-                      }`}
+                      className={`px-2.5 py-1.5 rounded-xl cursor-pointer flex justify-between text-xs ${colFilters.estadoOt.length === 0 ? 'bg-[#FF5500] text-white font-bold' : 'text-slate-700 hover:bg-slate-50'
+                        }`}
                     >
                       <span>Todos</span>
                     </div>
@@ -555,12 +542,11 @@ export function OrdersView({
                         <div
                           key={val}
                           onClick={() => toggleMultiFilter('estadoOt', val)}
-                          className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center justify-between text-xs mt-0.5 ${
-                            active ? 'bg-[#FF6B00]/20 text-white font-bold border border-[#FF6B00]/40' : 'text-gray-300 hover:bg-gray-800'
-                          }`}
+                          className={`px-2.5 py-1.5 rounded-xl cursor-pointer flex items-center justify-between text-xs mt-0.5 ${active ? 'bg-[#FFF0E5] text-[#FF5500] font-bold' : 'text-slate-700 hover:bg-slate-50'
+                            }`}
                         >
                           <span>{val}</span>
-                          {active && <Check size={12} className="text-[#FF6B00]" />}
+                          {active && <Check size={12} className="text-[#FF5500]" />}
                         </div>
                       );
                     })}
@@ -575,15 +561,14 @@ export function OrdersView({
                     e.stopPropagation();
                     setOpenHeaderCol(openHeaderCol === 'wsp' ? null : 'wsp');
                   }}
-                  className={`inline-flex items-center gap-1 px-2 py-1 rounded cursor-pointer transition ${
-                    colFilters.wsp.length > 0
-                      ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/40 font-extrabold'
-                      : 'hover:bg-gray-800/80'
-                  }`}
+                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg cursor-pointer transition ${colFilters.wsp.length > 0
+                      ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
+                      : 'hover:bg-slate-100'
+                    }`}
                 >
                   <span>WhatsApp</span>
                   {colFilters.wsp.length > 0 && (
-                    <span className="px-1.5 rounded-full bg-[#FF6B00] text-white text-[9px]">
+                    <span className="px-1.5 rounded-full bg-[#FF5500] text-white text-[9px]">
                       {colFilters.wsp.length}
                     </span>
                   )}
@@ -592,13 +577,12 @@ export function OrdersView({
                 {openHeaderCol === 'wsp' && (
                   <div
                     onClick={(e) => e.stopPropagation()}
-                    className="absolute right-0 mt-1.5 w-48 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-2 z-30 normal-case font-normal text-left"
+                    className="absolute right-0 mt-1.5 w-48 bg-white border border-slate-200 rounded-2xl shadow-xl p-2 z-30 normal-case font-normal text-left"
                   >
                     <div
                       onClick={() => setColFilters({ ...colFilters, wsp: [] })}
-                      className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs ${
-                        colFilters.wsp.length === 0 ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'
-                      }`}
+                      className={`px-2.5 py-1.5 rounded-xl cursor-pointer flex justify-between text-xs ${colFilters.wsp.length === 0 ? 'bg-[#FF5500] text-white font-bold' : 'text-slate-700 hover:bg-slate-50'
+                        }`}
                     >
                       <span>Todos</span>
                     </div>
@@ -608,12 +592,11 @@ export function OrdersView({
                         <div
                           key={val}
                           onClick={() => toggleMultiFilter('wsp', val)}
-                          className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center justify-between text-xs mt-0.5 ${
-                            active ? 'bg-[#FF6B00]/20 text-white font-bold border border-[#FF6B00]/40' : 'text-gray-300 hover:bg-gray-800'
-                          }`}
+                          className={`px-2.5 py-1.5 rounded-xl cursor-pointer flex items-center justify-between text-xs mt-0.5 ${active ? 'bg-[#FFF0E5] text-[#FF5500] font-bold' : 'text-slate-700 hover:bg-slate-50'
+                            }`}
                         >
                           <span>{val}</span>
-                          {active && <Check size={12} className="text-[#FF6B00]" />}
+                          {active && <Check size={12} className="text-[#FF5500]" />}
                         </div>
                       );
                     })}
@@ -628,15 +611,14 @@ export function OrdersView({
                     e.stopPropagation();
                     setOpenHeaderCol(openHeaderCol === 'tracking' ? null : 'tracking');
                   }}
-                  className={`inline-flex items-center gap-1 px-2 py-1 rounded cursor-pointer transition ${
-                    colFilters.tracking.length > 0
-                      ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/40 font-extrabold'
-                      : 'hover:bg-gray-800/80'
-                  }`}
+                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg cursor-pointer transition ${colFilters.tracking.length > 0
+                      ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
+                      : 'hover:bg-slate-100'
+                    }`}
                 >
                   <span>Tracking</span>
                   {colFilters.tracking.length > 0 && (
-                    <span className="px-1.5 rounded-full bg-[#FF6B00] text-white text-[9px]">
+                    <span className="px-1.5 rounded-full bg-[#FF5500] text-white text-[9px]">
                       {colFilters.tracking.length}
                     </span>
                   )}
@@ -645,13 +627,12 @@ export function OrdersView({
                 {openHeaderCol === 'tracking' && (
                   <div
                     onClick={(e) => e.stopPropagation()}
-                    className="absolute right-0 mt-1.5 w-44 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-2 z-30 normal-case font-normal text-left"
+                    className="absolute right-0 mt-1.5 w-44 bg-white border border-slate-200 rounded-2xl shadow-xl p-2 z-30 normal-case font-normal text-left"
                   >
                     <div
                       onClick={() => setColFilters({ ...colFilters, tracking: [] })}
-                      className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex justify-between text-xs ${
-                        colFilters.tracking.length === 0 ? 'bg-[#FF6B00] text-white font-bold' : 'text-gray-300 hover:bg-gray-800'
-                      }`}
+                      className={`px-2.5 py-1.5 rounded-xl cursor-pointer flex justify-between text-xs ${colFilters.tracking.length === 0 ? 'bg-[#FF5500] text-white font-bold' : 'text-slate-700 hover:bg-slate-50'
+                        }`}
                     >
                       <span>Todos</span>
                     </div>
@@ -661,12 +642,11 @@ export function OrdersView({
                         <div
                           key={val}
                           onClick={() => toggleMultiFilter('tracking', val)}
-                          className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center justify-between text-xs mt-0.5 ${
-                            active ? 'bg-[#FF6B00]/20 text-white font-bold border border-[#FF6B00]/40' : 'text-gray-300 hover:bg-gray-800'
-                          }`}
+                          className={`px-2.5 py-1.5 rounded-xl cursor-pointer flex items-center justify-between text-xs mt-0.5 ${active ? 'bg-[#FFF0E5] text-[#FF5500] font-bold' : 'text-slate-700 hover:bg-slate-50'
+                            }`}
                         >
                           <span>{val}</span>
-                          {active && <Check size={12} className="text-[#FF6B00]" />}
+                          {active && <Check size={12} className="text-[#FF5500]" />}
                         </div>
                       );
                     })}
@@ -676,29 +656,29 @@ export function OrdersView({
             </tr>
           </thead>
 
-          <tbody className="divide-y divide-gray-800/60">
+          <tbody className="divide-y divide-slate-100">
             {displayedOrders.map((o) => {
               const stOtLower = String(o.estado_ot || '').toLowerCase();
               const otBadge =
                 stOtLower.includes('iniciada') || stOtLower.includes('finalizada')
-                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
                   : stOtLower.includes('agendada')
-                  ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
-                  : stOtLower.includes('cancel') || stOtLower.includes('anul')
-                  ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
-                  : 'bg-amber-500/15 text-amber-300 border-amber-500/30';
+                    ? 'bg-sky-100 text-sky-800 border-sky-200'
+                    : stOtLower.includes('cancel') || stOtLower.includes('anul')
+                      ? 'bg-rose-100 text-rose-800 border-rose-200'
+                      : 'bg-amber-100 text-amber-800 border-amber-200';
 
               const stWspLower = String(o.estado_wsp || '').toLowerCase();
               const wspLabel =
                 stWspLower === 'read'
                   ? 'LEÍDO'
                   : stWspLower.includes('deliver')
-                  ? 'ENTREGADO'
-                  : stWspLower === 'sent'
-                  ? 'ENVIADO'
-                  : stWspLower === 'failed'
-                  ? 'FALLIDO'
-                  : 'NO ENVIADO';
+                    ? 'ENTREGADO'
+                    : stWspLower === 'sent'
+                      ? 'ENVIADO'
+                      : stWspLower === 'failed'
+                        ? 'FALLIDO'
+                        : 'NO ENVIADO';
 
               const docCliente = o.numero_documento || '-';
               const codSegui = o.codi_segui_clien || o.codi_clien || '-';
@@ -712,73 +692,71 @@ export function OrdersView({
                     if (selection && selection.length > 0) return;
                     onSelectOrder(o);
                   }}
-                  className="hover:bg-[#FF6B00]/10 cursor-pointer transition group"
+                  className="hover:bg-[#FFF0E5]/50 cursor-pointer transition group"
                 >
-                  <td className="py-2 px-2 whitespace-nowrap">
-                    <div className="font-extrabold text-[#FF6B00] group-hover:underline">#{o.orden_id}</div>
-                    <div className="text-[10px] text-gray-400">{o.ticket || o.codi_segui_ot || 'Sin ticket'}</div>
+                  <td className="py-2.5 px-2 whitespace-nowrap">
+                    <div className="font-extrabold text-[#FF5500] group-hover:underline">#{o.orden_id}</div>
+                    <div className="text-[10px] text-slate-400">{o.ticket || o.codi_segui_ot || 'Sin ticket'}</div>
                   </td>
-                  <td className="py-2 px-2 text-left text-gray-300 font-medium whitespace-nowrap">
+                  <td className="py-2.5 px-2 text-left text-slate-600 font-medium whitespace-nowrap">
                     {o.fecha_solicitud_fmt || '-'}
                   </td>
-                  <td className="py-2 px-2">
-                    <div className="font-bold text-white leading-snug">{o.cliente || '-'}</div>
-                    <div className="text-[10px] text-gray-400 flex flex-wrap items-center gap-x-2 mt-0.5">
-                      <span>DNI/Doc: <strong className="text-gray-200">{docCliente}</strong></span>
+                  <td className="py-2.5 px-2">
+                    <div className="font-bold text-slate-900 leading-snug">{o.cliente || '-'}</div>
+                    <div className="text-[10px] text-slate-500 flex flex-wrap items-center gap-x-2 mt-0.5">
+                      <span>DNI/Doc: <strong className="text-slate-700">{docCliente}</strong></span>
                       <span>•</span>
-                      <span>Cód.Clie: <strong className="text-cyan-300">{codSegui}</strong></span>
+                      <span>Cód.Clie: <strong className="text-sky-700">{codSegui}</strong></span>
                       {o.telefono && (
                         <>
                           <span>•</span>
-                          <span>Tel: <strong className="text-gray-300">{o.telefono}</strong></span>
+                          <span>Tel: <strong className="text-slate-700">{o.telefono}</strong></span>
                         </>
                       )}
                     </div>
                   </td>
-                  <td className="py-2 px-2">
-                    <div className="text-emerald-300 font-bold text-[11px] uppercase leading-tight">{o.servicio_tipo}</div>
-                    <div className="text-[10px] text-gray-400">{o.producto || o.tipo_trabajo || '-'}</div>
+                  <td className="py-2.5 px-2">
+                    <div className="text-emerald-700 font-bold text-[11px] uppercase leading-tight">{o.servicio_tipo}</div>
+                    <div className="text-[10px] text-slate-400">{o.producto || o.tipo_trabajo || '-'}</div>
                   </td>
-                  <td className="py-2 px-2">
-                    <div className="text-gray-200 font-medium leading-tight">{o.sector_operativo || '-'}</div>
-                    <div className="text-[10px] text-gray-400">{o.distrito || '-'}</div>
+                  <td className="py-2.5 px-2">
+                    <div className="text-slate-800 font-semibold leading-tight">{o.sector_operativo || '-'}</div>
+                    <div className="text-[10px] text-slate-400">{o.distrito || '-'}</div>
                   </td>
-                  <td className="py-2 px-2 min-w-[260px]">
-                    <div className="font-semibold text-white leading-tight">{o.partner || o.proveedor_ot || '-'}</div>
-                    <div className="text-[10px] text-gray-300 flex items-start gap-1 mt-0.5 whitespace-normal break-words">
-                      <User size={11} className="shrink-0 mt-0.5 text-[#FF6B00]" />
+                  <td className="py-2.5 px-2 min-w-[260px]">
+                    <div className="font-bold text-slate-900 leading-tight">{o.partner || o.proveedor_ot || '-'}</div>
+                    <div className="text-[10px] text-slate-600 flex items-start gap-1 mt-0.5 whitespace-normal break-words">
+                      <User size={11} className="shrink-0 mt-0.5 text-[#FF5500]" />
                       <span>{nombreCuadrillaCompleto}</span>
                     </div>
                   </td>
-                  <td className="py-2 px-1.5 text-center whitespace-nowrap">
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${otBadge}`}>
+                  <td className="py-2.5 px-1.5 text-center whitespace-nowrap">
+                    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${otBadge}`}>
                       {o.estado_ot || 'Sin estado'}
                     </span>
                   </td>
-                  <td className="py-2 px-1.5 text-center whitespace-nowrap">
+                  <td className="py-2.5 px-1.5 text-center whitespace-nowrap">
                     <span
-                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        stWspLower === 'read'
-                          ? 'bg-emerald-500/20 text-emerald-300'
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${stWspLower === 'read'
+                          ? 'bg-emerald-100 text-emerald-800'
                           : stWspLower.includes('deliver')
-                          ? 'bg-cyan-500/20 text-cyan-300'
-                          : stWspLower === 'sent'
-                          ? 'bg-blue-500/20 text-blue-300'
-                          : stWspLower === 'failed'
-                          ? 'bg-red-500/20 text-red-400'
-                          : 'bg-gray-800 text-gray-400'
-                      }`}
+                            ? 'bg-sky-100 text-sky-800'
+                            : stWspLower === 'sent'
+                              ? 'bg-blue-100 text-blue-800'
+                              : stWspLower === 'failed'
+                                ? 'bg-rose-100 text-rose-800'
+                                : 'bg-slate-100 text-slate-600'
+                        }`}
                     >
                       {wspLabel}
                     </span>
                   </td>
-                  <td className="py-2 px-1.5 text-center whitespace-nowrap">
+                  <td className="py-2.5 px-1.5 text-center whitespace-nowrap">
                     <span
-                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        o.ingreso_tracking === 'SI'
-                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                          : 'bg-gray-800/60 text-gray-500'
-                      }`}
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${o.ingreso_tracking === 'SI'
+                          ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                          : 'bg-slate-100 text-slate-500'
+                        }`}
                     >
                       {o.ingreso_tracking === 'SI' ? 'SÍ INGRESÓ' : 'NO'}
                     </span>

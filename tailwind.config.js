@@ -7,10 +7,11 @@ export default {
   theme: {
     extend: {
       colors: {
-        bgMain: '#090D16',
-        bgCard: '#111827',
-        borderCard: '#1F2937',
-        winOrange: '#FF6B00',
+        bgMain: '#F8F9FA',
+        bgCard: '#FFFFFF',
+        borderCard: '#E5E7EB',
+        winOrange: '#FF5500',
+        winOrangeSoft: '#FFF0E5',
         winGreen: '#10B981',
         winBlue: '#3B82F6',
         winCyan: '#06B6D4',
