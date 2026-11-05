@@ -192,6 +192,11 @@ export default function App() {
     const failed = Number(kpis?.whs_failed || 0);
     const noEnviado = Number(kpis?.whs_no_enviado || 0);
     const tracking = Number(kpis?.ingreso_tracking || 0);
+    const sos = Number(kpis?.sos_soporte || 0);
+    const autogestion =
+      kpis?.autogestionados !== undefined
+        ? Number(kpis.autogestionados)
+        : Math.max(0, tracking - sos);
     const reprog = Number(kpis?.reprogramaciones || 0);
     const encuestas = Number(kpis?.encuestas_respondidas || 0);
     const leidosSinIngreso = Number(kpis?.leidos_sin_ingreso || 0);
@@ -222,6 +227,11 @@ export default function App() {
       tracking: fmt(tracking),
       trackPct: pct(tracking, enviados),
       trackOverReadPct: pct(tracking, leidos),
+      sosCount: fmt(sos),
+      sosOverEnvPct: pct(sos, enviados),
+      sosOverTrackPct: pct(sos, tracking),
+      autogestionCount: fmt(autogestion),
+      autogestionPct: pct(autogestion, tracking),
       reprog: fmt(reprog),
       csatCount: fmt(encuestas),
       sent: fmt(sent),

@@ -77,9 +77,74 @@ const DISTRITOS_ALTO_VALOR = [
 let servicioToTipoMap = new Map<string, string>();
 let tiposUnicosList: string[] = [];
 
+const SERVICIOS_PERMITIDOS = [
+  'INSTA - LIMA',
+  'INSTA - PROV',
+  'AVER - LIMA',
+  'AVER - PROV',
+  'POSTVENTA',
+] as const;
+
+const HOMOLOGACION_INVERSA_DB: Record<string, string[]> = {
+  'INSTA - LIMA': ['INSTA - LIMA', 'INSTALACION', 'INSTALACIÓN', 'INSTALACIONES'],
+  'INSTA - PROV': ['INSTA - PROV', 'PROVINCIA', 'INSTALACION PROVINCIA'],
+  'AVER - LIMA': ['AVER - LIMA', 'AVERIAS', 'AVERÍAS', 'AVERIA'],
+  'AVER - PROV': ['AVER - PROV', 'AVERIAS PRV', 'AVERÍAS PRV', 'AVERIAS PROV'],
+  'POSTVENTA': ['POSTVENTA', 'POST VENTA'],
+};
+
+/**
+ * Homologa estrictamente a los 5 servicios permitidos.
+ * Cualquier otro valor ('NO', 'OTROS', etc.) devuelve null y queda bloqueado.
+ */
+function homologarTipoServicio(rawTipo: string): string | null {
+  const upper = String(rawTipo || '').trim().toUpperCase();
+  if (!upper) return null;
+
+  if (
+    upper === 'INSTALACION' ||
+    upper === 'INSTALACIÓN' ||
+    upper === 'INSTALACIONES' ||
+    upper === 'INSTA - LIMA' ||
+    upper === 'INSTA-LIMA'
+  ) {
+    return 'INSTA - LIMA';
+  }
+  if (
+    upper === 'PROVINCIA' ||
+    upper === 'INSTALACION PROVINCIA' ||
+    upper === 'INSTA - PROV' ||
+    upper === 'INSTA-PROV'
+  ) {
+    return 'INSTA - PROV';
+  }
+  if (
+    upper === 'AVERIAS' ||
+    upper === 'AVERÍAS' ||
+    upper === 'AVERIA' ||
+    upper === 'AVER - LIMA' ||
+    upper === 'AVER-LIMA'
+  ) {
+    return 'AVER - LIMA';
+  }
+  if (
+    upper === 'AVERIAS PRV' ||
+    upper === 'AVERÍAS PRV' ||
+    upper === 'AVERIAS PROV' ||
+    upper === 'AVER - PROV' ||
+    upper === 'AVER-PROV'
+  ) {
+    return 'AVER - PROV';
+  }
+  if (upper === 'POSTVENTA' || upper === 'POST VENTA') {
+    return 'POSTVENTA';
+  }
+
+  return null;
+}
+
 async function loadTipoServicioCache() {
   const map = new Map<string, string>();
-  const setTipos = new Set<string>();
 
   try {
     const [rows]: any = await pool.query(`SELECT * FROM tiposervicio`);
@@ -87,59 +152,36 @@ async function loadTipoServicioCache() {
       const entries = Object.entries(r);
       const srvVal =
         r.Servicio ?? r.servicio ?? r.Producto ?? r.producto ?? entries[0]?.[1];
-      const tipoVal =
+      const rawTipoVal =
         r.Tipo ?? r.tipo ?? r.Categoria ?? r.categoria ?? entries[1]?.[1] ?? srvVal;
 
-      if (srvVal && tipoVal) {
-        map.set(String(srvVal).trim().toUpperCase(), String(tipoVal).trim());
-        setTipos.add(String(tipoVal).trim());
+      const tipoHomologado = homologarTipoServicio(String(rawTipoVal || ''));
+      if (srvVal && tipoHomologado) {
+        map.set(String(srvVal).trim().toUpperCase(), tipoHomologado);
       }
     }
   } catch (err: any) {
     console.warn('⚠️ Aviso leyendo tabla tiposervicio:', err.message);
   }
 
-  // Fallback rápido sobre las últimas 5000 órdenes si tiposervicio está vacío
-  if (setTipos.size === 0) {
-    try {
-      const [recentRows]: any = await pool.query(`
-        SELECT DISTINCT
-          UPPER(TRIM(producto)) AS prod,
-          TRIM(COALESCE(NULLIF(TRIM(tipo_operacion), ''), producto)) AS tipo
-        FROM (
-          SELECT producto, tipo_operacion
-          FROM vw_reporte_funnel_casos_360
-          ORDER BY orden_id DESC
-          LIMIT 5000
-        ) sub
-        WHERE producto IS NOT NULL AND TRIM(producto) != ''
-      `);
-      for (const r of recentRows || []) {
-        if (r.prod && r.tipo) {
-          map.set(String(r.prod).toUpperCase(), String(r.tipo));
-          setTipos.add(String(r.tipo));
-        }
-      }
-    } catch (fbErr: any) {
-      console.warn('⚠️ Fallback de servicios omitido:', fbErr.message);
-    }
-  }
-
   servicioToTipoMap = map;
-  tiposUnicosList = Array.from(setTipos).filter(Boolean).sort();
-  console.log(`✅ Catálogo de servicios cargado (${tiposUnicosList.length} tipos):`, tiposUnicosList.join(', '));
+  tiposUnicosList = [...SERVICIOS_PERMITIDOS];
+  queryCache.flushAll();
+  console.log(`✅ Catálogo bloqueado a 5 servicios oficiales:`, tiposUnicosList.join(' | '));
 }
 
 await loadTipoServicioCache();
 
 /**
- * Helper para resolver lista de productos a partir del filtro de servicio (soporta multiselección separada por comas)
+ * Resuelve productos y tipos permitidos.
+ * Si el usuario elige "Todos los servicios", aplica automáticamente el filtro de los 5 servicios
+ * para bloquear cualquier registro ajeno ('NO', vacíos u otros).
  */
 function resolveProductosFromServiceFilter(serviceParam: string): {
   srvList: string[];
   productosDelTipo: string[];
 } {
-  const srvList =
+  const rawSelected =
     serviceParam &&
       serviceParam !== 'Todos' &&
       serviceParam !== 'Todos los servicios'
@@ -147,19 +189,33 @@ function resolveProductosFromServiceFilter(serviceParam: string): {
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean)
-      : [];
+      : [...SERVICIOS_PERMITIDOS];
+
+  const canonicalSet = new Set<string>();
+  const dbSrvEquivalents = new Set<string>();
+
+  for (const item of rawSelected) {
+    const canon = homologarTipoServicio(item);
+    if (!canon) continue;
+    canonicalSet.add(canon);
+    dbSrvEquivalents.add(canon);
+    const aliases = HOMOLOGACION_INVERSA_DB[canon] || [];
+    aliases.forEach((a) => dbSrvEquivalents.add(a.toUpperCase()));
+  }
 
   const productosDelTipo: string[] = [];
-  if (srvList.length > 0) {
-    const srvUpperSet = new Set(srvList.map((s) => s.toUpperCase()));
-    servicioToTipoMap.forEach((tipoVal, prodKey) => {
-      if (srvUpperSet.has(tipoVal.toUpperCase())) {
+  if (canonicalSet.size > 0) {
+    servicioToTipoMap.forEach((tipoHomologado, prodKey) => {
+      if (canonicalSet.has(tipoHomologado)) {
         productosDelTipo.push(prodKey);
       }
     });
   }
 
-  return { srvList, productosDelTipo };
+  return {
+    srvList: Array.from(dbSrvEquivalents),
+    productosDelTipo,
+  };
 }
 
 // 1. Endpoint de catálogos para filtros desplegables
@@ -334,6 +390,8 @@ app.get('/api/dashboard', async (req, res) => {
           COALESCE(SUM(v.estado_wsp = 'failed'), 0) AS failed,
           COALESCE(SUM(v.se_envio_wsp = 'NO' OR v.estado_wsp = 'NO ENVIADO' OR v.estado_wsp IS NULL), 0) AS no_enviado,
           COALESCE(SUM(v.ingreso_tracking = 'SI'), 0) AS tracking,
+          COALESCE(SUM(UPPER(TRIM(COALESCE(v.pulso_soporte, 'NO'))) IN ('SI', 'SÍ', '1', 'TRUE')), 0) AS sos_soporte,
+          COALESCE(SUM(v.ingreso_tracking = 'SI' AND UPPER(TRIM(COALESCE(v.pulso_soporte, 'NO'))) NOT IN ('SI', 'SÍ', '1', 'TRUE')), 0) AS autogestionados,
           COALESCE(SUM(v.reprogramo = 'SI'), 0) AS reprogramaciones,
           COALESCE(SUM(v.respondio_encuesta = 'SI'), 0) AS encuestas,
           COALESCE(SUM(v.estado_wsp = 'read' AND v.ingreso_tracking = 'NO'), 0) AS leidos_sin_ingreso,
@@ -531,6 +589,8 @@ app.get('/api/dashboard', async (req, res) => {
         whs_failed: acc.whs_failed + Number(row.failed || 0),
         whs_no_enviado: acc.whs_no_enviado + Number(row.no_enviado || 0),
         ingreso_tracking: acc.ingreso_tracking + Number(row.tracking || 0),
+        sos_soporte: acc.sos_soporte + Number(row.sos_soporte || 0),
+        autogestionados: acc.autogestionados + Number(row.autogestionados || 0),
         reprogramaciones: acc.reprogramaciones + Number(row.reprogramaciones || 0),
         encuestas_respondidas: acc.encuestas_respondidas + Number(row.encuestas || 0),
         csat_avg: csatAvgGlobal,
@@ -553,6 +613,8 @@ app.get('/api/dashboard', async (req, res) => {
         whs_failed: 0,
         whs_no_enviado: 0,
         ingreso_tracking: 0,
+        sos_soporte: 0,
+        autogestionados: 0,
         reprogramaciones: 0,
         encuestas_respondidas: 0,
         csat_avg: csatAvgGlobal,
@@ -870,6 +932,7 @@ app.get('/api/tracking/search', async (req, res) => {
     const fSla = String(req.query.sla || 'Todos');
     const fTurno = String(req.query.turno || 'Todos');
     const fSoloConChat = req.query.soloConChat === 'true';
+    const fSoloSos = req.query.soloSos === 'true';
 
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(100, Math.max(10, Number(req.query.pageSize) || 50));
@@ -898,6 +961,10 @@ app.get('/api/tracking/search', async (req, res) => {
 
     if (fSoloConChat) {
       whereClauses.push('(h.orden_id IS NOT NULL OR h.phone IS NOT NULL)');
+    }
+
+    if (fSoloSos) {
+      whereClauses.push("UPPER(TRIM(COALESCE(v.pulso_soporte, 'NO'))) IN ('SI', 'SÍ', '1', 'TRUE')");
     }
 
     if (fEstadoChat !== 'Todos') {

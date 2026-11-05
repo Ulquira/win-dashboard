@@ -31,6 +31,8 @@ export interface KpiData {
   whs_failed: number;
   whs_no_enviado: number;
   ingreso_tracking: number;
+  sos_soporte?: number;
+  autogestionados?: number;
   reprogramaciones: number;
   encuestas_respondidas: number;
   csat_avg?: number;
@@ -102,6 +104,11 @@ export interface CalculatedMetrics {
   tracking: string;
   trackPct: string;
   trackOverReadPct: string;
+  sosCount: string;
+  sosOverEnvPct: string;
+  sosOverTrackPct: string;
+  autogestionCount: string;
+  autogestionPct: string;
   reprog: string;
   csatCount: string;
   sent: string;

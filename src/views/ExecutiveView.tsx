@@ -1,8 +1,8 @@
 import React, { useMemo } from 'react';
 import {
   Filter, Info, ClipboardList, Send, CheckCheck, MapPin,
-  TrendingUp, Settings, Laptop, Clock, Crown, Gem, Award,
-  AlertTriangle, CheckCircle
+  TrendingUp, Settings, Laptop, Crown, Gem, Award,
+  AlertTriangle, CheckCircle, LifeBuoy
 } from 'lucide-react';
 import { CalculatedMetrics, EvolutionPoint, PartnerRankItem } from '../types/dashboard';
 
@@ -292,7 +292,7 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
         </div>
 
         {/* 3. Eficiencia Operativa */}
-        <div className="lg:col-span-3 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 flex flex-col justify-between space-y-3 overflow-hidden">
+        <div className="lg:col-span-3 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 flex flex-col justify-between space-y-2.5 overflow-hidden">
           <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
             <div className="flex items-center gap-2">
               <div className="p-1.5 rounded-lg bg-orange-50 text-[#FF5500]">
@@ -302,50 +302,78 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
             </div>
           </div>
 
-          <div className="bg-emerald-50/60 border border-emerald-100 rounded-xl p-3 flex items-center justify-between">
+          {/* Tarjeta 1: SOS (Botón Pulso Soporte) */}
+          <div className="bg-rose-50/70 border border-rose-100 rounded-xl p-3 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-xl bg-emerald-100 text-emerald-700">
-                <Settings size={16} />
+              <div className="p-2 rounded-xl bg-rose-100 text-rose-600">
+                <LifeBuoy size={16} />
               </div>
               <div>
-                <div className="text-[11px] font-medium text-slate-600">Gestiones automatizadas</div>
+                <div className="text-[11px] font-bold text-slate-700">SOS (Botón Soporte)</div>
                 <div className="flex items-baseline gap-2 mt-0.5">
-                  <span className="text-xl font-extrabold text-slate-900">{calc.noEnviado}</span>
-                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
-                    {calc.noEnviadoPct}%
+                  <span className="text-xl font-extrabold text-slate-900 tabular-nums">
+                    {calc.sosCount ?? '0'}
+                  </span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 tabular-nums">
+                    {calc.sosOverEnvPct ?? '0,0'}% s/env
                   </span>
                 </div>
               </div>
             </div>
+            <div className="border-l border-rose-200 pl-3 text-right shrink-0">
+              <div className="text-sm font-extrabold text-rose-700 tabular-nums">
+                {calc.sosOverTrackPct ?? '0,0'}%
+              </div>
+              <div className="text-[10px] text-slate-500">s/tracking</div>
+            </div>
           </div>
 
+          {/* Tarjeta 2: Autogestión Web Real (Tracking sin pulsar SOS) */}
           <div className="bg-sky-50/60 border border-sky-100 rounded-xl p-3 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="p-2 rounded-xl bg-sky-100 text-sky-700">
                 <Laptop size={16} />
               </div>
               <div>
-                <div className="text-[11px] font-medium text-slate-600">Tasa de Autogestión Web</div>
-                <div className="text-2xl font-extrabold text-slate-900 mt-0.5">75,8%</div>
+                <div className="text-[11px] font-medium text-slate-600">Autogestión en Tracking</div>
+                <div className="flex items-baseline gap-2 mt-0.5">
+                  <span className="text-xl font-extrabold text-slate-900 tabular-nums">
+                    {calc.autogestionCount ?? calc.tracking ?? '0'}
+                  </span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 tabular-nums">
+                    {calc.autogestionPct ?? '100,0'}%
+                  </span>
+                </div>
               </div>
             </div>
-            <div className="border-l border-sky-200 pl-3 text-right">
-              <div className="text-sm font-extrabold text-sky-800">{calc.tracking}</div>
-              <div className="text-[10px] text-slate-500">tracking</div>
+            <div className="border-l border-sky-200 pl-3 text-right shrink-0">
+              <div className="text-sm font-extrabold text-sky-800 tabular-nums">{calc.tracking}</div>
+              <div className="text-[10px] text-slate-500">tracking total</div>
             </div>
           </div>
 
-          <div className="flex items-center justify-between px-1 py-1">
-            <div className="flex items-center gap-2">
-              <Clock size={16} className="text-sky-600" />
-              <span className="text-[11px] text-slate-600 leading-tight">Tiempo promedio de<br />respuesta al cliente</span>
+          {/* Tarjeta 3: Sin envío WSP / Gestión interna */}
+          <div className="bg-emerald-50/60 border border-emerald-100 rounded-xl p-2.5 flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="p-1.5 rounded-lg bg-emerald-100 text-emerald-700">
+                <Settings size={14} />
+              </div>
+              <div className="text-[11px] font-medium text-slate-600">Órdenes sin envío WSP</div>
             </div>
-            <span className="text-base font-extrabold text-slate-900">2,6 min</span>
+            <div className="flex items-center gap-1.5 tabular-nums">
+              <span className="text-sm font-extrabold text-slate-900">{calc.noEnviado}</span>
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                {calc.noEnviadoPct}%
+              </span>
+            </div>
           </div>
 
-          <div className="bg-slate-50 rounded-xl p-2.5 flex items-start gap-2 text-[11px] text-slate-500 leading-snug">
-            <Info size={14} className="text-amber-500 shrink-0 mt-0.5" />
-            <span>Clientes que ingresaron al tracking sin contacto en MANTRA.</span>
+          <div className="bg-slate-50 rounded-xl p-2.5 flex items-start gap-2 text-[10.5px] text-slate-500 leading-snug">
+            <Info size={13} className="text-[#FF5500] shrink-0 mt-0.5" />
+            <span>
+              <strong>SOS:</strong> clientes con <code>pulso_soporte = 'SI'</code>.{' '}
+              <strong>Autogestión:</strong> ingresaron al tracking sin requerir soporte.
+            </span>
           </div>
         </div>
       </div>

@@ -3,7 +3,7 @@ import {
   User, Sparkles, Headset, ExternalLink, MessageSquare,
   ChevronLeft, ChevronRight, RefreshCw, CheckCheck,
   MapPin, Phone, ShieldCheck, Copy, Check, Layers, Wrench,
-  ChevronDown, ChevronUp, Bot
+  ChevronDown, ChevronUp, Bot, LifeBuoy
 } from 'lucide-react';
 import { RealOrder } from '../types/dashboard';
 import { apiFetch } from '../config/api';
@@ -52,6 +52,7 @@ export function TrackingView({
 }: TrackingViewProps) {
   const [debouncedQuery, setDebouncedQuery] = useState<string>(globalSearch);
   const [soloConChat, setSoloConChat] = useState<boolean>(true);
+  const [soloSos, setSoloSos] = useState<boolean>(false);
   const [slaFilter, setSlaFilter] = useState<string>('Todos');
   const [turnoFilter, setTurnoFilter] = useState<string>('Todos');
 
@@ -85,7 +86,7 @@ export function TrackingView({
   useEffect(() => {
     setPage(1);
     setSelectedIndex(0);
-  }, [soloConChat, slaFilter, turnoFilter, startDate, endDate, service, ignoreDates]);
+  }, [soloConChat, soloSos, slaFilter, turnoFilter, startDate, endDate, service, ignoreDates]);
 
   const fetchPaginatedTracking = useCallback(() => {
     setLoadingPage(true);
@@ -96,12 +97,12 @@ export function TrackingView({
       q: debouncedQuery,
       ignoreDates: ignoreDates ? 'true' : 'false',
       soloConChat: soloConChat ? 'true' : 'false',
+      soloSos: soloSos ? 'true' : 'false',
       sla: slaFilter,
       turno: turnoFilter,
       page: String(page),
       pageSize: String(pageSize),
     });
-
     apiFetch(`/api/tracking/search?${params.toString()}`)
       .then((data) => {
         if (data.ok && Array.isArray(data.orders)) {
@@ -113,7 +114,7 @@ export function TrackingView({
       })
       .catch((err) => console.error('Error en /api/tracking/search (API):', err))
       .finally(() => setLoadingPage(false));
-  }, [startDate, endDate, service, debouncedQuery, ignoreDates, soloConChat, slaFilter, turnoFilter, page]);
+  }, [startDate, endDate, service, debouncedQuery, ignoreDates, soloConChat, soloSos, slaFilter, turnoFilter, page]);
 
   useEffect(() => {
     fetchPaginatedTracking();
@@ -230,6 +231,84 @@ export function TrackingView({
       return Number(a.orden || 0) - Number(b.orden || 0);
     });
   }, [selectedRow, liveMessages]);
+
+  // Verifica si una orden tiene pulso_soporte = 'SI'
+  const isOrderSos = (row?: RealOrder | null) => {
+    if (!row) return false;
+    const val = String(row.pulso_soporte || '').trim().toUpperCase();
+    return val === 'SI' || val === 'SÍ' || val === '1' || val === 'TRUE';
+  };
+
+  // Calcula en qué posición exacta de la línea de tiempo colocar el evento SOS
+  const sosTimelineInfo = useMemo(() => {
+    const hasSosFlag = isOrderSos(selectedRow);
+    const rawSosDate =
+      selectedRow?.fecha_pulso_soporte ||
+      selectedRow?.fecha_soporte ||
+      selectedRow?.fh_pulso_soporte ||
+      null;
+
+    // 1. Buscar si algún mensaje del cliente coincide con el clic en botón de soporte/observación
+    const triggerRegex =
+      /tengo una observaci[oó]n|puls[oó] soporte|solicito soporte|necesito ayuda|bot[oó]n sos|hablar con (un )?asesor|soporte t[eé]cnico|ayuda con mi visita/i;
+
+    let msgIndex = parsedChatMessages.findIndex((m) => {
+      const txt = String(m.texto || m.mensaje || m.body || m.contenido || '');
+      const sender = String(m.emisor || m.rol || m.direction || '').toLowerCase();
+      const isCli = sender.includes('cli') || sender.includes('inbound') || sender.includes('user') || m.from_me === false;
+      return isCli && triggerRegex.test(txt);
+    });
+
+    // 2. Si hay fecha exacta de pulso_soporte en la BD, ubicar el mensaje más cercano en el tiempo
+    if (msgIndex === -1 && hasSosFlag && rawSosDate && parsedChatMessages.length > 0) {
+      const targetMs = new Date(rawSosDate).getTime();
+      if (!isNaN(targetMs)) {
+        const foundIdx = parsedChatMessages.findIndex((m) => {
+          const mMs = new Date(m.fecha_utc || m.fecha || m.timestamp || 0).getTime();
+          return !isNaN(mMs) && mMs >= targetMs;
+        });
+        msgIndex = foundIdx !== -1 ? foundIdx : parsedChatMessages.length - 1;
+      }
+    }
+
+    // 3. Si pulso_soporte = 'SI' y aún no hay índice, colocarlo justo antes de la primera respuesta de un Asesor humano (o después del disparo HSM inicial)
+    if (msgIndex === -1 && hasSosFlag && parsedChatMessages.length > 0) {
+      const firstAgentIdx = parsedChatMessages.findIndex((m) => {
+        const sender = String(m.emisor || m.rol || m.direction || '').toLowerCase();
+        const txt = String(m.texto || m.mensaje || m.body || m.contenido || '');
+        const isCli = sender.includes('cli') || sender.includes('inbound') || sender.includes('user') || m.from_me === false;
+        const isTpl = m.tipo === 'template' || Boolean(m.es_plantilla) || /enruta\.win\.pe|confirmaci[oó]n de visita|\|\s*\[/i.test(txt);
+        return !isCli && !isTpl;
+      });
+      if (firstAgentIdx !== -1) {
+        msgIndex = firstAgentIdx;
+      } else {
+        // Si solo hay plantillas/cliente, colocarlo tras el primer mensaje del cliente o al final
+        const firstCliIdx = parsedChatMessages.findIndex((m) => {
+          const sender = String(m.emisor || m.rol || m.direction || '').toLowerCase();
+          return sender.includes('cli') || sender.includes('inbound') || sender.includes('user') || m.from_me === false;
+        });
+        msgIndex = firstCliIdx !== -1 ? firstCliIdx : parsedChatMessages.length - 1;
+      }
+    }
+
+    const active = hasSosFlag || msgIndex !== -1;
+    const timestampLabel =
+      rawSosDate ||
+      (msgIndex !== -1
+        ? parsedChatMessages[msgIndex]?.fecha_utc ||
+        parsedChatMessages[msgIndex]?.fecha ||
+        parsedChatMessages[msgIndex]?.timestamp ||
+        ''
+        : '');
+
+    return {
+      active,
+      hasSosFlag,
+      msgIndex,
+      timestampLabel,
+    };
+  }, [selectedRow, parsedChatMessages]);
 
   const activeTurno =
     chatMeta?.quien_tiene_la_palabra ||
@@ -365,10 +444,21 @@ export function TrackingView({
             </h3>
             <div className="flex items-center gap-1.5">
               <button
+                onClick={() => setSoloSos(!soloSos)}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[10px] font-bold transition ${soloSos
+                  ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                  : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                  }`}
+                title="Filtrar únicamente chats que pulsaron el botón SOS / Soporte"
+              >
+                <LifeBuoy size={10} />
+                <span>SOS</span>
+              </button>
+              <button
                 onClick={() => setSoloConChat(!soloConChat)}
                 className={`px-2 py-0.5 rounded-lg border text-[10px] font-bold transition ${soloConChat
-                    ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                   }`}
                 title="Alternar entre órdenes con chat en Mantra o todas las órdenes"
               >
@@ -392,8 +482,8 @@ export function TrackingView({
                 key={btn.id}
                 onClick={() => setTurnoFilter(btn.id)}
                 className={`py-1.5 px-1.5 rounded-lg font-bold transition truncate ${turnoFilter === btn.id
-                    ? 'bg-[#FF5500] text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                  ? 'bg-[#FF5500] text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
                   }`}
               >
                 {btn.label}
@@ -435,8 +525,8 @@ export function TrackingView({
                     setSelectedIndex(idx);
                   }}
                   className={`p-3 cursor-pointer transition ${isSelected
-                      ? 'bg-[#FFF0E5]/70 border-l-4 border-l-[#FF5500]'
-                      : 'hover:bg-slate-50'
+                    ? 'bg-[#FFF0E5]/70 border-l-4 border-l-[#FF5500]'
+                    : 'hover:bg-slate-50'
                     }`}
                 >
                   <div className="flex items-center justify-between text-xs gap-2">
@@ -463,6 +553,15 @@ export function TrackingView({
                       {item.mantra_phone || item.telefono || 'Sin teléfono'}
                     </span>
                     <div className="flex items-center gap-1.5">
+                      {isOrderSos(item) && (
+                        <span
+                          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 text-[9px] font-extrabold"
+                          title="El cliente pulsó el botón SOS / Soporte"
+                        >
+                          <LifeBuoy size={9} />
+                          <span>SOS</span>
+                        </span>
+                      )}
                       {item.ingreso_tracking === 'SI' && (
                         <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200 text-[9px] font-bold">
                           TRK
@@ -470,14 +569,14 @@ export function TrackingView({
                       )}
                       <span
                         className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${stWsp === 'READ'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : stWsp.includes('DELIVER')
-                              ? 'bg-sky-100 text-sky-800'
-                              : stWsp === 'SENT'
-                                ? 'bg-blue-100 text-blue-800'
-                                : stWsp === 'FAILED'
-                                  ? 'bg-rose-100 text-rose-800'
-                                  : 'bg-slate-100 text-slate-600'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : stWsp.includes('DELIVER')
+                            ? 'bg-sky-100 text-sky-800'
+                            : stWsp === 'SENT'
+                              ? 'bg-blue-100 text-blue-800'
+                              : stWsp === 'FAILED'
+                                ? 'bg-rose-100 text-rose-800'
+                                : 'bg-slate-100 text-slate-600'
                           }`}
                       >
                         {stWsp}
@@ -537,6 +636,12 @@ export function TrackingView({
                     <h4 className="font-extrabold text-sm text-slate-900 uppercase">
                       {selectedRow.cliente || 'Cliente WIN'}
                     </h4>
+                    {sosTimelineInfo.active && (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 text-[10px] font-extrabold uppercase shadow-2xs">
+                        <LifeBuoy size={11} className="text-rose-600" />
+                        <span>Pulsó SOS Soporte</span>
+                      </span>
+                    )}
                     {renderLastWriterBadge(activeTurno)}
                     {activeEstadoChat && (
                       <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold uppercase">
@@ -593,8 +698,8 @@ export function TrackingView({
                 <button
                   onClick={() => setShowTechCard(!showTechCard)}
                   className={`flex items-center gap-1 px-3 py-1.5 rounded-xl border text-[11px] font-bold transition ${showTechCard
-                      ? 'bg-slate-100 text-slate-900 border-slate-300'
-                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                    ? 'bg-slate-100 text-slate-900 border-slate-300'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                     }`}
                   title="Mostrar/Ocultar Ficha Técnica (Tecla F)"
                 >
@@ -688,64 +793,90 @@ export function TrackingView({
                       /enruta\.win\.pe|confirmaci[oó]n de visita|plantilla preaprobada|\|\s*\[/i.test(textContent));
 
                   const timeLabel = msg.fecha_utc || msg.fecha || msg.timestamp || '';
+                  const showSosMilestoneHere = sosTimelineInfo.active && sosTimelineInfo.msgIndex === idx;
+
+                  const sosMilestoneBanner = showSosMilestoneHere ? (
+                    <div className="my-3 flex items-center gap-3 select-none">
+                      <div className="flex-1 h-px bg-gradient-to-r from-transparent via-rose-300 to-rose-400" />
+                      <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-rose-50 border border-rose-200 text-rose-800 text-[11px] font-extrabold shadow-xs">
+                        <LifeBuoy size={13} className="text-rose-600 animate-pulse shrink-0" />
+                        <span>CLIENTE PULSÓ BOTÓN SOS / SOPORTE EN TRACKING</span>
+                        {sosTimelineInfo.timestampLabel && (
+                          <span className="text-[10px] font-semibold text-rose-600 bg-white px-2 py-0.5 rounded-full border border-rose-200">
+                            {sosTimelineInfo.timestampLabel}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex-1 h-px bg-gradient-to-l from-transparent via-rose-300 to-rose-400" />
+                    </div>
+                  ) : null;
 
                   if (isCliente) {
                     return (
-                      <div key={idx} className="flex flex-col items-start">
-                        <div className="max-w-[78%] rounded-2xl rounded-tl-sm p-3.5 bg-white border border-slate-200 shadow-xs space-y-2">
-                          <div className="flex items-center justify-between gap-4">
-                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 text-sky-800 border border-sky-200">
-                              <User size={11} />
-                              <span>Cliente • {selectedRow.cliente}</span>
-                            </span>
-                            <span className="text-[10px] text-slate-400">{timeLabel}</span>
+                      <React.Fragment key={idx}>
+                        {sosMilestoneBanner}
+                        <div className="flex flex-col items-start">
+                          <div className="max-w-[78%] rounded-2xl rounded-tl-sm p-3.5 bg-white border border-slate-200 shadow-xs space-y-2">
+                            <div className="flex items-center justify-between gap-4">
+                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 text-sky-800 border border-sky-200">
+                                <User size={11} />
+                                <span>Cliente • {selectedRow.cliente}</span>
+                              </span>
+                              <span className="text-[10px] text-slate-400">{timeLabel}</span>
+                            </div>
+                            {renderFormattedChatMessage(textContent)}
                           </div>
-                          {renderFormattedChatMessage(textContent)}
                         </div>
-                      </div>
+                      </React.Fragment>
                     );
                   }
 
                   if (isTemplate) {
                     return (
-                      <div key={idx} className="flex flex-col items-end">
-                        <div className="max-w-[80%] rounded-2xl rounded-tr-sm p-4 bg-purple-50/90 border border-purple-200 shadow-xs space-y-2.5">
-                          <div className="flex items-center justify-between gap-4 border-b border-purple-200/70 pb-2">
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
-                              <Sparkles size={11} />
-                              <span>{msg.nombre_plantilla || 'Plantilla Oficial Meta HSM'}</span>
-                            </span>
-                            <span className="inline-flex items-center gap-1 text-[10px] text-purple-800 font-semibold">
-                              <ShieldCheck size={12} className="text-emerald-600" />
-                              Disparo Automático HSM
-                            </span>
-                          </div>
-                          {renderFormattedChatMessage(textContent)}
-                          <div className="flex items-center justify-between pt-1 text-[10px] text-slate-500">
-                            <span>{timeLabel}</span>
-                            <span className="inline-flex items-center gap-1 font-bold text-sky-700">
-                              <CheckCheck size={12} />
-                              {String(msg.estado || selectedRow.estado_wsp || 'SENT').toUpperCase()}
-                            </span>
+                      <React.Fragment key={idx}>
+                        {sosMilestoneBanner}
+                        <div className="flex flex-col items-end">
+                          <div className="max-w-[80%] rounded-2xl rounded-tr-sm p-4 bg-purple-50/90 border border-purple-200 shadow-xs space-y-2.5">
+                            <div className="flex items-center justify-between gap-4 border-b border-purple-200/70 pb-2">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                                <Sparkles size={11} />
+                                <span>{msg.nombre_plantilla || 'Plantilla Oficial Meta HSM'}</span>
+                              </span>
+                              <span className="inline-flex items-center gap-1 text-[10px] text-purple-800 font-semibold">
+                                <ShieldCheck size={12} className="text-emerald-600" />
+                                Disparo Automático HSM
+                              </span>
+                            </div>
+                            {renderFormattedChatMessage(textContent)}
+                            <div className="flex items-center justify-between pt-1 text-[10px] text-slate-500">
+                              <span>{timeLabel}</span>
+                              <span className="inline-flex items-center gap-1 font-bold text-sky-700">
+                                <CheckCheck size={12} />
+                                {String(msg.estado || selectedRow.estado_wsp || 'SENT').toUpperCase()}
+                              </span>
+                            </div>
                           </div>
                         </div>
-                      </div>
+                      </React.Fragment>
                     );
                   }
 
                   return (
-                    <div key={idx} className="flex flex-col items-end">
-                      <div className="max-w-[78%] rounded-2xl rounded-tr-sm p-3.5 bg-[#FFF0E5]/90 border border-orange-200 shadow-xs space-y-2">
-                        <div className="flex items-center justify-between gap-4">
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-white text-[#FF5500] border border-orange-200">
-                            <Headset size={11} />
-                            <span>Asesor WIN • {msg.agente || msg.usuario || 'Agente Mantra'}</span>
-                          </span>
-                          <span className="text-[10px] text-slate-500">{timeLabel}</span>
+                    <React.Fragment key={idx}>
+                      {sosMilestoneBanner}
+                      <div className="flex flex-col items-end">
+                        <div className="max-w-[78%] rounded-2xl rounded-tr-sm p-3.5 bg-[#FFF0E5]/90 border border-orange-200 shadow-xs space-y-2">
+                          <div className="flex items-center justify-between gap-4">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-white text-[#FF5500] border border-orange-200">
+                              <Headset size={11} />
+                              <span>Asesor WIN • {msg.agente || msg.usuario || 'Agente Mantra'}</span>
+                            </span>
+                            <span className="text-[10px] text-slate-500">{timeLabel}</span>
+                          </div>
+                          {renderFormattedChatMessage(textContent)}
                         </div>
-                        {renderFormattedChatMessage(textContent)}
                       </div>
-                    </div>
+                    </React.Fragment>
                   );
                 })
               ) : (
