@@ -33,26 +33,27 @@ export function Sidebar({
   return (
     <aside
       className={`
-        fixed inset-y-0 left-0 z-50 w-64 bg-[#0B101B] border-r border-gray-800/80 flex flex-col justify-between p-4 shrink-0 transition-transform duration-300 ease-in-out
+        fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200/80 flex flex-col justify-between p-4 shrink-0 transition-transform duration-300 ease-in-out shadow-xs
         ${isOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'}
         md:static md:translate-x-0 md:w-60
       `}
     >
       <div>
-        <div className="flex items-center justify-between px-2 mb-8">
+        {/* LOGO SUPERIOR */}
+        <div className="flex items-center justify-between px-2 mb-7">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-[#FF6B00] flex items-center justify-center font-black text-white text-lg shadow-lg shadow-orange-500/20">
+            <div className="w-9 h-9 rounded-xl bg-[#FF5500] flex items-center justify-center font-black text-white text-lg shadow-sm shadow-orange-500/30">
               W
             </div>
             <div>
-              <h1 className="font-bold text-sm leading-tight text-white">Control WIN</h1>
-              <p className="text-[11px] text-gray-400">Operaciones</p>
+              <h1 className="font-bold text-sm leading-tight text-slate-900 tracking-tight">Control WIN</h1>
+              <p className="text-[11px] font-semibold text-[#FF5500]">en RUTA</p>
             </div>
           </div>
           {onClose && (
             <button
               onClick={onClose}
-              className="md:hidden text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800/60 transition"
+              className="md:hidden text-slate-400 hover:text-slate-700 p-1 rounded-lg hover:bg-slate-100 transition"
               title="Cerrar menú"
             >
               <X size={18} />
@@ -60,7 +61,8 @@ export function Sidebar({
           )}
         </div>
 
-        <nav className="space-y-1 text-xs font-medium">
+        {/* NAVEGACIÓN PRINCIPAL */}
+        <nav className="space-y-1.5 text-xs font-medium">
           <NavItem
             icon={<Home size={16} />}
             label="Inicio"
@@ -74,10 +76,10 @@ export function Sidebar({
                 setActiveNav('Dashboard');
                 setDashOpen(!dashOpen);
               }}
-              className={`flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer transition ${
+              className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl cursor-pointer transition ${
                 activeNav === 'Dashboard'
-                  ? 'bg-gradient-to-r from-[#FF6B00] to-[#FF8533] text-white font-semibold shadow-md shadow-orange-500/20'
-                  : 'text-gray-400 hover:text-white hover:bg-gray-800/40'
+                  ? 'bg-[#FFF0E5] text-[#FF5500] font-bold shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
               }`}
             >
               <div className="flex items-center gap-3">
@@ -86,18 +88,18 @@ export function Sidebar({
               </div>
               <ChevronDown
                 size={14}
-                className={`transition-transform duration-200 ${dashOpen ? 'rotate-180' : ''}`}
+                className={`transition-transform duration-200 ${dashOpen ? 'rotate-180 text-[#FF5500]' : 'text-slate-400'}`}
               />
             </div>
 
             {dashOpen && (
-              <div className="mt-1 ml-4 pl-3 border-l border-gray-800 space-y-1">
+              <div className="mt-1.5 ml-4 pl-3 border-l-2 border-orange-100 space-y-1">
                 <div
                   onClick={() => handleNav('Dashboard', 'ejecutiva')}
                   className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition text-[11px] ${
                     activeNav === 'Dashboard' && viewMode === 'ejecutiva'
-                      ? 'bg-[#FF6B00]/15 text-[#FF6B00] font-bold border border-[#FF6B00]/30'
-                      : 'text-gray-400 hover:text-white hover:bg-gray-800/30'
+                      ? 'bg-[#FF5500] text-white font-bold shadow-xs shadow-orange-500/20'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                   }`}
                 >
                   <Activity size={13} />
@@ -108,8 +110,8 @@ export function Sidebar({
                   onClick={() => handleNav('Dashboard', 'operativa')}
                   className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition text-[11px] ${
                     activeNav === 'Dashboard' && viewMode === 'operativa'
-                      ? 'bg-[#FF6B00]/15 text-[#FF6B00] font-bold border border-[#FF6B00]/30'
-                      : 'text-gray-400 hover:text-white hover:bg-gray-800/30'
+                      ? 'bg-[#FF5500] text-white font-bold shadow-xs shadow-orange-500/20'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                   }`}
                 >
                   <ClipboardList size={13} />
@@ -124,43 +126,52 @@ export function Sidebar({
           <NavItem icon={<Activity size={16} />} label="Eficiencia" active={activeNav === 'Eficiencia'} onClick={() => handleNav('Eficiencia')} />
           <NavItem icon={<Smile size={16} />} label="Experiencia (CSAT)" active={activeNav === 'Experiencia (CSAT)'} onClick={() => handleNav('Experiencia (CSAT)')} />
 
-          <div className="flex items-center justify-between px-3 py-2.5 text-gray-400 hover:text-white hover:bg-gray-800/40 rounded-lg cursor-pointer transition">
+          <div className="flex items-center justify-between px-3.5 py-2.5 text-slate-500 hover:text-slate-800 hover:bg-slate-50 rounded-xl cursor-pointer transition">
             <div className="flex items-center gap-3">
               <FileText size={16} />
               <span>Reportes</span>
             </div>
-            <ChevronDown size={14} />
+            <ChevronDown size={14} className="text-slate-400" />
           </div>
         </nav>
       </div>
 
-      <div className="px-2 pb-2 relative">
+      {/* FOOTER INFORMACIÓN DE MARCA */}
+      <div className="bg-slate-50 border border-slate-100 rounded-xl p-3.5 relative">
         <div className="flex items-center gap-1.5 mb-1">
-          <MapPin size={18} className="text-[#FF6B00]" />
-          <span className="font-black text-base tracking-tight text-white">WIN</span>
+          <MapPin size={16} className="text-[#FF5500]" />
+          <span className="font-black text-sm tracking-tight text-slate-900">WIN</span>
+          <span className="text-xs font-semibold text-[#FF5500]">en RUTA</span>
         </div>
-        <div className="text-[#FF6B00] font-black text-xl leading-none mb-3">
-          <span className="text-xs font-normal text-gray-300 mr-1">en</span>RUTA
-        </div>
-        <p className="text-[11px] text-gray-400 leading-relaxed pr-6">
-          Seguimiento y autogestión de tus instalaciones y visitas técnicas
+        <p className="text-[11px] text-slate-500 leading-snug">
+          Seguimiento y autogestión de tus instalaciones y visitas técnicas en tiempo real.
         </p>
       </div>
     </aside>
   );
 }
 
-function NavItem({ icon, label, active = false, onClick }: { icon: React.ReactNode; label: string; active?: boolean; onClick?: () => void }) {
+function NavItem({
+  icon,
+  label,
+  active = false,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  active?: boolean;
+  onClick?: () => void;
+}) {
   return (
     <div
       onClick={onClick}
-      className={`flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition ${
+      className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl cursor-pointer transition ${
         active
-          ? 'bg-gradient-to-r from-[#FF6B00] to-[#FF8533] text-white font-semibold shadow-md shadow-orange-500/20'
-          : 'text-gray-400 hover:text-white hover:bg-gray-800/40'
+          ? 'bg-[#FFF0E5] text-[#FF5500] font-bold shadow-xs'
+          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
       }`}
     >
-      {icon}
+      <span className={active ? 'text-[#FF5500]' : 'text-slate-500'}>{icon}</span>
       <span>{label}</span>
     </div>
   );

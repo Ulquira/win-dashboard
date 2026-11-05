@@ -207,11 +207,11 @@ export default function App() {
   }, [kpis]);
 
   return (
-    <div className="flex min-h-screen bg-[#090D16] text-gray-100 font-sans select-none relative">
+    <div className="flex min-h-screen bg-[#F8F9FA] text-slate-800 font-sans relative">
       {/* Backdrop para móviles */}
       {mobileMenuOpen && (
         <div
-          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 md:hidden transition-opacity"
+          className="fixed inset-0 bg-slate-900/30 backdrop-blur-xs z-40 md:hidden transition-opacity"
           onClick={() => setMobileMenuOpen(false)}
         />
       )}
@@ -225,13 +225,13 @@ export default function App() {
         onClose={() => setMobileMenuOpen(false)}
       />
 
-      <main className="flex-1 p-3 sm:p-5 overflow-y-auto space-y-4 max-w-full min-w-0">
+      <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto space-y-6 max-w-full min-w-0">
         {errorMsg && (
-          <div className="bg-red-500/10 border border-red-500/40 text-red-300 px-4 py-2.5 rounded-xl text-xs flex items-center justify-between">
+          <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-2xl text-xs flex items-center justify-between shadow-xs">
             <span><strong>Aviso de conexión:</strong> {errorMsg}</span>
             <button
               onClick={() => fetchDashboardData(startDate, endDate, service, zone, true)}
-              className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 rounded font-semibold"
+              className="px-3 py-1 bg-rose-100 hover:bg-rose-200 text-rose-900 rounded-lg font-bold transition"
             >
               Reintentar
             </button>
@@ -261,27 +261,27 @@ export default function App() {
         {activeNav === 'Dashboard' && (
           <>
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 bg-slate-200/60 p-1 rounded-2xl border border-slate-200/60">
                 <button
                   onClick={() => setViewMode('ejecutiva')}
-                  className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 font-semibold text-xs rounded-lg transition ${
+                  className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${
                     viewMode === 'ejecutiva'
-                      ? 'bg-[#FF6B00] text-white shadow-md shadow-orange-500/10'
-                      : 'bg-[#111827] text-gray-400 hover:text-gray-200 border border-gray-800'
+                      ? 'bg-white text-[#FF5500] shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  <Activity size={14} />
+                  <Activity size={14} className={viewMode === 'ejecutiva' ? 'text-[#FF5500]' : 'text-slate-400'} />
                   <span>Vista Ejecutiva</span>
                 </button>
                 <button
                   onClick={() => setViewMode('operativa')}
-                  className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 font-semibold text-xs rounded-lg transition ${
+                  className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${
                     viewMode === 'operativa'
-                      ? 'bg-[#FF6B00] text-white shadow-md shadow-orange-500/10'
-                      : 'bg-[#111827] text-gray-400 hover:text-gray-200 border border-gray-800'
+                      ? 'bg-white text-[#FF5500] shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  <ClipboardList size={14} />
+                  <ClipboardList size={14} className={viewMode === 'operativa' ? 'text-[#FF5500]' : 'text-slate-400'} />
                   <span>Vista Operativa</span>
                 </button>
               </div>

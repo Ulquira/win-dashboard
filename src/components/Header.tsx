@@ -85,35 +85,37 @@ export function Header({
       : 'Vista Operativa';
 
   return (
-    <header className="flex flex-col sm:flex-row flex-wrap items-start sm:items-center justify-between gap-3 border-b border-gray-800/80 pb-3">
-      <div className="flex items-center gap-2.5 sm:gap-3 w-full sm:w-auto justify-between sm:justify-start">
-        <div className="flex items-center gap-2.5">
+    <header className="flex flex-col sm:flex-row flex-wrap items-start sm:items-center justify-between gap-4 border-b border-slate-200/80 pb-4">
+      {/* TÍTULO Y BADGE DE ESTADO */}
+      <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-start">
+        <div className="flex items-center gap-3">
           {onToggleSidebar && (
             <button
               onClick={onToggleSidebar}
-              className="md:hidden p-1.5 rounded-lg bg-gray-800/80 text-gray-300 hover:text-white hover:bg-gray-700 transition"
+              className="md:hidden p-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:text-slate-900 shadow-xs transition"
               title="Abrir menú"
             >
               <Menu size={18} />
             </button>
           )}
-          <h2 className="text-lg sm:text-xl font-bold tracking-tight text-white truncate">
+          <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
             {titleLabel}
           </h2>
         </div>
 
+        {/* BADGES PASTEL PILL */}
         <span
-          className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-semibold border ${
+          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
             loading
-              ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+              ? 'bg-amber-100 text-amber-800'
               : dbOnline
-              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-              : 'bg-red-500/10 text-red-400 border-red-500/30'
+              ? 'bg-emerald-100 text-emerald-800'
+              : 'bg-rose-100 text-rose-800'
           }`}
         >
           <span
-            className={`w-1.5 h-1.5 rounded-full ${
-              loading ? 'bg-amber-400 animate-pulse' : dbOnline ? 'bg-emerald-400' : 'bg-red-400'
+            className={`w-2 h-2 rounded-full ${
+              loading ? 'bg-amber-500 animate-pulse' : dbOnline ? 'bg-emerald-600' : 'bg-rose-600'
             }`}
           />
           {loading ? 'Cargando' : dbOnline ? 'Conectado' : 'Desconectado'}
@@ -121,21 +123,21 @@ export function Header({
       </div>
 
       {/* BARRA UNIFICADA DE FILTROS GLOBALES */}
-      <div className="flex flex-wrap items-center gap-2 text-xs w-full lg:w-auto">
-        {/* 1. Buscador Dinámico Único */}
-        <div className="flex items-center bg-[#111827] border border-gray-700/80 rounded-lg px-2.5 py-1.5 flex-1 min-w-[180px] sm:w-64 focus-within:border-[#FF6B00] transition">
-          <Search size={13} className="text-gray-400 mr-2 shrink-0" />
+      <div className="flex flex-wrap items-center gap-2.5 text-xs w-full lg:w-auto">
+        {/* 1. Buscador Dinámico */}
+        <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-2 flex-1 min-w-[200px] sm:w-64 focus-within:border-[#FF5500] focus-within:ring-2 focus-within:ring-orange-100 shadow-xs transition">
+          <Search size={14} className="text-slate-400 mr-2 shrink-0" />
           <input
             type="text"
-            placeholder="Buscar DNI, tlf, orden, CTO, cliente..."
+            placeholder="Buscar DNI, tlf, orden, cliente..."
             value={globalSearch}
             onChange={(e) => setGlobalSearch(e.target.value)}
-            className="bg-transparent text-gray-200 focus:outline-none w-full text-xs"
+            className="bg-transparent text-slate-800 placeholder-slate-400 focus:outline-none w-full text-xs"
           />
           {globalSearch && (
             <button
               onClick={() => setGlobalSearch('')}
-              className="text-gray-500 hover:text-white ml-1 text-[11px]"
+              className="text-slate-400 hover:text-slate-700 ml-1 text-xs"
               title="Limpiar búsqueda"
             >
               ✕
@@ -143,39 +145,39 @@ export function Header({
           )}
         </div>
 
-        {/* Botón Histórico BD (Ignorar rango de fechas al buscar) */}
+        {/* Botón Histórico BD */}
         <button
           onClick={() => setIgnoreDates(!ignoreDates)}
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition shrink-0 ${
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition shrink-0 ${
             ignoreDates
-              ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
-              : 'bg-[#111827] text-gray-400 border-gray-700/70 hover:text-gray-200'
+              ? 'bg-sky-100 text-sky-800 font-bold border border-sky-200'
+              : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 shadow-xs'
           }`}
           title="Buscar en todo el histórico sin límite de fechas"
         >
-          <Globe size={13} />
+          <Globe size={14} className={ignoreDates ? 'text-sky-700' : 'text-slate-400'} />
           <span>{ignoreDates ? 'Todo el Histórico' : 'Rango Fechas'}</span>
         </button>
 
         {/* 2. Rango de Fechas */}
         <div
-          className={`flex items-center gap-1.5 bg-[#111827] border border-gray-700/70 rounded-lg px-2.5 py-1 transition shrink-0 ${
+          className={`flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-xs transition shrink-0 ${
             ignoreDates ? 'opacity-40 pointer-events-none' : ''
           }`}
         >
-          <Calendar size={13} className="text-[#FF6B00] shrink-0" />
+          <Calendar size={14} className="text-[#FF5500] shrink-0" />
           <input
             type="date"
             value={startDate}
             onChange={(e) => setStartDate(e.target.value)}
-            className="bg-transparent text-gray-200 focus:outline-none text-[11px] cursor-pointer"
+            className="bg-transparent text-slate-700 focus:outline-none text-xs cursor-pointer font-medium"
           />
-          <span className="text-gray-500">–</span>
+          <span className="text-slate-400">–</span>
           <input
             type="date"
             value={endDate}
             onChange={(e) => setEndDate(e.target.value)}
-            className="bg-transparent text-gray-200 focus:outline-none text-[11px] cursor-pointer"
+            className="bg-transparent text-slate-700 focus:outline-none text-xs cursor-pointer font-medium"
           />
         </div>
 
@@ -184,31 +186,31 @@ export function Header({
           <button
             type="button"
             onClick={() => setDropdownOpen(!dropdownOpen)}
-            className={`flex items-center justify-between gap-2 bg-[#111827] border rounded-lg px-3 py-1.5 text-xs transition w-full sm:min-w-[175px] ${
+            className={`flex items-center justify-between gap-2 bg-white border rounded-xl px-3.5 py-2 text-xs transition w-full sm:min-w-[175px] shadow-xs ${
               selectedServices.length > 0
-                ? 'border-[#FF6B00] text-white font-semibold'
-                : 'border-gray-700/70 text-gray-200'
+                ? 'border-[#FF5500] text-[#FF5500] font-bold bg-[#FFF0E5]'
+                : 'border-slate-200 text-slate-700 hover:border-slate-300'
             }`}
           >
             <span className="truncate">{serviceSummaryLabel}</span>
-            <ChevronDown size={13} className="text-gray-400 shrink-0" />
+            <ChevronDown size={14} className={selectedServices.length > 0 ? 'text-[#FF5500]' : 'text-slate-400'} />
           </button>
 
           {dropdownOpen && (
-            <div className="absolute right-0 mt-1.5 w-60 bg-[#0B101B] border border-gray-700 rounded-xl shadow-2xl p-2 z-50 space-y-1 max-h-72 overflow-y-auto">
+            <div className="absolute right-0 mt-2 w-64 bg-white border border-slate-200 rounded-2xl shadow-xl p-2 z-50 space-y-1 max-h-72 overflow-y-auto">
               <div
                 onClick={() => setSelectedServices([])}
-                className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center justify-between text-xs font-semibold transition ${
+                className={`px-3 py-2 rounded-xl cursor-pointer flex items-center justify-between text-xs font-semibold transition ${
                   selectedServices.length === 0
-                    ? 'bg-[#FF6B00] text-white'
-                    : 'text-gray-300 hover:bg-gray-800'
+                    ? 'bg-[#FF5500] text-white'
+                    : 'text-slate-700 hover:bg-slate-50'
                 }`}
               >
                 <span>Todos los servicios</span>
-                {selectedServices.length === 0 && <Check size={13} />}
+                {selectedServices.length === 0 && <Check size={14} />}
               </div>
 
-              <div className="border-t border-gray-800 my-1" />
+              <div className="border-t border-slate-100 my-1" />
 
               {serviceOptions.map((srv) => {
                 const checked = selectedServices.includes(srv);
@@ -216,14 +218,14 @@ export function Header({
                   <div
                     key={srv}
                     onClick={() => toggleServiceItem(srv)}
-                    className={`px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center justify-between text-xs transition ${
+                    className={`px-3 py-2 rounded-xl cursor-pointer flex items-center justify-between text-xs transition ${
                       checked
-                        ? 'bg-[#FF6B00]/20 text-white font-bold border border-[#FF6B00]/40'
-                        : 'text-gray-300 hover:bg-gray-800'
+                        ? 'bg-[#FFF0E5] text-[#FF5500] font-bold'
+                        : 'text-slate-700 hover:bg-slate-50'
                     }`}
                   >
                     <span>{srv}</span>
-                    {checked && <Check size={13} className="text-[#FF6B00]" />}
+                    {checked && <Check size={14} className="text-[#FF5500]" />}
                   </div>
                 );
               })}
@@ -231,11 +233,11 @@ export function Header({
           )}
         </div>
 
-        {/* 4. Botón Acción Consultar / Refrescar */}
+        {/* 4. Botón Primario de Marca "Consultar" */}
         <button
           onClick={onConsult}
           disabled={loading}
-          className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-[#FF6B00] hover:bg-[#FF8533] disabled:opacity-50 text-white font-semibold rounded-lg text-xs shadow-md shadow-orange-500/20 transition flex-1 sm:flex-initial"
+          className="flex items-center justify-center gap-2 px-4 py-2 bg-[#FF5500] hover:bg-[#E04B00] disabled:opacity-50 text-white font-semibold rounded-xl text-xs shadow-sm shadow-orange-500/30 transition flex-1 sm:flex-initial"
         >
           <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
           <span>{loading ? 'Cargando...' : 'Consultar'}</span>
