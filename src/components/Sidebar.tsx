@@ -76,11 +76,10 @@ export function Sidebar({
                 setActiveNav('Dashboard');
                 setDashOpen(!dashOpen);
               }}
-              className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl cursor-pointer transition ${
-                activeNav === 'Dashboard'
-                  ? 'bg-[#FFF0E5] text-[#FF5500] font-bold shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
+              className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl cursor-pointer transition ${activeNav === 'Dashboard'
+                ? 'bg-[#FFF0E5] text-[#FF5500] font-bold shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
             >
               <div className="flex items-center gap-3">
                 <BarChart2 size={16} />
@@ -96,11 +95,10 @@ export function Sidebar({
               <div className="mt-1.5 ml-4 pl-3 border-l-2 border-orange-100 space-y-1">
                 <div
                   onClick={() => handleNav('Dashboard', 'ejecutiva')}
-                  className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition text-[11px] ${
-                    activeNav === 'Dashboard' && viewMode === 'ejecutiva'
-                      ? 'bg-[#FF5500] text-white font-bold shadow-xs shadow-orange-500/20'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-                  }`}
+                  className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition text-[11px] ${activeNav === 'Dashboard' && viewMode === 'ejecutiva'
+                    ? 'bg-[#FF5500] text-white font-bold shadow-xs shadow-orange-500/20'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                    }`}
                 >
                   <Activity size={13} />
                   <span>Vista Ejecutiva</span>
@@ -108,14 +106,23 @@ export function Sidebar({
 
                 <div
                   onClick={() => handleNav('Dashboard', 'operativa')}
-                  className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition text-[11px] ${
-                    activeNav === 'Dashboard' && viewMode === 'operativa'
+                  className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition text-[11px] ${activeNav === 'Dashboard' && viewMode === 'operativa'
                       ? 'bg-[#FF5500] text-white font-bold shadow-xs shadow-orange-500/20'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-                  }`}
+                    }`}
                 >
                   <ClipboardList size={13} />
                   <span>Vista Operativa</span>
+                </div>
+                <div
+                  onClick={() => handleNav('Dashboard', 'operaciones')}
+                  className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition text-[11px] ${activeNav === 'Dashboard' && viewMode === 'operaciones'
+                      ? 'bg-[#FF5500] text-white font-bold shadow-xs shadow-orange-500/20'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                    }`}
+                >
+                  <BarChart2 size={13} />
+                  <span>Operaciones Campo</span>
                 </div>
               </div>
             )}
@@ -165,11 +172,10 @@ function NavItem({
   return (
     <div
       onClick={onClick}
-      className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl cursor-pointer transition ${
-        active
-          ? 'bg-[#FFF0E5] text-[#FF5500] font-bold shadow-xs'
-          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-      }`}
+      className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl cursor-pointer transition ${active
+        ? 'bg-[#FFF0E5] text-[#FF5500] font-bold shadow-xs'
+        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+        }`}
     >
       <span className={active ? 'text-[#FF5500]' : 'text-slate-500'}>{icon}</span>
       <span>{label}</span>

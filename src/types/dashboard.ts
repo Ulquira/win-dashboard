@@ -1,5 +1,26 @@
-export type ViewMode = 'ejecutiva' | 'operativa';
-export type NavSection = 'Inicio' | 'Dashboard' | 'Órdenes' | 'Seguimiento' | 'Eficiencia' | 'Experiencia (CSAT)';
+export type ViewMode = 'ejecutiva' | 'operativa' | 'operaciones';
+export type NavSection =
+  | 'Inicio'
+  | 'Dashboard'
+  | 'Órdenes'
+  | 'Seguimiento'
+  | 'Eficiencia'
+  | 'Experiencia (CSAT)';
+
+export interface OperationsKpis {
+  total_ordenes: number;
+  finalizadas: number;
+  en_curso: number;
+  agendadas: number;
+  canceladas: number;
+  cuadrillas_activas: number;
+  partners_activos: number;
+  zonas_activas: number;
+  efectividad_pct: number;
+  cancelacion_pct: number;
+  prod_ot_por_cuadrilla: number;
+  prod_fin_por_cuadrilla: number;
+}
 
 export interface KpiData {
   total_ordenes: number;

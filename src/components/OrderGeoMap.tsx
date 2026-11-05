@@ -82,7 +82,9 @@ function parseTechnicalData(rawDatos?: string | null, geoCliente?: string | null
 export function OrderGeoMap({ order }: { order: RealOrder }) {
   const mapContainerRef = React.useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = React.useRef<any>(null);
-  const [mapStyle, setMapStyle] = useState<'google_streets' | 'google_hybrid' | 'dark'>('google_streets');
+  const [mapStyle, setMapStyle] = useState<'google_streets' | 'google_hybrid' | 'dark'>(() =>
+    document.documentElement.classList.contains('dark') ? 'dark' : 'google_streets'
+  );
 
   const { points, attributes } = useMemo(
     () =>

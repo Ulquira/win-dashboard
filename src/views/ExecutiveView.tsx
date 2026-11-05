@@ -117,18 +117,18 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
                   className="absolute inset-0 bg-gradient-to-r from-blue-600 via-blue-500 to-sky-500 rounded-xl shadow-xs"
                   style={{ clipPath: 'polygon(0% 0%, 100% 0%, 93% 100%, 7% 100%)' }}
                 />
-                <div className="relative z-10 grid grid-cols-[28px_115px] items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-lg bg-white/20 flex items-center justify-center text-white">
+                <div className="relative z-10 grid grid-cols-[30px_68px] items-center justify-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-white/20 flex items-center justify-center text-white shrink-0">
                     <ClipboardList size={15} />
                   </div>
-                  <div className="text-left leading-tight">
-                    <div className="font-extrabold text-base text-white tracking-tight">{calc.ordenes}</div>
-                    <div className="text-[11px] font-medium text-blue-50">Órdenes</div>
+                  <div className="flex flex-col items-center justify-center text-center leading-none">
+                    <div className="font-extrabold text-base text-white tracking-tight tabular-nums">{calc.ordenes}</div>
+                    <div className="text-[11px] font-medium text-blue-50 mt-0.5">Órdenes</div>
                   </div>
                 </div>
               </div>
               <div className="w-24 text-right shrink-0">
-                <div className="font-extrabold text-sm text-slate-900">100%</div>
+                <div className="font-extrabold text-sm text-slate-900 tabular-nums">100%</div>
                 <div className="text-[10px] text-slate-400">Total base</div>
               </div>
             </div>
@@ -140,18 +140,18 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
                   className="absolute inset-0 bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-500 rounded-xl shadow-xs"
                   style={{ clipPath: 'polygon(7% 0%, 93% 0%, 86% 100%, 14% 100%)' }}
                 />
-                <div className="relative z-10 grid grid-cols-[28px_115px] items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-lg bg-white/20 flex items-center justify-center text-white">
+                <div className="relative z-10 grid grid-cols-[30px_68px] items-center justify-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-white/20 flex items-center justify-center text-white shrink-0">
                     <Send size={14} />
                   </div>
-                  <div className="text-left leading-tight">
-                    <div className="font-extrabold text-base text-white tracking-tight">{calc.whsEnviados}</div>
-                    <div className="text-[11px] font-medium text-emerald-50">Enviados</div>
+                  <div className="flex flex-col items-center justify-center text-center leading-none">
+                    <div className="font-extrabold text-base text-white tracking-tight tabular-nums">{calc.whsEnviados}</div>
+                    <div className="text-[11px] font-medium text-emerald-50 mt-0.5">Enviados</div>
                   </div>
                 </div>
               </div>
               <div className="w-24 text-right shrink-0">
-                <div className="font-extrabold text-sm text-emerald-600">{calc.whsPct}%</div>
+                <div className="font-extrabold text-sm text-emerald-600 tabular-nums">{calc.whsPct}%</div>
                 <div className="text-[10px] text-slate-400">del total</div>
               </div>
             </div>
@@ -163,18 +163,18 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
                   className="absolute inset-0 bg-gradient-to-r from-cyan-600 via-sky-500 to-blue-500 rounded-xl shadow-xs"
                   style={{ clipPath: 'polygon(14% 0%, 86% 0%, 79% 100%, 21% 100%)' }}
                 />
-                <div className="relative z-10 grid grid-cols-[28px_115px] items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-lg bg-white/20 flex items-center justify-center text-white">
+                <div className="relative z-10 grid grid-cols-[30px_68px] items-center justify-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-white/20 flex items-center justify-center text-white shrink-0">
                     <CheckCheck size={15} />
                   </div>
-                  <div className="text-left leading-tight">
-                    <div className="font-extrabold text-base text-white tracking-tight">{calc.leidos}</div>
-                    <div className="text-[11px] font-medium text-cyan-50">Leídos</div>
+                  <div className="flex flex-col items-center justify-center text-center leading-none">
+                    <div className="font-extrabold text-base text-white tracking-tight tabular-nums">{calc.leidos}</div>
+                    <div className="text-[11px] font-medium text-cyan-50 mt-0.5">Leídos</div>
                   </div>
                 </div>
               </div>
               <div className="w-24 text-right shrink-0">
-                <div className="font-extrabold text-sm text-sky-600">{calc.readPct}%</div>
+                <div className="font-extrabold text-sm text-sky-600 tabular-nums">{calc.readPct}%</div>
                 <div className="text-[10px] text-slate-400">del enviado</div>
               </div>
             </div>
@@ -186,23 +186,23 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
                   className="absolute inset-0 bg-gradient-to-r from-amber-500 via-orange-500 to-[#FF5500] rounded-xl shadow-xs"
                   style={{ clipPath: 'polygon(21% 0%, 79% 0%, 72% 100%, 28% 100%)' }}
                 />
-                <div className="relative z-10 grid grid-cols-[28px_115px] items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-lg bg-white/20 flex items-center justify-center text-white">
+                <div className="relative z-10 grid grid-cols-[30px_68px] items-center justify-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-white/20 flex items-center justify-center text-white shrink-0">
                     <MapPin size={15} />
                   </div>
-                  <div className="text-left leading-tight">
-                    <div className="font-extrabold text-base text-white tracking-tight">{calc.tracking}</div>
-                    <div className="text-[11px] font-medium text-amber-50">Ingreso</div>
+                  <div className="flex flex-col items-center justify-center text-center leading-none">
+                    <div className="font-extrabold text-base text-white tracking-tight tabular-nums">{calc.tracking}</div>
+                    <div className="text-[11px] font-medium text-amber-50 mt-0.5">Ingreso</div>
                   </div>
                 </div>
               </div>
               <div className="w-24 flex flex-col items-end justify-center gap-1 shrink-0">
                 <div className="flex items-center gap-1">
-                  <span className="font-bold text-xs text-amber-700">{calc.trackPct}%</span>
+                  <span className="font-bold text-xs text-amber-700 tabular-nums">{calc.trackPct}%</span>
                   <span className="text-[9px] text-slate-400">s/env.</span>
                 </div>
                 <div className="flex items-center gap-1">
-                  <span className="font-bold text-xs text-[#FF5500]">{calc.trackOverReadPct}%</span>
+                  <span className="font-bold text-xs text-[#FF5500] tabular-nums">{calc.trackOverReadPct}%</span>
                   <span className="text-[9px] text-slate-400">s/leído</span>
                 </div>
               </div>
@@ -583,9 +583,8 @@ function PartnerRow({ rank, name, surveys, score, csat }: PartnerRankItem) {
   return (
     <tr className="hover:bg-slate-50/80 transition">
       <td className="py-2">
-        <span className={`w-5 h-5 rounded-full inline-flex items-center justify-center text-[10px] font-bold ${
-          rank <= 3 ? 'bg-amber-100 text-amber-800' : 'text-slate-400 bg-slate-100'
-        }`}>
+        <span className={`w-5 h-5 rounded-full inline-flex items-center justify-center text-[10px] font-bold ${rank <= 3 ? 'bg-amber-100 text-amber-800' : 'text-slate-400 bg-slate-100'
+          }`}>
           {rank}
         </span>
       </td>

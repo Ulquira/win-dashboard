@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Calendar, ChevronDown, RefreshCw, Search, Globe, Check, Menu } from 'lucide-react';
+import { Calendar, ChevronDown, RefreshCw, Search, Globe, Check, Menu, Sun, Moon } from 'lucide-react';
 import { NavSection, ViewMode } from '../types/dashboard';
 
 interface HeaderProps {
@@ -20,6 +20,8 @@ interface HeaderProps {
   setIgnoreDates: (val: boolean) => void;
   onConsult: () => void;
   onToggleSidebar?: () => void;
+  darkMode?: boolean;
+  onToggleDarkMode?: () => void;
 }
 
 export function Header({
@@ -40,6 +42,8 @@ export function Header({
   setIgnoreDates,
   onConsult,
   onToggleSidebar,
+  darkMode = false,
+  onToggleDarkMode,
 }: HeaderProps) {
   const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
@@ -66,23 +70,25 @@ export function Header({
     selectedServices.length === 0
       ? 'Todos los servicios'
       : selectedServices.length === 1
-      ? selectedServices[0]
-      : `${selectedServices.length} servicios seleccionados`;
+        ? selectedServices[0]
+        : `${selectedServices.length} servicios seleccionados`;
 
   const titleLabel =
     activeNav === 'Órdenes'
       ? 'Órdenes'
       : activeNav === 'Seguimiento'
-      ? 'Seguimiento'
-      : activeNav === 'Eficiencia'
-      ? 'Eficiencia'
-      : activeNav === 'Experiencia (CSAT)'
-      ? 'Experiencia (CSAT)'
-      : activeNav === 'Inicio'
-      ? 'Inicio'
-      : viewMode === 'ejecutiva'
-      ? 'Vista Ejecutiva'
-      : 'Vista Operativa';
+        ? 'Seguimiento'
+        : activeNav === 'Eficiencia'
+          ? 'Eficiencia'
+          : activeNav === 'Experiencia (CSAT)'
+            ? 'Experiencia (CSAT)'
+            : activeNav === 'Inicio'
+              ? 'Inicio'
+              : viewMode === 'ejecutiva'
+                ? 'Vista Ejecutiva'
+                : viewMode === 'operativa'
+                  ? 'Vista Operativa'
+                  : 'Operaciones de Campo';
 
   return (
     <header className="flex flex-col sm:flex-row flex-wrap items-start sm:items-center justify-between gap-4 border-b border-slate-200/80 pb-4">
@@ -105,18 +111,16 @@ export function Header({
 
         {/* BADGES PASTEL PILL */}
         <span
-          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
-            loading
-              ? 'bg-amber-100 text-amber-800'
-              : dbOnline
+          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${loading
+            ? 'bg-amber-100 text-amber-800'
+            : dbOnline
               ? 'bg-emerald-100 text-emerald-800'
               : 'bg-rose-100 text-rose-800'
-          }`}
+            }`}
         >
           <span
-            className={`w-2 h-2 rounded-full ${
-              loading ? 'bg-amber-500 animate-pulse' : dbOnline ? 'bg-emerald-600' : 'bg-rose-600'
-            }`}
+            className={`w-2 h-2 rounded-full ${loading ? 'bg-amber-500 animate-pulse' : dbOnline ? 'bg-emerald-600' : 'bg-rose-600'
+              }`}
           />
           {loading ? 'Cargando' : dbOnline ? 'Conectado' : 'Desconectado'}
         </span>
@@ -148,11 +152,10 @@ export function Header({
         {/* Botón Histórico BD */}
         <button
           onClick={() => setIgnoreDates(!ignoreDates)}
-          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition shrink-0 ${
-            ignoreDates
-              ? 'bg-sky-100 text-sky-800 font-bold border border-sky-200'
-              : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 shadow-xs'
-          }`}
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition shrink-0 ${ignoreDates
+            ? 'bg-sky-100 text-sky-800 font-bold border border-sky-200'
+            : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 shadow-xs'
+            }`}
           title="Buscar en todo el histórico sin límite de fechas"
         >
           <Globe size={14} className={ignoreDates ? 'text-sky-700' : 'text-slate-400'} />
@@ -161,9 +164,8 @@ export function Header({
 
         {/* 2. Rango de Fechas */}
         <div
-          className={`flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-xs transition shrink-0 ${
-            ignoreDates ? 'opacity-40 pointer-events-none' : ''
-          }`}
+          className={`flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-xs transition shrink-0 ${ignoreDates ? 'opacity-40 pointer-events-none' : ''
+            }`}
         >
           <Calendar size={14} className="text-[#FF5500] shrink-0" />
           <input
@@ -186,11 +188,10 @@ export function Header({
           <button
             type="button"
             onClick={() => setDropdownOpen(!dropdownOpen)}
-            className={`flex items-center justify-between gap-2 bg-white border rounded-xl px-3.5 py-2 text-xs transition w-full sm:min-w-[175px] shadow-xs ${
-              selectedServices.length > 0
-                ? 'border-[#FF5500] text-[#FF5500] font-bold bg-[#FFF0E5]'
-                : 'border-slate-200 text-slate-700 hover:border-slate-300'
-            }`}
+            className={`flex items-center justify-between gap-2 bg-white border rounded-xl px-3.5 py-2 text-xs transition w-full sm:min-w-[175px] shadow-xs ${selectedServices.length > 0
+              ? 'border-[#FF5500] text-[#FF5500] font-bold bg-[#FFF0E5]'
+              : 'border-slate-200 text-slate-700 hover:border-slate-300'
+              }`}
           >
             <span className="truncate">{serviceSummaryLabel}</span>
             <ChevronDown size={14} className={selectedServices.length > 0 ? 'text-[#FF5500]' : 'text-slate-400'} />
@@ -200,11 +201,10 @@ export function Header({
             <div className="absolute right-0 mt-2 w-64 bg-white border border-slate-200 rounded-2xl shadow-xl p-2 z-50 space-y-1 max-h-72 overflow-y-auto">
               <div
                 onClick={() => setSelectedServices([])}
-                className={`px-3 py-2 rounded-xl cursor-pointer flex items-center justify-between text-xs font-semibold transition ${
-                  selectedServices.length === 0
-                    ? 'bg-[#FF5500] text-white'
-                    : 'text-slate-700 hover:bg-slate-50'
-                }`}
+                className={`px-3 py-2 rounded-xl cursor-pointer flex items-center justify-between text-xs font-semibold transition ${selectedServices.length === 0
+                  ? 'bg-[#FF5500] text-white'
+                  : 'text-slate-700 hover:bg-slate-50'
+                  }`}
               >
                 <span>Todos los servicios</span>
                 {selectedServices.length === 0 && <Check size={14} />}
@@ -218,11 +218,10 @@ export function Header({
                   <div
                     key={srv}
                     onClick={() => toggleServiceItem(srv)}
-                    className={`px-3 py-2 rounded-xl cursor-pointer flex items-center justify-between text-xs transition ${
-                      checked
-                        ? 'bg-[#FFF0E5] text-[#FF5500] font-bold'
-                        : 'text-slate-700 hover:bg-slate-50'
-                    }`}
+                    className={`px-3 py-2 rounded-xl cursor-pointer flex items-center justify-between text-xs transition ${checked
+                      ? 'bg-[#FFF0E5] text-[#FF5500] font-bold'
+                      : 'text-slate-700 hover:bg-slate-50'
+                      }`}
                   >
                     <span>{srv}</span>
                     {checked && <Check size={14} className="text-[#FF5500]" />}
@@ -242,6 +241,18 @@ export function Header({
           <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
           <span>{loading ? 'Cargando...' : 'Consultar'}</span>
         </button>
+
+        {/* 5. Botón Conmutador Dark / Light Mode */}
+        {onToggleDarkMode && (
+          <button
+            type="button"
+            onClick={onToggleDarkMode}
+            className="flex items-center justify-center p-2 rounded-xl bg-white border border-slate-200 text-slate-700 hover:border-[#FF5500] hover:text-[#FF5500] shadow-xs transition shrink-0"
+            title={darkMode ? 'Cambiar a Modo Claro' : 'Cambiar a Modo Oscuro'}
+          >
+            {darkMode ? <Sun size={15} className="text-amber-400" /> : <Moon size={15} />}
+          </button>
+        )}
       </div>
     </header>
   );

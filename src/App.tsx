@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Activity, ClipboardList } from 'lucide-react';
+import { Activity, ClipboardList, Wrench } from 'lucide-react';
+
 import {
   ViewMode, NavSection, KpiData, EvolutionPoint,
   RealOrder, PartnerRankItem, CalculatedMetrics
@@ -10,6 +11,7 @@ import { KpiCards } from './components/KpiCards';
 import { OrderDetailDrawer } from './components/OrderDetailDrawer';
 import { ExecutiveView } from './views/ExecutiveView';
 import { OperationalView } from './views/OperationalView';
+import { OperationsDashboardView } from './views/OperationsDashboardView';
 import { TrackingView } from './views/TrackingView';
 import { OrdersView } from './views/OrdersView';
 import { apiFetch, API_BASE_URL } from './config/api';
@@ -18,6 +20,20 @@ export default function App() {
   const [activeNav, setActiveNav] = useState<NavSection>('Dashboard');
   const [viewMode, setViewMode] = useState<ViewMode>('ejecutiva');
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
+  const [darkMode, setDarkMode] = useState<boolean>(() => {
+    return localStorage.getItem('win_theme') === 'dark';
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (darkMode) {
+      root.classList.add('dark');
+      localStorage.setItem('win_theme', 'dark');
+    } else {
+      root.classList.remove('dark');
+      localStorage.setItem('win_theme', 'light');
+    }
+  }, [darkMode]);
 
   const [startDate, setStartDate] = useState<string>(() => new Date().toLocaleDateString('en-CA'));
   const [endDate, setEndDate] = useState<string>(() => new Date().toLocaleDateString('en-CA'));
@@ -44,6 +60,7 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [selectedOrder, setSelectedOrder] = useState<RealOrder | null>(null);
+  const [consultTrigger, setConsultTrigger] = useState<number>(0);
 
   const fetchDashboardData = (
     sDate = startDate,
@@ -74,6 +91,19 @@ export default function App() {
           setOrders(data.orders || []);
           setPartners(data.partners || []);
           setDbOnline(true);
+
+          const extractedServices = Array.from(
+            new Set([
+              ...(data.byTipoOperacion || []).map((t: any) => String(t.tipo || '').trim()),
+              ...(data.orders || []).map((o: any) => String(o.servicio_tipo || o.producto || '').trim()),
+            ])
+          ).filter((s) => s && s !== '-');
+
+          if (extractedServices.length > 0) {
+            setServiceOptions((prev) =>
+              Array.from(new Set([...prev, ...extractedServices])).sort()
+            );
+          }
         } else {
           setDbOnline(false);
           setErrorMsg(data.error || 'Error desconocido en la respuesta de la API');
@@ -110,6 +140,19 @@ export default function App() {
           setOrders(data.orders || []);
           setPartners(data.partners || []);
           setDbOnline(true);
+
+          const extractedServices = Array.from(
+            new Set([
+              ...(data.byTipoOperacion || []).map((t: any) => String(t.tipo || '').trim()),
+              ...(data.orders || []).map((o: any) => String(o.servicio_tipo || o.producto || '').trim()),
+            ])
+          ).filter((s) => s && s !== '-');
+
+          if (extractedServices.length > 0) {
+            setServiceOptions((prev) =>
+              Array.from(new Set([...prev, ...extractedServices])).sort()
+            );
+          }
         } else {
           setDbOnline(false);
           setErrorMsg(data.error || 'Error desconocido en la respuesta de la API');
@@ -254,52 +297,77 @@ export default function App() {
           setSelectedServices={setSelectedServices}
           setGlobalSearch={setGlobalSearch}
           setIgnoreDates={setIgnoreDates}
-          onConsult={() => fetchDashboardData(startDate, endDate, service, zone, true)}
+          onConsult={() => {
+            setConsultTrigger((prev) => prev + 1);
+            fetchDashboardData(startDate, endDate, service, zone, true);
+          }}
           onToggleSidebar={() => setMobileMenuOpen(!mobileMenuOpen)}
+          darkMode={darkMode}
+          onToggleDarkMode={() => setDarkMode((prev) => !prev)}
         />
 
         {activeNav === 'Dashboard' && (
           <>
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 bg-slate-200/60 p-1 rounded-2xl border border-slate-200/60">
+              <div className="flex flex-wrap items-center gap-2 bg-slate-200/60 p-1 rounded-2xl border border-slate-200/60">
                 <button
                   onClick={() => setViewMode('ejecutiva')}
-                  className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${
-                    viewMode === 'ejecutiva'
-                      ? 'bg-white text-[#FF5500] shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
+                  className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'ejecutiva'
+                    ? 'bg-white text-[#FF5500] shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                    }`}
                 >
                   <Activity size={14} className={viewMode === 'ejecutiva' ? 'text-[#FF5500]' : 'text-slate-400'} />
                   <span>Vista Ejecutiva</span>
                 </button>
                 <button
                   onClick={() => setViewMode('operativa')}
-                  className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${
-                    viewMode === 'operativa'
-                      ? 'bg-white text-[#FF5500] shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
+                  className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'operativa'
+                    ? 'bg-white text-[#FF5500] shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                    }`}
                 >
                   <ClipboardList size={14} className={viewMode === 'operativa' ? 'text-[#FF5500]' : 'text-slate-400'} />
                   <span>Vista Operativa</span>
                 </button>
+                <button
+                  onClick={() => setViewMode('operaciones')}
+                  className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'operaciones'
+                    ? 'bg-white text-[#FF5500] shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                >
+                  <Wrench size={14} className={viewMode === 'operaciones' ? 'text-[#FF5500]' : 'text-slate-400'} />
+                  <span>Operaciones Campo</span>
+                </button>
               </div>
             </div>
 
-            <KpiCards calc={calc} kpis={kpis} />
-
-            {viewMode === 'ejecutiva' ? (
-              <ExecutiveView calc={calc} evolution={evolution} partners={partners} />
-            ) : (
-              <OperationalView
-                calc={calc}
-                kpis={kpis}
-                dailyInRange={dailyInRange}
-                byEstadoOt={byEstadoOt}
-                bySector={bySector}
-                byTipoOperacion={byTipoOperacion}
+            {viewMode === 'operaciones' ? (
+              <OperationsDashboardView
+                startDate={startDate}
+                endDate={endDate}
+                service={service}
+                globalSearch={globalSearch}
+                ignoreDates={ignoreDates}
+                consultTrigger={consultTrigger}
               />
+            ) : (
+              <>
+                <KpiCards calc={calc} kpis={kpis} />
+                {viewMode === 'ejecutiva' ? (
+                  <ExecutiveView calc={calc} evolution={evolution} partners={partners} />
+                ) : (
+                  <OperationalView
+                    calc={calc}
+                    kpis={kpis}
+                    dailyInRange={dailyInRange}
+                    byEstadoOt={byEstadoOt}
+                    bySector={bySector}
+                    byTipoOperacion={byTipoOperacion}
+                  />
+                )}
+              </>
             )}
           </>
         )}

@@ -78,24 +78,56 @@ let servicioToTipoMap = new Map<string, string>();
 let tiposUnicosList: string[] = [];
 
 async function loadTipoServicioCache() {
+  const map = new Map<string, string>();
+  const setTipos = new Set<string>();
+
   try {
-    const [rows]: any = await pool.query(
-      `SELECT Servicio, Tipo FROM tiposervicio WHERE Tipo IS NOT NULL`
-    );
-    const map = new Map<string, string>();
-    const setTipos = new Set<string>();
-    for (const r of rows) {
-      if (r.Servicio && r.Tipo) {
-        map.set(String(r.Servicio).trim().toUpperCase(), String(r.Tipo).trim());
-        setTipos.add(String(r.Tipo).trim());
+    const [rows]: any = await pool.query(`SELECT * FROM tiposervicio`);
+    for (const r of rows || []) {
+      const entries = Object.entries(r);
+      const srvVal =
+        r.Servicio ?? r.servicio ?? r.Producto ?? r.producto ?? entries[0]?.[1];
+      const tipoVal =
+        r.Tipo ?? r.tipo ?? r.Categoria ?? r.categoria ?? entries[1]?.[1] ?? srvVal;
+
+      if (srvVal && tipoVal) {
+        map.set(String(srvVal).trim().toUpperCase(), String(tipoVal).trim());
+        setTipos.add(String(tipoVal).trim());
       }
     }
-    servicioToTipoMap = map;
-    tiposUnicosList = Array.from(setTipos).sort();
-    console.log(`✅ Catálogo tiposervicio cargado en memoria (${tiposUnicosList.length} tipos)`);
   } catch (err: any) {
-    console.warn('⚠️ No se pudo leer la tabla tiposervicio:', err.message);
+    console.warn('⚠️ Aviso leyendo tabla tiposervicio:', err.message);
   }
+
+  // Fallback rápido sobre las últimas 5000 órdenes si tiposervicio está vacío
+  if (setTipos.size === 0) {
+    try {
+      const [recentRows]: any = await pool.query(`
+        SELECT DISTINCT
+          UPPER(TRIM(producto)) AS prod,
+          TRIM(COALESCE(NULLIF(TRIM(tipo_operacion), ''), producto)) AS tipo
+        FROM (
+          SELECT producto, tipo_operacion
+          FROM vw_reporte_funnel_casos_360
+          ORDER BY orden_id DESC
+          LIMIT 5000
+        ) sub
+        WHERE producto IS NOT NULL AND TRIM(producto) != ''
+      `);
+      for (const r of recentRows || []) {
+        if (r.prod && r.tipo) {
+          map.set(String(r.prod).toUpperCase(), String(r.tipo));
+          setTipos.add(String(r.tipo));
+        }
+      }
+    } catch (fbErr: any) {
+      console.warn('⚠️ Fallback de servicios omitido:', fbErr.message);
+    }
+  }
+
+  servicioToTipoMap = map;
+  tiposUnicosList = Array.from(setTipos).filter(Boolean).sort();
+  console.log(`✅ Catálogo de servicios cargado (${tiposUnicosList.length} tipos):`, tiposUnicosList.join(', '));
 }
 
 await loadTipoServicioCache();
@@ -109,12 +141,12 @@ function resolveProductosFromServiceFilter(serviceParam: string): {
 } {
   const srvList =
     serviceParam &&
-    serviceParam !== 'Todos' &&
-    serviceParam !== 'Todos los servicios'
+      serviceParam !== 'Todos' &&
+      serviceParam !== 'Todos los servicios'
       ? serviceParam
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
       : [];
 
   const productosDelTipo: string[] = [];
@@ -133,40 +165,60 @@ function resolveProductosFromServiceFilter(serviceParam: string): {
 // 1. Endpoint de catálogos para filtros desplegables
 app.get('/api/filters', async (_req, res) => {
   try {
-    const cachedFilters = queryCache.get('catalog_filters');
-    if (cachedFilters) return res.json(cachedFilters);
+    const cachedFilters: any = queryCache.get('catalog_filters');
+    if (
+      cachedFilters &&
+      cachedFilters.ok &&
+      Array.isArray(cachedFilters.servicios) &&
+      cachedFilters.servicios.length > 0
+    ) {
+      return res.json(cachedFilters);
+    }
 
     if (tiposUnicosList.length === 0) await loadTipoServicioCache();
 
-    const [zonas, partners]: any = await Promise.all([
-      pool.query(`
-        SELECT DISTINCT sector_operativo AS zona
-        FROM vw_reporte_funnel_casos_360
-        WHERE sector_operativo IS NOT NULL AND TRIM(sector_operativo) != ''
-        ORDER BY sector_operativo
-      `),
-      pool.query(`
-        SELECT DISTINCT COALESCE(NULLIF(TRIM(partner), ''), 'SIN PARTNER') AS partner
-        FROM vw_reporte_funnel_casos_360
-        WHERE partner IS NOT NULL AND TRIM(partner) != ''
-        ORDER BY partner
-      `),
+    const [zonasRes, partnersRes]: any = await Promise.all([
+      pool
+        .query(`
+          SELECT DISTINCT sector_operativo AS zona
+          FROM vw_reporte_funnel_casos_360
+          WHERE sector_operativo IS NOT NULL AND TRIM(sector_operativo) != ''
+          ORDER BY sector_operativo
+        `)
+        .catch(() => [[]]),
+      pool
+        .query(`
+          SELECT DISTINCT COALESCE(NULLIF(TRIM(partner), ''), 'SIN PARTNER') AS partner
+          FROM vw_reporte_funnel_casos_360
+          WHERE partner IS NOT NULL AND TRIM(partner) != ''
+          ORDER BY partner
+        `)
+        .catch(() => [[]]),
     ]);
 
     const todayStr = new Date().toLocaleDateString('en-CA');
+    const zList = (zonasRes?.[0] || []).map((z: any) => z.zona).filter(Boolean);
+    const pList = (partnersRes?.[0] || []).map((p: any) => p.partner).filter(Boolean);
+
     const payload = {
       ok: true,
       servicios: tiposUnicosList,
-      zonas: (zonas?.[0] || []).map((z: any) => z.zona),
-      sectores: (zonas?.[0] || []).map((z: any) => z.zona),
-      partners: (partners?.[0] || []).map((p: any) => p.partner),
+      zonas: zList,
+      sectores: zList,
+      partners: pList,
       dateRange: { minDate: todayStr, maxDate: todayStr },
     };
 
     queryCache.set('catalog_filters', payload, 3600);
-    res.json(payload);
+    return res.json(payload);
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    return res.json({
+      ok: true,
+      servicios: tiposUnicosList,
+      zonas: [],
+      sectores: [],
+      partners: [],
+    });
   }
 });
 
@@ -194,7 +246,7 @@ app.get('/api/dashboard', async (req, res) => {
   try {
     if (tiposUnicosList.length === 0) await loadTipoServicioCache();
 
-    // Garantizar siempre mínimo 7 días hacia atrás desde endDate para la gráfica evolutiva (independiente del filtro de inicio)
+    // Garantizar siempre mínimo 7 días hacia atrás desde endDate para la gráfica evolutiva
     const [ey, em, ed] = endDate.split('-').map(Number);
     const endTarget = new Date(ey, em - 1, ed);
     const min7D = new Date(endTarget);
@@ -202,7 +254,6 @@ app.get('/api/dashboard', async (req, res) => {
     const min7StartStr = `${min7D.getFullYear()}-${String(min7D.getMonth() + 1).padStart(2, '0')}-${String(min7D.getDate()).padStart(2, '0')}`;
     const chartStartDate = startDate < min7StartStr ? startDate : min7StartStr;
 
-    // Filtros para vw_reporte_funnel_casos_360 (v), vw_reprogramaciones_detalle (r) y vw_reporte_encuestas_enriquecido (e)
     const extraFilters: string[] = [];
     const extraParams: any[] = [];
     const reprogFilters: string[] = [];
@@ -260,7 +311,6 @@ app.get('/api/dashboard', async (req, res) => {
     const filterSql = extraFilters.join(' ');
     const avListSql = DISTRITOS_ALTO_VALOR.map((d) => `'${d.trim().toUpperCase()}'`).join(',');
 
-    // Consultas principales y desgloses operativos desde vw_reporte_funnel_casos_360
     const [
       dailyResult,
       orderResult,
@@ -269,10 +319,9 @@ app.get('/api/dashboard', async (req, res) => {
       productoResult,
       reprogResult,
       encResult,
-    ]: any =
-      await Promise.all([
-        pool.query(
-          `
+    ]: any = await Promise.all([
+      pool.query(
+        `
         SELECT 
           DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
           DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m') AS fecha,
@@ -302,10 +351,10 @@ app.get('/api/dashboard', async (req, res) => {
         GROUP BY v.fecha_solicitud_dia
         ORDER BY v.fecha_solicitud_dia ASC
         `,
-          [chartStartDate, endDate, ...extraParams]
-        ),
-        pool.query(
-          `
+        [chartStartDate, endDate, ...extraParams]
+      ),
+      pool.query(
+        `
         SELECT 
           v.*,
           DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_solicitud_fmt,
@@ -334,11 +383,10 @@ app.get('/api/dashboard', async (req, res) => {
         ORDER BY v.orden_id DESC
         LIMIT 300
         `,
-          [startDate, endDate, ...extraParams]
-        ),
-        // Desglose por Estado OT (Para Vista Operativa)
-        pool.query(
-          `
+        [startDate, endDate, ...extraParams]
+      ),
+      pool.query(
+        `
         SELECT 
           COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'Sin estado') AS estado_ot,
           COUNT(*) AS total,
@@ -351,11 +399,10 @@ app.get('/api/dashboard', async (req, res) => {
         GROUP BY COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'Sin estado')
         ORDER BY total DESC
         `,
-          [startDate, endDate, ...extraParams]
-        ),
-        // Desglose por Sector Operativo (Para Vista Operativa)
-        pool.query(
-          `
+        [startDate, endDate, ...extraParams]
+      ),
+      pool.query(
+        `
         SELECT 
           COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR') AS sector_operativo,
           COUNT(*) AS total,
@@ -369,11 +416,10 @@ app.get('/api/dashboard', async (req, res) => {
         GROUP BY COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR')
         ORDER BY total DESC
         `,
-          [startDate, endDate, ...extraParams]
-        ),
-        // Desglose por Producto para agrupar en Tipo de Operación
-        pool.query(
-          `
+        [startDate, endDate, ...extraParams]
+      ),
+      pool.query(
+        `
         SELECT 
           UPPER(TRIM(COALESCE(v.producto, ''))) AS producto,
           COUNT(*) AS total,
@@ -383,27 +429,25 @@ app.get('/api/dashboard', async (req, res) => {
         ${filterSql}
         GROUP BY UPPER(TRIM(COALESCE(v.producto, '')))
         `,
-          [startDate, endDate, ...extraParams]
-        ),
-        // 6. Consulta a vw_reprogramaciones_detalle (en paralelo)
-        pool
-          .query(
-            `
+        [startDate, endDate, ...extraParams]
+      ),
+      pool
+        .query(
+          `
           SELECT COUNT(*) AS total_reprog
           FROM vw_reprogramaciones_detalle r
           WHERE r.fecha_registro >= ? AND r.fecha_registro < DATE_ADD(?, INTERVAL 1 DAY)
           ${reprogFilters.join(' ')}
           `,
-            [startDate, endDate, ...reprogParams]
-          )
-          .catch((err: any) => {
-            console.warn('⚠️ Error consultando vw_reprogramaciones_detalle:', err.message);
-            return [[{ total_reprog: 0 }]];
-          }),
-        // 7. Consulta a vw_reporte_encuestas_enriquecido (en paralelo)
-        pool
-          .query(
-            `
+          [startDate, endDate, ...reprogParams]
+        )
+        .catch((err: any) => {
+          console.warn('⚠️ Error consultando vw_reprogramaciones_detalle:', err.message);
+          return [[{ total_reprog: 0 }]];
+        }),
+      pool
+        .query(
+          `
           SELECT 
             TRIM(e.partner) AS partner,
             COUNT(*) AS surveys,
@@ -415,20 +459,18 @@ app.get('/api/dashboard', async (req, res) => {
           GROUP BY TRIM(e.partner)
           ORDER BY avg_score DESC, surveys DESC
           `,
-            [startDate, endDate, ...encParams]
-          )
-          .catch((err: any) => {
-            console.warn('⚠️ Error consultando vw_reporte_encuestas_enriquecido:', err.message);
-            return [[]];
-          }),
-      ]);
+          [startDate, endDate, ...encParams]
+        )
+        .catch((err: any) => {
+          console.warn('⚠️ Error consultando vw_reporte_encuestas_enriquecido:', err.message);
+          return [[]];
+        }),
+    ]);
 
-    // 3. Procesar reprogramaciones
     const totalReprogReal = Number(reprogResult?.[0]?.[0]?.total_reprog || 0);
 
-    // 4. Procesar encuestas y CSAT
     let encRows: any[] = encResult?.[0] || [];
-    let totalEncuestasReal = encRows.reduce(
+    const totalEncuestasReal = encRows.reduce(
       (acc: number, r: any) => acc + Number(r.surveys || 0),
       0
     );
@@ -437,10 +479,8 @@ app.get('/api/dashboard', async (req, res) => {
       (acc: number, r: any) => acc + Number(r.avg_score || 0) * Number(r.surveys || 0),
       0
     );
-    let csatAvgGlobal = totalEncuestasReal > 0 ? sumPonderada / totalEncuestasReal : 0;
-    let partnersRanking: any[] = [];
+    const csatAvgGlobal = totalEncuestasReal > 0 ? sumPonderada / totalEncuestasReal : 0;
 
-    // Fallback: si hoy todavía hay 0 encuestas, cargamos últimos 7 días
     if (encRows.length === 0 && chartStartDate < startDate) {
       try {
         const [fallbackRows]: any = await pool.query(
@@ -464,20 +504,19 @@ app.get('/api/dashboard', async (req, res) => {
       }
     }
 
-      partnersRanking = (encRows || []).slice(0, 6).map((r: any, idx: number) => {
-        const avg = Number(r.avg_score || 0);
-        const csatPct = (avg / 5) * 100;
-        return {
-          rank: idx + 1,
-          name: r.partner,
-          surveys: Number(r.surveys || 0),
-          score: avg.toFixed(1).replace('.', ','),
-          csat: `${csatPct.toFixed(1).replace('.', ',')}%`,
-        };
-      });
+    const partnersRanking = (encRows || []).slice(0, 6).map((r: any, idx: number) => {
+      const avg = Number(r.avg_score || 0);
+      const csatPct = (avg / 5) * 100;
+      return {
+        rank: idx + 1,
+        name: r.partner,
+        surveys: Number(r.surveys || 0),
+        score: avg.toFixed(1).replace('.', ','),
+        csat: `${csatPct.toFixed(1).replace('.', ',')}%`,
+      };
+    });
 
     const dailyRows: any[] = dailyResult[0] || [];
-
     const kpiRowsInRange = dailyRows.filter(
       (r) => r.raw_date >= startDate && r.raw_date <= endDate
     );
@@ -529,9 +568,6 @@ app.get('/api/dashboard', async (req, res) => {
       }
     );
 
-    // Usar las tablas dedicadas como fuente de verdad para reprogramaciones y encuestas
-    // cuando tengan datos, evitando inconsistencias por columnas de fecha diferentes
-    // entre vw_reporte_funnel_casos_360 (fecha_solicitud_dia) y las tablas detalle
     if (totalReprogReal > 0) {
       kpis.reprogramaciones = totalReprogReal;
     }
@@ -601,7 +637,6 @@ app.get('/api/orders/search', async (req, res) => {
     const q = String(req.query.q || '').trim();
     const ignoreDates = req.query.ignoreDates === 'true';
 
-    // Filtros de cabecera multiselección de OrdersView.tsx
     const fOrden = String(req.query.orden || '').trim();
     const fCliente = String(req.query.cliente || '').trim();
     const fOperacion = String(req.query.operacion || 'Todos').trim();
@@ -975,7 +1010,6 @@ app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Parámetro phone u ordenId requerido' });
     }
 
-    // A. Consultar credenciales dinámicas en config_plantillas_mantra por tipo_servicio
     let apiKey: string = SECRET_API_KEY;
     let groupId: string | null = null;
     try {
@@ -1004,7 +1038,6 @@ app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
       console.warn('⚠️ No se pudieron consultar credenciales dinámicas en config_plantillas_mantra:', cfgErr.message);
     }
 
-    // B. Intento en vivo contra CAPA_INTERMEDIA_URL (Azure) / API Mantra
     if (CAPA_INTERMEDIA_URL && apiKey) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
@@ -1049,7 +1082,6 @@ app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
       }
     }
 
-    // C. Fallback directo a tabla física historial_chats_mantra
     const [chatRows]: any = await pool.query(
       `
       SELECT *
@@ -1085,17 +1117,397 @@ app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
       source: 'db_fallback',
       chatMeta: chatRecord
         ? {
-            estado_chat: chatRecord.estado_chat,
-            semaforo_sla: chatRecord.semaforo_sla,
-            quien_tiene_la_palabra: chatRecord.quien_tiene_la_palabra,
-            phone: chatRecord.phone,
-            orden_id: chatRecord.orden_id,
-            ticket: chatRecord.ticket,
-          }
+          estado_chat: chatRecord.estado_chat,
+          semaforo_sla: chatRecord.semaforo_sla,
+          quien_tiene_la_palabra: chatRecord.quien_tiene_la_palabra,
+          phone: chatRecord.phone,
+          orden_id: chatRecord.orden_id,
+          ticket: chatRecord.ticket,
+        }
         : null,
       messages,
     });
   } catch (error: any) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// 6. Endpoint exclusivo de Operaciones usando las columnas exactas de vw_winordetraba
+app.get('/api/operations', async (req, res) => {
+  const startTime = Date.now();
+  const todayDefault = new Date().toLocaleDateString('en-CA');
+  const {
+    startDate = todayDefault,
+    endDate = todayDefault,
+    service = 'Todos los servicios',
+    q = '',
+    ignoreDates = 'false',
+    refresh = 'false',
+  } = req.query as Record<string, string>;
+
+  const searchQ = String(q || '').trim();
+  const cacheKey = `ops_raw_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
+  if (refresh !== 'true') {
+    const cached = queryCache.get(cacheKey);
+    if (cached) return res.json(cached);
+  }
+
+  try {
+    if (tiposUnicosList.length === 0) await loadTipoServicioCache();
+
+    // Expresión de fecha sobre w.`F.Soli` (con fallback a w.`F.Visita`) compatible con YYYY-MM-DD y DD/MM/YYYY
+    const rawDateCol = `COALESCE(NULLIF(TRIM(CAST(w.\`F.Soli\` AS CHAR)), ''), NULLIF(TRIM(CAST(w.\`F.Visita\` AS CHAR)), ''))`;
+    const dateExpr = `COALESCE(
+      STR_TO_DATE(SUBSTRING_INDEX(${rawDateCol}, ' ', 1), '%Y-%m-%d'),
+      STR_TO_DATE(SUBSTRING_INDEX(${rawDateCol}, ' ', 1), '%d/%m/%Y'),
+      DATE(w.\`F.Soli\`)
+    )`;
+
+    const colEstado = `COALESCE(NULLIF(TRIM(w.\`Estado OT\`), ''), NULLIF(TRIM(w.Estado), ''), 'SIN ESTADO')`;
+    const colPartner = `COALESCE(NULLIF(TRIM(w.Proveedeor), ''), NULLIF(TRIM(w.Empresa), ''), 'SIN PARTNER')`;
+    const colCuadrilla = `COALESCE(NULLIF(TRIM(w.Cuadrilla_nombre), ''), NULLIF(TRIM(w.Cuadrilla), ''))`;
+    const colZona = `COALESCE(NULLIF(TRIM(w.\`Sector Operativo\`), ''), NULLIF(TRIM(w.Localidad), ''), NULLIF(TRIM(w.Zona), ''), NULLIF(TRIM(w.Provincia), ''), 'SIN ZONA')`;
+
+    const [ey, em, ed] = endDate.split('-').map(Number);
+    const endTarget = new Date(ey, em - 1, ed);
+    const min7D = new Date(endTarget);
+    min7D.setDate(min7D.getDate() - 6);
+    const min7StartStr = `${min7D.getFullYear()}-${String(min7D.getMonth() + 1).padStart(2, '0')}-${String(min7D.getDate()).padStart(2, '0')}`;
+    const chartStartDate = startDate < min7StartStr ? startDate : min7StartStr;
+
+    const whereClauses: string[] = [];
+    const queryParams: any[] = [];
+    const chartWhereClauses: string[] = [];
+    const chartParams: any[] = [];
+
+    if (ignoreDates !== 'true') {
+      whereClauses.push(`${dateExpr} >= ? AND ${dateExpr} <= ?`);
+      queryParams.push(startDate, endDate);
+
+      chartWhereClauses.push(`${dateExpr} >= ? AND ${dateExpr} <= ?`);
+      chartParams.push(chartStartDate, endDate);
+    }
+
+    const { srvList, productosDelTipo } = resolveProductosFromServiceFilter(service);
+    if (srvList.length > 0) {
+      const allTokens = Array.from(new Set([...srvList, ...productosDelTipo])).map((t) => t.toUpperCase());
+      const ph = allTokens.map(() => '?').join(',');
+      const srvFilter = `(UPPER(TRIM(w.Producto)) IN (${ph}) OR UPPER(TRIM(w.\`Motivo Trabajo\`)) IN (${ph}) OR UPPER(TRIM(w.TipoTraba)) IN (${ph}))`;
+      whereClauses.push(srvFilter);
+      queryParams.push(...allTokens, ...allTokens, ...allTokens);
+
+      chartWhereClauses.push(srvFilter);
+      chartParams.push(...allTokens, ...allTokens, ...allTokens);
+    }
+
+    if (searchQ) {
+      const likeQ = `%${searchQ}%`;
+      const qClause = `(
+        CAST(w.OrdenId AS CHAR) LIKE ? OR
+        w.CodiSegui LIKE ? OR
+        w.CodiSeguiClien LIKE ? OR
+        w.CodiClien LIKE ? OR
+        w.Cliente LIKE ? OR
+        w.\`Número Documento\` LIKE ? OR
+        w.TeleMovilNume LIKE ? OR
+        w.Cuadrilla LIKE ? OR
+        w.Cuadrilla_nombre LIKE ? OR
+        w.Proveedeor LIKE ?
+      )`;
+      const qArgs = [likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ];
+      whereClauses.push(qClause);
+      queryParams.push(...qArgs);
+
+      chartWhereClauses.push(qClause);
+      chartParams.push(...qArgs);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    const chartWhereSql = chartWhereClauses.length > 0 ? `WHERE ${chartWhereClauses.join(' AND ')}` : '';
+
+    // Clasificación de estados reales de vw_winordetraba
+    const isFin = `(LOWER(${colEstado}) LIKE '%finaliz%' OR LOWER(${colEstado}) LIKE '%atendid%' OR LOWER(${colEstado}) LIKE '%complet%' OR LOWER(${colEstado}) LIKE '%cerrad%' OR LOWER(${colEstado}) LIKE '%ok%')`;
+    const isCurso = `(LOWER(${colEstado}) LIKE '%iniciad%' OR LOWER(${colEstado}) LIKE '%camino%' OR LOWER(${colEstado}) LIKE '%ruta%' OR LOWER(${colEstado}) LIKE '%ejecuc%' OR LOWER(${colEstado}) LIKE '%proceso%')`;
+    const isCancel = `(LOWER(${colEstado}) LIKE '%cancel%' OR LOWER(${colEstado}) LIKE '%anul%' OR LOWER(${colEstado}) LIKE '%rechaz%' OR LOWER(${colEstado}) LIKE '%quiebre%' OR LOWER(${colEstado}) LIKE '%suspens%')`;
+    const isAgend = `(NOT ${isFin} AND NOT ${isCurso} AND NOT ${isCancel})`;
+
+    // Expresiones explícitas para GROUP BY estricto (sql_mode=only_full_group_by)
+    const rawDateGroupExpr = `DATE_FORMAT(${dateExpr}, '%Y-%m-%d')`;
+    const cuadrillaGroupExpr = `COALESCE(${colCuadrilla}, 'SIN ASIGNAR')`;
+    const motivoTrabajoGroupExpr = `UPPER(COALESCE(NULLIF(TRIM(w.Producto), ''), NULLIF(TRIM(w.\`Motivo Trabajo\`), ''), 'OTROS'))`;
+    const motivoFinGroupExpr = `COALESCE(
+      NULLIF(TRIM(w.\`Motivo Finalización\`), ''),
+      NULLIF(TRIM(w.\`Motivo Cancelación\`), ''),
+      NULLIF(TRIM(w.\`Motivo Regestión\`), ''),
+      NULLIF(TRIM(w.\`Diagnóstico Técnico\`), ''),
+      'Sin especificar'
+    )`;
+
+    const [
+      summaryRes,
+      estadosRes,
+      dailyRes,
+      partnerRes,
+      zonaRes,
+      cuadrillasRes,
+      motivosRes,
+      cierreRes,
+    ]: any = await Promise.all([
+      // 1. KPIs Globales
+      pool.query(
+        `
+        SELECT
+          COUNT(*) AS total_ordenes,
+          COALESCE(SUM(${isFin}), 0) AS finalizadas,
+          COALESCE(SUM(${isCurso}), 0) AS en_curso,
+          COALESCE(SUM(${isAgend}), 0) AS agendadas,
+          COALESCE(SUM(${isCancel}), 0) AS canceladas,
+          COUNT(DISTINCT ${colCuadrilla}) AS cuadrillas_activas,
+          COUNT(DISTINCT NULLIF(TRIM(w.Proveedeor), '')) AS partners_activos,
+          COUNT(DISTINCT ${colZona}) AS zonas_activas
+        FROM vw_winordetraba w
+        ${whereSql}
+        `,
+        queryParams
+      ),
+
+      // 2. Desglose por Estado OT
+      pool.query(
+        `
+        SELECT
+          ${colEstado} AS estado,
+          COUNT(*) AS total,
+          COUNT(DISTINCT ${colCuadrilla}) AS cuadrillas
+        FROM vw_winordetraba w
+        ${whereSql}
+        GROUP BY ${colEstado}
+        ORDER BY total DESC
+        `,
+        queryParams
+      ),
+
+      // 3. Avance Diario (100% compatible con ONLY_FULL_GROUP_BY)
+      pool.query(
+        `
+        SELECT
+          ${rawDateGroupExpr} AS raw_date,
+          MAX(DATE_FORMAT(${dateExpr}, '%d/%m')) AS fecha,
+          MAX(DATE_FORMAT(${dateExpr}, '%d/%m/%Y')) AS fecha_full,
+          COUNT(*) AS total,
+          COALESCE(SUM(${isFin}), 0) AS finalizadas,
+          COALESCE(SUM(${isCurso}), 0) AS en_curso,
+          COALESCE(SUM(${isAgend}), 0) AS agendadas,
+          COALESCE(SUM(${isCancel}), 0) AS canceladas,
+          COUNT(DISTINCT ${colCuadrilla}) AS cuadrillas
+        FROM vw_winordetraba w
+        ${chartWhereSql}
+        GROUP BY ${rawDateGroupExpr}
+        HAVING raw_date IS NOT NULL
+        ORDER BY raw_date ASC
+        `,
+        chartParams
+      ),
+
+      // 4. Productividad y Efectividad por Partner (Proveedeor)
+      pool.query(
+        `
+        SELECT
+          ${colPartner} AS partner,
+          COUNT(*) AS total,
+          COALESCE(SUM(${isFin}), 0) AS finalizadas,
+          COALESCE(SUM(${isCurso}), 0) AS en_curso,
+          COALESCE(SUM(${isAgend}), 0) AS agendadas,
+          COALESCE(SUM(${isCancel}), 0) AS canceladas,
+          COUNT(DISTINCT ${colCuadrilla}) AS cuadrillas
+        FROM vw_winordetraba w
+        ${whereSql}
+        GROUP BY ${colPartner}
+        ORDER BY total DESC
+        `,
+        queryParams
+      ),
+
+      // 5. Rendimiento por Zona / Sector Operativo / Localidad
+      pool.query(
+        `
+        SELECT
+          ${colZona} AS zona,
+          COUNT(*) AS total,
+          COALESCE(SUM(${isFin}), 0) AS finalizadas,
+          COALESCE(SUM(${isCurso}), 0) AS en_curso,
+          COALESCE(SUM(${isAgend}), 0) AS agendadas,
+          COALESCE(SUM(${isCancel}), 0) AS canceladas,
+          COUNT(DISTINCT ${colCuadrilla}) AS cuadrillas
+        FROM vw_winordetraba w
+        ${whereSql}
+        GROUP BY ${colZona}
+        ORDER BY total DESC
+        LIMIT 30
+        `,
+        queryParams
+      ),
+
+      // 6. Top 15 Cuadrillas más productivas
+      pool.query(
+        `
+        SELECT
+          ${cuadrillaGroupExpr} AS cuadrilla,
+          MAX(${colPartner}) AS partner,
+          COUNT(*) AS total,
+          COALESCE(SUM(${isFin}), 0) AS finalizadas,
+          COALESCE(SUM(${isCurso}), 0) AS en_curso,
+          COALESCE(SUM(${isCancel}), 0) AS canceladas
+        FROM vw_winordetraba w
+        ${whereSql}
+        GROUP BY ${cuadrillaGroupExpr}
+        HAVING cuadrilla != 'SIN ASIGNAR'
+        ORDER BY finalizadas DESC, total DESC
+        LIMIT 15
+        `,
+        queryParams
+      ),
+
+      // 7. Distribución por Producto / Motivo Trabajo
+      pool.query(
+        `
+        SELECT
+          ${motivoTrabajoGroupExpr} AS motivo_trabajo,
+          MAX(COALESCE(NULLIF(TRIM(w.Tipo), ''), 'RESIDENCIAL')) AS segmento,
+          COUNT(*) AS total,
+          COALESCE(SUM(${isFin}), 0) AS finalizadas,
+          COALESCE(SUM(${isCancel}), 0) AS canceladas,
+          COUNT(DISTINCT ${colCuadrilla}) AS cuadrillas
+        FROM vw_winordetraba w
+        ${whereSql}
+        GROUP BY ${motivoTrabajoGroupExpr}
+        ORDER BY total DESC
+        LIMIT 15
+        `,
+        queryParams
+      ),
+
+      // 8. Top Motivos de Finalización / Cancelación / Regestión
+      pool.query(
+        `
+        SELECT
+          ${motivoFinGroupExpr} AS motivo_fin,
+          COUNT(*) AS total,
+          COALESCE(SUM(${isFin}), 0) AS finalizadas,
+          COALESCE(SUM(${isCancel}), 0) AS canceladas
+        FROM vw_winordetraba w
+        ${whereSql}
+        GROUP BY ${motivoFinGroupExpr}
+        ORDER BY total DESC
+        LIMIT 10
+        `,
+        queryParams
+      ),
+    ]);
+
+    const kpisRaw = summaryRes?.[0]?.[0] || {};
+    const totalOrdenes = Number(kpisRaw.total_ordenes || 0);
+    const finalizadas = Number(kpisRaw.finalizadas || 0);
+    const enCurso = Number(kpisRaw.en_curso || 0);
+    const agendadas = Number(kpisRaw.agendadas || 0);
+    const canceladas = Number(kpisRaw.canceladas || 0);
+    const cuadrillasActivas = Number(kpisRaw.cuadrillas_activas || 0);
+
+    const payload = {
+      ok: true,
+      source: 'vw_winordetraba',
+      kpis: {
+        total_ordenes: totalOrdenes,
+        finalizadas,
+        en_curso: enCurso,
+        agendadas,
+        canceladas,
+        cuadrillas_activas: cuadrillasActivas,
+        partners_activos: Number(kpisRaw.partners_activos || 0),
+        zonas_activas: Number(kpisRaw.zonas_activas || 0),
+        efectividad_pct: totalOrdenes > 0 ? Number(((finalizadas / totalOrdenes) * 100).toFixed(1)) : 0,
+        cancelacion_pct: totalOrdenes > 0 ? Number(((canceladas / totalOrdenes) * 100).toFixed(1)) : 0,
+        prod_ot_por_cuadrilla: cuadrillasActivas > 0 ? Number((totalOrdenes / cuadrillasActivas).toFixed(1)) : 0,
+        prod_fin_por_cuadrilla: cuadrillasActivas > 0 ? Number((finalizadas / cuadrillasActivas).toFixed(1)) : 0,
+      },
+      byEstado: estadosRes?.[0] || [],
+      daily: (dailyRes?.[0] || []).map((d: any) => {
+        const tot = Number(d.total || 0);
+        const fin = Number(d.finalizadas || 0);
+        const crw = Number(d.cuadrillas || 0);
+        return {
+          ...d,
+          total: tot,
+          finalizadas: fin,
+          en_curso: Number(d.en_curso || 0),
+          agendadas: Number(d.agendadas || 0),
+          canceladas: Number(d.canceladas || 0),
+          cuadrillas: crw,
+          efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
+          prod_total: crw > 0 ? Number((tot / crw).toFixed(1)) : 0,
+          prod_fin: crw > 0 ? Number((fin / crw).toFixed(1)) : 0,
+        };
+      }),
+      byPartner: (partnerRes?.[0] || []).map((p: any) => {
+        const tot = Number(p.total || 0);
+        const fin = Number(p.finalizadas || 0);
+        const crw = Number(p.cuadrillas || 0);
+        return {
+          ...p,
+          total: tot,
+          finalizadas: fin,
+          en_curso: Number(p.en_curso || 0),
+          agendadas: Number(p.agendadas || 0),
+          canceladas: Number(p.canceladas || 0),
+          cuadrillas: crw,
+          efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
+          prod_total: crw > 0 ? Number((tot / crw).toFixed(1)) : 0,
+          prod_fin: crw > 0 ? Number((fin / crw).toFixed(1)) : 0,
+        };
+      }),
+      byZona: (zonaRes?.[0] || []).map((z: any) => {
+        const tot = Number(z.total || 0);
+        const fin = Number(z.finalizadas || 0);
+        const crw = Number(z.cuadrillas || 0);
+        return {
+          ...z,
+          total: tot,
+          finalizadas: fin,
+          en_curso: Number(z.en_curso || 0),
+          agendadas: Number(z.agendadas || 0),
+          canceladas: Number(z.canceladas || 0),
+          cuadrillas: crw,
+          efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
+          prod_fin: crw > 0 ? Number((fin / crw).toFixed(1)) : 0,
+        };
+      }),
+      topCuadrillas: (cuadrillasRes?.[0] || []).map((c: any) => {
+        const tot = Number(c.total || 0);
+        const fin = Number(c.finalizadas || 0);
+        return {
+          ...c,
+          total: tot,
+          finalizadas: fin,
+          en_curso: Number(c.en_curso || 0),
+          canceladas: Number(c.canceladas || 0),
+          efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
+        };
+      }),
+      byMotivoTrabajo: (motivosRes?.[0] || []).map((m: any) => {
+        const prodKey = String(m.motivo_trabajo || '').trim().toUpperCase();
+        const tipoMapeado = servicioToTipoMap.get(prodKey) || prodKey || 'OTROS';
+        return {
+          ...m,
+          tipo_operacion: tipoMapeado,
+        };
+      }),
+      byMotivoFin: cierreRes?.[0] || [],
+    };
+
+    queryCache.set(cacheKey, payload);
+    console.log(`⚡ /api/operations (vw_winordetraba) completado en ${Date.now() - startTime}ms`);
+    return res.json(payload);
+  } catch (error: any) {
+    console.error('❌ Error en /api/operations:', error.message);
     return res.status(500).json({ ok: false, error: error.message });
   }
 });
@@ -1110,7 +1522,6 @@ app.get(/(.*)/, (req, res, next) => {
     if (err) next();
   });
 });
-
 
 async function warmupCache() {
   try {
@@ -1132,10 +1543,14 @@ async function warmupCache() {
           ORDER BY partner
         `),
       ]);
+      const zList = (zonas[0] || []).map((r: any) => r.zona).filter(Boolean);
+      const pList = (partners[0] || []).map((r: any) => r.partner).filter(Boolean);
       queryCache.set('catalog_filters', {
-        zonas: (zonas[0] || []).map((r: any) => r.zona).filter(Boolean),
-        partners: (partners[0] || []).map((r: any) => r.partner).filter(Boolean),
+        ok: true,
         servicios: tiposUnicosList,
+        zonas: zList,
+        sectores: zList,
+        partners: pList,
       }, 3600);
       console.log('🔥 Catálogo de filtros precalentado en RAM con éxito.');
     }
@@ -1147,5 +1562,5 @@ async function warmupCache() {
 const PORT = Number(process.env.PORT || process.env.WEBSITES_PORT || 8080);
 app.listen(PORT, () => {
   console.log(`✅ Servidor WIN en RUTA activo en puerto ${PORT} (Capa Intermedia: ${CAPA_INTERMEDIA_URL})`);
-  warmupCache().catch(() => {});
+  warmupCache().catch(() => { });
 });

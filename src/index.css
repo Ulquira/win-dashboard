@@ -14,6 +14,16 @@
   --shadow-soft: 0 4px 20px -2px rgba(17, 24, 39, 0.05);
 }
 
+.dark {
+  --bg-main: #090D16;
+  --bg-card: #111827;
+  --win-orange: #FF6B00;
+  --win-orange-soft: rgba(255, 107, 0, 0.15);
+  --text-primary: #F9FAFB;
+  --text-secondary: #9CA3AF;
+  --border-subtle: #1F2937;
+}
+
 body {
   background-color: var(--bg-main);
   color: var(--text-primary);
@@ -21,17 +31,107 @@ body {
   margin: 0;
   padding: 0;
   -webkit-font-smoothing: antialiased;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 /* Permitir seleccionar y copiar texto libremente en toda la aplicación */
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   -webkit-user-select: text !important;
   -moz-user-select: text !important;
   -ms-user-select: text !important;
   user-select: text !important;
 }
 
-/* Mantener cursores y comportamiento limpio solo en botones e íconos puros */
-button, select {
+button,
+select {
   cursor: pointer;
+}
+
+/* ==========================================================================
+   MOTOR DE TEMA OSCURO (.dark) AUTOMÁTICO PARA TODAS LAS VISTAS Y TABLAS
+   ========================================================================== */
+.dark .bg-\[\#F8F9FA\] {
+  background-color: #090D16 !important;
+}
+
+.dark .bg-white {
+  background-color: #111827 !important;
+}
+
+.dark .bg-slate-50,
+.dark .bg-slate-50\/80 {
+  background-color: #0B101B !important;
+}
+
+.dark .bg-slate-100,
+.dark .bg-slate-100\/80,
+.dark .bg-slate-200\/60 {
+  background-color: #1E293B !important;
+}
+
+.dark .bg-\[\#FFF0E5\],
+.dark .bg-\[\#FFF0E5\]\/90,
+.dark .bg-\[\#FFF0E5\]\/70,
+.dark .bg-\[\#FFF0E5\]\/60 {
+  background-color: rgba(255, 85, 0, 0.15) !important;
+}
+
+/* Textos en Modo Oscuro */
+.dark .text-slate-900,
+.dark .text-slate-800 {
+  color: #F8FAFC !important;
+}
+
+.dark .text-slate-700,
+.dark .text-slate-600 {
+  color: #CBD5E1 !important;
+}
+
+.dark .text-slate-500,
+.dark .text-slate-400 {
+  color: #94A3B8 !important;
+}
+
+/* Bordes y Divisores en Modo Oscuro */
+.dark .border-slate-100,
+.dark .border-slate-200,
+.dark .border-slate-200\/80,
+.dark .border-slate-200\/70,
+.dark .border-slate-200\/60,
+.dark .border-slate-300 {
+  border-color: #1F2937 !important;
+}
+
+.dark .divide-slate-100> :not([hidden])~ :not([hidden]) {
+  border-color: #1F2937 !important;
+}
+
+.dark .border-orange-100,
+.dark .border-orange-200,
+.dark .border-orange-200\/80 {
+  border-color: rgba(255, 85, 0, 0.35) !important;
+}
+
+/* Hovers y Sombras en Modo Oscuro */
+.dark .hover\:bg-slate-50:hover,
+.dark .hover\:bg-slate-50\/70:hover,
+.dark .hover\:bg-slate-50\/80:hover,
+.dark .hover\:bg-slate-100:hover {
+  background-color: rgba(30, 41, 59, 0.7) !important;
+}
+
+.dark .shadow-\[0_1px_0_0_\#f1f5f9\] {
+  box-shadow: 0 1px 0 0 #1F2937 !important;
+}
+
+/* Grilla punteada del lienzo de chat en TrackingView */
+.dark .bg-\[radial-gradient\(\#cbd5e1_1px\,transparent_1px\)\] {
+  background-image: radial-gradient(#1e293b 1px, transparent 1px) !important;
+}
+
+/* Líneas guía del gráfico SVG en ExecutiveView */
+.dark svg line[stroke="#F1F5F9"] {
+  stroke: #1E293B !important;
 }
