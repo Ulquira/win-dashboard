@@ -933,6 +933,7 @@ app.get('/api/tracking/search', async (req, res) => {
     const fTurno = String(req.query.turno || 'Todos');
     const fSoloConChat = req.query.soloConChat === 'true';
     const fSoloSos = req.query.soloSos === 'true';
+    const fSoloLogChat = req.query.soloLogChat === 'true';
 
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(100, Math.max(10, Number(req.query.pageSize) || 50));
@@ -960,11 +961,15 @@ app.get('/api/tracking/search', async (req, res) => {
     }
 
     if (fSoloConChat) {
-      whereClauses.push('(h.orden_id IS NOT NULL OR h.phone IS NOT NULL)');
+      whereClauses.push('(h.orden_id IS NOT NULL OR h.phone IS NOT NULL OR lc.orden_id IS NOT NULL)');
     }
 
     if (fSoloSos) {
-      whereClauses.push("UPPER(TRIM(COALESCE(v.pulso_soporte, 'NO'))) IN ('SI', 'SÍ', '1', 'TRUE')");
+      whereClauses.push("(UPPER(TRIM(COALESCE(v.pulso_soporte, 'NO'))) IN ('SI', 'SÍ', '1', 'TRUE') OR lc.orden_id IS NOT NULL)");
+    }
+
+    if (fSoloLogChat) {
+      whereClauses.push('lc.orden_id IS NOT NULL');
     }
 
     if (fEstadoChat !== 'Todos') {
@@ -999,6 +1004,18 @@ app.get('/api/tracking/search', async (req, res) => {
 
     const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
+    const logsChatSubquery = `
+      LEFT JOIN (
+        SELECT l1.*
+        FROM logs_chat l1
+        INNER JOIN (
+          SELECT orden_id, MAX(id) AS max_id
+          FROM logs_chat
+          GROUP BY orden_id
+        ) l2 ON l1.id = l2.max_id
+      ) lc ON lc.orden_id = v.orden_id
+    `;
+
     const [countResult, rowsResult]: any = await Promise.all([
       pool.query(
         `
@@ -1006,6 +1023,7 @@ app.get('/api/tracking/search', async (req, res) => {
         FROM vw_reporte_funnel_casos_360 v
         LEFT JOIN historial_chats_mantra h ON h.orden_id = v.orden_id
         LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
+        ${logsChatSubquery}
         ${whereSql}
         `,
         params
@@ -1032,12 +1050,20 @@ app.get('/api/tracking/search', async (req, res) => {
           h.estado_chat,
           h.semaforo_sla,
           h.quien_tiene_la_palabra,
-          h.ultimos_mensajes_json AS chat_json_mantra
+          h.ultimos_mensajes_json AS chat_json_mantra,
+          lc.id AS log_chat_id,
+          lc.token AS log_chat_token,
+          lc.grupo_servicio AS log_grupo_servicio,
+          lc.motivo AS log_motivo_sos,
+          lc.estado_chat AS log_estado_chat,
+          lc.mensajes_json AS log_mensajes_json,
+          lc.updated_at AS log_updated_at
         FROM vw_reporte_funnel_casos_360 v
         LEFT JOIN historial_chats_mantra h ON h.orden_id = v.orden_id
         LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
+        ${logsChatSubquery}
         ${whereSql}
-        ORDER BY (h.ultimos_mensajes_json IS NOT NULL) DESC, v.orden_id DESC
+        ORDER BY (lc.id IS NOT NULL) DESC, (h.ultimos_mensajes_json IS NOT NULL) DESC, v.orden_id DESC
         LIMIT ? OFFSET ?
         `,
         [...params, pageSize, offset]

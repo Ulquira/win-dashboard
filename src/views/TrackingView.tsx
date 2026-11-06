@@ -53,6 +53,7 @@ export function TrackingView({
   const [debouncedQuery, setDebouncedQuery] = useState<string>(globalSearch);
   const [soloConChat, setSoloConChat] = useState<boolean>(true);
   const [soloSos, setSoloSos] = useState<boolean>(false);
+  const [soloLogChat, setSoloLogChat] = useState<boolean>(false);
   const [slaFilter, setSlaFilter] = useState<string>('Todos');
   const [turnoFilter, setTurnoFilter] = useState<string>('Todos');
 
@@ -86,7 +87,7 @@ export function TrackingView({
   useEffect(() => {
     setPage(1);
     setSelectedIndex(0);
-  }, [soloConChat, soloSos, slaFilter, turnoFilter, startDate, endDate, service, ignoreDates]);
+  }, [soloConChat, soloSos, soloLogChat, slaFilter, turnoFilter, startDate, endDate, service, ignoreDates]);
 
   const fetchPaginatedTracking = useCallback(() => {
     setLoadingPage(true);
@@ -98,6 +99,7 @@ export function TrackingView({
       ignoreDates: ignoreDates ? 'true' : 'false',
       soloConChat: soloConChat ? 'true' : 'false',
       soloSos: soloSos ? 'true' : 'false',
+      soloLogChat: soloLogChat ? 'true' : 'false',
       sla: slaFilter,
       turno: turnoFilter,
       page: String(page),
@@ -114,7 +116,7 @@ export function TrackingView({
       })
       .catch((err) => console.error('Error en /api/tracking/search (API):', err))
       .finally(() => setLoadingPage(false));
-  }, [startDate, endDate, service, debouncedQuery, ignoreDates, soloConChat, soloSos, slaFilter, turnoFilter, page]);
+  }, [startDate, endDate, service, debouncedQuery, ignoreDates, soloConChat, soloSos, soloLogChat, slaFilter, turnoFilter, page]);
 
   useEffect(() => {
     fetchPaginatedTracking();
@@ -187,30 +189,49 @@ export function TrackingView({
 
   const parsedChatMessages = useMemo(() => {
     if (!selectedRow) return [];
-
-    let rawList: RawChatMessage[] = [];
-
+    let mantraList: RawChatMessage[] = [];
     if (liveMessages && liveMessages.length > 0) {
-      rawList = liveMessages;
+      mantraList = liveMessages;
     } else if (selectedRow.ultimos_mensajes_json) {
       try {
         const parsed =
           typeof selectedRow.ultimos_mensajes_json === 'string'
             ? JSON.parse(selectedRow.ultimos_mensajes_json)
             : selectedRow.ultimos_mensajes_json;
-        if (Array.isArray(parsed)) rawList = parsed;
-        else if (parsed && Array.isArray(parsed.messages)) rawList = parsed.messages;
+        if (Array.isArray(parsed)) mantraList = parsed;
+        else if (parsed && Array.isArray(parsed.messages)) mantraList = parsed.messages;
       } catch (parseErr: any) {
-        console.warn('⚠️ Error al parsear JSON de chat:', parseErr.message);
+        console.warn('⚠️ Error al parsear JSON de chat Mantra:', parseErr.message);
       }
     }
 
-    if (rawList.length === 0 && selectedRow.se_envio_wsp === 'SI') {
+    // Parsear mensajes del Asistente Inteligente de Soporte (tabla logs_chat)
+    let logChatList: RawChatMessage[] = [];
+    if (selectedRow.log_mensajes_json) {
+      try {
+        const parsedLog =
+          typeof selectedRow.log_mensajes_json === 'string'
+            ? JSON.parse(selectedRow.log_mensajes_json)
+            : selectedRow.log_mensajes_json;
+        if (Array.isArray(parsedLog)) {
+          logChatList = parsedLog.map((m: any, i: number) => ({
+            ...m,
+            _fromLogChat: true,
+            _firstLogChatMsg: i === 0,
+          }));
+        }
+      } catch (logErr: any) {
+        console.warn('⚠️ Error al parsear log_mensajes_json:', logErr.message);
+      }
+    }
+
+    let combined: RawChatMessage[] = [...mantraList, ...logChatList];
+
+    if (combined.length === 0 && selectedRow.se_envio_wsp === 'SI') {
       const linkTrk =
         selectedRow.link_tracking ||
         (selectedRow.token ? `https://enruta.win.pe/seguimiento/${selectedRow.token}` : 'https://enruta.win.pe');
-
-      rawList = [
+      combined = [
         {
           orden: 1,
           fecha_utc: selectedRow.fecha_solicitud_fmt || selectedRow.fecha_solicitud || 'Hoy',
@@ -224,7 +245,7 @@ export function TrackingView({
       ];
     }
 
-    return [...rawList].sort((a, b) => {
+    return combined.sort((a, b) => {
       const tA = new Date(a.fecha_utc || a.fecha || a.timestamp || 0).getTime() || 0;
       const tB = new Date(b.fecha_utc || b.fecha || b.timestamp || 0).getTime() || 0;
       if (tA !== tB) return tA - tB;
@@ -464,36 +485,54 @@ export function TrackingView({
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 lg:h-[calc(100vh-140px)] min-h-[640px]">
       {/* PANEL IZQUIERDO: BANDEJA DE CONVERSACIONES */}
       <div className="lg:col-span-4 bg-white border border-slate-100 rounded-2xl flex flex-col overflow-hidden shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)]">
-        <div className="p-3.5 border-b border-slate-100 space-y-2.5">
-          <div className="flex items-center justify-between">
-            <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-              <MessageSquare size={16} className="text-[#FF5500]" />
-              <span>Bandeja Mantra / WhatsApp</span>
-              {loadingPage && <RefreshCw size={12} className="text-[#FF5500] animate-spin" />}
+        <div className="p-3 border-b border-slate-100 space-y-2.5">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <h3 className="font-bold text-xs sm:text-[13px] text-slate-900 flex items-center gap-1.5 whitespace-nowrap shrink-0">
+              <MessageSquare size={15} className="text-[#FF5500] shrink-0" />
+              <span>Bandeja Mantra</span>
+              {loadingPage && <RefreshCw size={12} className="text-[#FF5500] animate-spin shrink-0" />}
             </h3>
-            <div className="flex items-center gap-1.5">
+
+            <div className="flex items-center gap-1 shrink-0">
               <button
+                type="button"
                 onClick={() => setSoloSos(!soloSos)}
-                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[10px] font-bold transition ${soloSos
-                  ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                className={`h-6 inline-flex items-center gap-1 px-2 rounded-full border text-[10px] font-bold whitespace-nowrap shrink-0 transition ${soloSos
+                  ? 'bg-rose-600 text-white border-rose-600 shadow-2xs'
                   : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
                   }`}
-                title="Filtrar únicamente chats que pulsaron el botón SOS / Soporte"
+                title="Filtrar chats que pulsaron el botón SOS / Soporte"
               >
-                <LifeBuoy size={10} />
+                <LifeBuoy size={10} className="shrink-0" />
                 <span>SOS</span>
               </button>
+
               <button
+                type="button"
+                onClick={() => setSoloLogChat(!soloLogChat)}
+                className={`h-6 inline-flex items-center gap-1 px-2 rounded-full border text-[10px] font-bold whitespace-nowrap shrink-0 transition ${soloLogChat
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                  : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                  }`}
+                title="Filtrar chats con Asistente Inteligente de Soporte (logs_chat)"
+              >
+                <Bot size={11} className="shrink-0" />
+                <span>Bot SOS</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setSoloConChat(!soloConChat)}
-                className={`px-2 py-0.5 rounded-lg border text-[10px] font-bold transition ${soloConChat
-                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                className={`h-6 inline-flex items-center gap-1 px-2 rounded-full border text-[10px] font-bold whitespace-nowrap shrink-0 transition ${soloConChat
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
                   : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                   }`}
                 title="Alternar entre órdenes con chat en Mantra o todas las órdenes"
               >
-                {soloConChat ? '💬 Con Chat' : '📋 Todas'}
+                <span>{soloConChat ? '💬 Con Chat' : '📋 Todas'}</span>
               </button>
-              <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-[#FFF0E5] text-[#FF5500] border border-orange-200">
+
+              <span className="h-6 inline-flex items-center px-2 text-[10px] font-extrabold rounded-full bg-[#FFF0E5] text-[#FF5500] border border-orange-200 whitespace-nowrap shrink-0 tabular-nums">
                 {totalRecords.toLocaleString('es-PE')} casos
               </span>
             </div>
@@ -576,12 +615,22 @@ export function TrackingView({
                     {item.cliente || '-'}
                   </div>
 
+                  {/* Sin fila extra de motivo; el ícono del robot va junto a los badges inferiores */}
+
                   <div className="flex items-center justify-between text-[10px] text-slate-500 mt-1">
                     <span className="flex items-center gap-1 text-emerald-700 font-semibold">
                       <Phone size={10} />
                       {item.mantra_phone || item.telefono || 'Sin teléfono'}
                     </span>
                     <div className="flex items-center gap-1.5">
+                      {(item.log_motivo_sos || item.log_chat_id) && (
+                        <span
+                          className="inline-flex items-center justify-center w-5 h-4 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200"
+                          title={`Bot SOS: ${item.log_motivo_sos || 'Soporte'}`}
+                        >
+                          <Bot size={10} />
+                        </span>
+                      )}
                       {isOrderSos(item) && (
                         <span
                           className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 text-[9px] font-extrabold"
@@ -666,9 +715,20 @@ export function TrackingView({
                       {selectedRow.cliente || 'Cliente WIN'}
                     </h4>
                     {sosTimelineInfo.active && (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 text-[10px] font-extrabold uppercase shadow-2xs">
+                      <span
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 text-[10px] font-extrabold uppercase shadow-2xs"
+                        title="Cliente pulsó botón SOS"
+                      >
                         <LifeBuoy size={11} className="text-rose-600" />
-                        <span>Pulsó SOS Soporte</span>
+                        <span>SOS</span>
+                      </span>
+                    )}
+                    {(selectedRow.log_motivo_sos || selectedRow.log_chat_id) && (
+                      <span
+                        className="inline-flex items-center justify-center w-6 h-5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200 shadow-2xs"
+                        title={`Bot SOS: ${selectedRow.log_motivo_sos || 'Soporte'} (${selectedRow.log_estado_chat || 'Activo'})`}
+                      >
+                        <Bot size={12} className="text-indigo-600" />
                       </span>
                     )}
                     {renderLastWriterBadge(activeTurno)}
@@ -809,29 +869,38 @@ export function TrackingView({
                 parsedChatMessages.map((msg, idx) => {
                   const textContent = msg.texto || msg.mensaje || msg.body || msg.contenido || '';
                   const senderRaw = String(msg.emisor || msg.rol || msg.direction || '').toLowerCase();
+                  const isFromLogChat = Boolean(msg._fromLogChat);
                   const isCliente =
                     senderRaw.includes('cli') ||
                     senderRaw.includes('inbound') ||
                     senderRaw.includes('user') ||
                     msg.from_me === false;
 
+                  const isAsistenteWin =
+                    !isCliente &&
+                    (isFromLogChat ||
+                      String(msg.emisor || '').toUpperCase() === 'ASISTENTE_WIN' ||
+                      String(msg.rol || '').toLowerCase() === 'bot');
+
                   const isTemplate =
                     !isCliente &&
+                    !isAsistenteWin &&
                     (msg.tipo === 'template' ||
                       Boolean(msg.es_plantilla) ||
                       /enruta\.win\.pe|confirmaci[oó]n de visita|plantilla preaprobada|\|\s*\[/i.test(textContent));
 
                   const timeLabel = formatChatDateTime(msg.fecha_utc || msg.fecha || msg.timestamp || '');
                   const showSosMilestoneHere = sosTimelineInfo.active && sosTimelineInfo.msgIndex === idx;
+                  const showLogChatBannerHere = Boolean(msg._firstLogChatMsg);
 
                   const sosMilestoneBanner = showSosMilestoneHere ? (
-                    <div className="my-3 flex items-center gap-3 select-none">
+                    <div className="my-2.5 flex items-center gap-3 select-none">
                       <div className="flex-1 h-px bg-gradient-to-r from-transparent via-rose-300 to-rose-400" />
-                      <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-rose-50 border border-rose-200 text-rose-800 text-[11px] font-extrabold shadow-xs">
-                        <LifeBuoy size={13} className="text-rose-600 animate-pulse shrink-0" />
-                        <span>SOPORTE TRACKING</span>
+                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-50 border border-rose-200 text-rose-800 text-[10.5px] font-extrabold shadow-2xs">
+                        <LifeBuoy size={12} className="text-rose-600 shrink-0" />
+                        <span>SOS</span>
                         {sosTimelineInfo.timestampLabel && (
-                          <span className="text-[10px] font-semibold text-rose-600 bg-white px-2 py-0.5 rounded-full border border-rose-200">
+                          <span className="text-[10px] font-medium text-rose-600 pl-1 border-l border-rose-200">
                             {sosTimelineInfo.timestampLabel}
                           </span>
                         )}
@@ -840,18 +909,75 @@ export function TrackingView({
                     </div>
                   ) : null;
 
+                  const logChatMilestoneBanner = showLogChatBannerHere ? (
+                    <div className="my-2.5 flex items-center gap-3 select-none">
+                      <div className="flex-1 h-px bg-gradient-to-r from-transparent via-indigo-300 to-indigo-400" />
+                      <div
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-800 text-[10.5px] font-extrabold shadow-2xs"
+                        title={selectedRow.log_motivo_sos || 'Bot SOS'}
+                      >
+                        <Bot size={13} className="text-indigo-600 shrink-0" />
+                        <span>SOS</span>
+                        {timeLabel && (
+                          <span className="text-[10px] font-medium text-indigo-600 pl-1 border-l border-indigo-200">
+                            {timeLabel}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex-1 h-px bg-gradient-to-l from-transparent via-indigo-300 to-indigo-400" />
+                    </div>
+                  ) : null;
+
                   if (isCliente) {
                     return (
                       <React.Fragment key={idx}>
                         {sosMilestoneBanner}
+                        {logChatMilestoneBanner}
                         <div className="flex flex-col items-start">
-                          <div className="max-w-[78%] rounded-2xl rounded-tl-sm p-3.5 bg-white border border-slate-200 shadow-xs space-y-2">
+                          <div
+                            className={`max-w-[78%] rounded-2xl rounded-tl-sm p-3.5 shadow-xs space-y-2 ${isFromLogChat
+                              ? 'bg-indigo-50/40 border border-indigo-200/90'
+                              : 'bg-white border border-slate-200'
+                              }`}
+                          >
                             <div className="flex items-center justify-between gap-4">
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 text-sky-800 border border-sky-200">
+                              <span
+                                className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold border ${isFromLogChat
+                                  ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
+                                  : 'bg-sky-100 text-sky-800 border-sky-200'
+                                  }`}
+                              >
                                 <User size={11} />
-                                <span>Cliente • {selectedRow.cliente}</span>
+                                <span>
+                                  {isFromLogChat
+                                    ? `Cliente (Opción SOS) • ${selectedRow.cliente}`
+                                    : `Cliente • ${selectedRow.cliente}`}
+                                </span>
                               </span>
                               <span className="text-[10px] text-slate-400">{timeLabel}</span>
+                            </div>
+                            {renderFormattedChatMessage(textContent)}
+                          </div>
+                        </div>
+                      </React.Fragment>
+                    );
+                  }
+
+                  if (isAsistenteWin) {
+                    return (
+                      <React.Fragment key={idx}>
+                        {sosMilestoneBanner}
+                        {logChatMilestoneBanner}
+                        <div className="flex flex-col items-end">
+                          <div className="max-w-[78%] rounded-2xl rounded-tr-sm p-3.5 bg-indigo-50/90 border border-indigo-200 shadow-xs space-y-2">
+                            <div className="flex items-center justify-between gap-4 border-b border-indigo-200/60 pb-1.5">
+                              <span
+                                className="inline-flex items-center justify-center w-6 h-5 rounded-full bg-indigo-600 text-white"
+                                title="Bot SOS"
+                              >
+                                <Bot size={12} />
+                              </span>
+                              <span className="text-[10px] text-indigo-700 font-semibold">{timeLabel}</span>
                             </div>
                             {renderFormattedChatMessage(textContent)}
                           </div>
@@ -864,6 +990,7 @@ export function TrackingView({
                     return (
                       <React.Fragment key={idx}>
                         {sosMilestoneBanner}
+                        {logChatMilestoneBanner}
                         <div className="flex flex-col items-end">
                           <div className="max-w-[80%] rounded-2xl rounded-tr-sm p-4 bg-purple-50/90 border border-purple-200 shadow-xs space-y-2.5">
                             <div className="flex items-center justify-between gap-4 border-b border-purple-200/70 pb-2">
@@ -893,6 +1020,7 @@ export function TrackingView({
                   return (
                     <React.Fragment key={idx}>
                       {sosMilestoneBanner}
+                      {logChatMilestoneBanner}
                       <div className="flex flex-col items-end">
                         <div className="max-w-[78%] rounded-2xl rounded-tr-sm p-3.5 bg-[#FFF0E5]/90 border border-orange-200 shadow-xs space-y-2">
                           <div className="flex items-center justify-between gap-4">
