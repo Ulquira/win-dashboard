@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   User, Sparkles, Headset, ExternalLink, MessageSquare,
   ChevronLeft, ChevronRight, RefreshCw, CheckCheck,
@@ -38,7 +38,36 @@ interface TrackingViewProps {
   service: string;
   globalSearch: string;
   ignoreDates: boolean;
+  consultTrigger?: number;
   onSelectOrder: (order: RealOrder) => void;
+}
+
+// Formateador homologado de Fecha y Hora (Ej: "05/11/2026 • 07:34 a. m.")
+function formatChatDateTime(raw?: string | null): string {
+  if (!raw) return '';
+  const trimmed = String(raw).trim();
+  if (!trimmed) return '';
+
+  const parsed = new Date(trimmed);
+  if (isNaN(parsed.getTime())) {
+    return trimmed.replace('T', ' ').replace(/\.\d+Z?$/, '');
+  }
+
+  const fecha = parsed.toLocaleDateString('es-PE', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    timeZone: 'America/Lima',
+  });
+
+  const hora = parsed.toLocaleTimeString('es-PE', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'America/Lima',
+  });
+
+  return `${fecha} • ${hora}`;
 }
 
 export function TrackingView({
@@ -48,6 +77,7 @@ export function TrackingView({
   service,
   globalSearch,
   ignoreDates,
+  consultTrigger = 0,
   onSelectOrder,
 }: TrackingViewProps) {
   const [debouncedQuery, setDebouncedQuery] = useState<string>(globalSearch);
@@ -74,68 +104,124 @@ export function TrackingView({
   const [chatMeta, setChatMeta] = useState<any>(null);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
 
+  // Controladores para cancelar peticiones obsoletas y evitar que se buguee la vista
+  const searchReqIdRef = useRef<number>(0);
+  const chatReqIdRef = useRef<number>(0);
+
   // Sincronización con el buscador dinámico del Header superior
   useEffect(() => {
     const timer = setTimeout(() => {
-      setDebouncedQuery(globalSearch);
-      setPage(1);
-      setSelectedIndex(0);
-    }, 350);
+      setDebouncedQuery((prev) => {
+        if (prev !== globalSearch) {
+          setPage(1);
+          setSelectedIndex(0);
+        }
+        return globalSearch;
+      });
+    }, 300);
     return () => clearTimeout(timer);
   }, [globalSearch]);
 
-  useEffect(() => {
-    setPage(1);
-    setSelectedIndex(0);
-  }, [soloConChat, soloSos, soloLogChat, slaFilter, turnoFilter, startDate, endDate, service, ignoreDates]);
+  // Resetear a página 1 cuando cambian los filtros globales del Header
+  const prevGlobalKeyRef = useRef<string>(`${startDate}_${endDate}_${service}_${ignoreDates}`);
+  const currentGlobalKey = `${startDate}_${endDate}_${service}_${ignoreDates}`;
+  if (prevGlobalKeyRef.current !== currentGlobalKey) {
+    prevGlobalKeyRef.current = currentGlobalKey;
+    if (page !== 1) setPage(1);
+    if (selectedIndex !== 0) setSelectedIndex(0);
+  }
 
-  const fetchPaginatedTracking = useCallback(() => {
-    setLoadingPage(true);
-    const params = new URLSearchParams({
-      startDate,
-      endDate,
-      service,
-      q: debouncedQuery,
-      ignoreDates: ignoreDates ? 'true' : 'false',
-      soloConChat: soloConChat ? 'true' : 'false',
-      soloSos: soloSos ? 'true' : 'false',
-      soloLogChat: soloLogChat ? 'true' : 'false',
-      sla: slaFilter,
-      turno: turnoFilter,
-      page: String(page),
-      pageSize: String(pageSize),
-    });
-    apiFetch(`/api/tracking/search?${params.toString()}`)
-      .then((data) => {
+  const fetchPaginatedTracking = useCallback(
+    async (forceRefresh = false) => {
+      const reqId = ++searchReqIdRef.current;
+      const controller = new AbortController();
+
+      setLoadingPage(true);
+      const params = new URLSearchParams({
+        startDate,
+        endDate,
+        service,
+        q: debouncedQuery,
+        ignoreDates: ignoreDates ? 'true' : 'false',
+        soloConChat: soloConChat ? 'true' : 'false',
+        soloSos: soloSos ? 'true' : 'false',
+        soloLogChat: soloLogChat ? 'true' : 'false',
+        sla: slaFilter,
+        turno: turnoFilter,
+        page: String(page),
+        pageSize: String(pageSize),
+        refresh: forceRefresh ? 'true' : 'false',
+      });
+
+      try {
+        const data = await apiFetch(`/api/tracking/search?${params.toString()}`, {
+          signal: controller.signal,
+        });
+        // Ignorar si ya salió otra petición más reciente
+        if (reqId !== searchReqIdRef.current) return;
+
         if (data.ok && Array.isArray(data.orders)) {
           setServerOrders(data.orders);
           setTotalRecords(Number(data.total || 0));
           setTotalPages(Number(data.totalPages || 1));
           setSelectedIndex(0);
         }
-      })
-      .catch((err) => console.error('Error en /api/tracking/search (API):', err))
-      .finally(() => setLoadingPage(false));
-  }, [startDate, endDate, service, debouncedQuery, ignoreDates, soloConChat, soloSos, soloLogChat, slaFilter, turnoFilter, page]);
+      } catch (err: any) {
+        if (err.name !== 'AbortError' && reqId === searchReqIdRef.current) {
+          console.error('Error en /api/tracking/search (API):', err);
+        }
+      } finally {
+        if (reqId === searchReqIdRef.current) {
+          setLoadingPage(false);
+        }
+      }
+    },
+    [
+      startDate,
+      endDate,
+      service,
+      debouncedQuery,
+      ignoreDates,
+      soloConChat,
+      soloSos,
+      soloLogChat,
+      slaFilter,
+      turnoFilter,
+      page,
+    ]
+  );
 
   useEffect(() => {
-    fetchPaginatedTracking();
-  }, [fetchPaginatedTracking]);
+    fetchPaginatedTracking(consultTrigger > 0);
+  }, [fetchPaginatedTracking, consultTrigger]);
 
   const selectedRow: RealOrder | null = serverOrders[selectedIndex] || serverOrders[0] || null;
+  const selectedOrderId = selectedRow?.orden_id ?? null;
 
-  // Consumo completo de todos los mensajes sin límite de 15/30
+  // Consumo completo de mensajes del chat seleccionado sin arrastrar estado del cliente anterior
   const fetchChatConversation = useCallback(async (row: RealOrder | null) => {
-    if (!row) return;
+    const reqId = ++chatReqIdRef.current;
+
+    // Limpiar inmediatamente los mensajes en vivo del cliente anterior para que el render sea instantáneo
+    setLiveMessages(null);
+    setChatMeta(null);
+    setDataSource('snapshot');
+
+    if (!row) {
+      setLoadingChat(false);
+      return;
+    }
+
     const phone = String(row.mantra_phone || row.telefono || '').replace(/\D/g, '');
     const grupo = String(row.servicio_tipo || row.producto || 'GENERAL');
 
     if (!phone && !row.orden_id) {
-      setLiveMessages(null);
-      setChatMeta(null);
-      setDataSource('snapshot');
+      setLoadingChat(false);
       return;
     }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4500);
 
     setLoadingChat(true);
     try {
@@ -144,34 +230,38 @@ export function TrackingView({
           phone
         )}&ordenId=${encodeURIComponent(String(row.orden_id || ''))}&grupoServicio=${encodeURIComponent(
           grupo
-        )}&limit=1000`
+        )}&limit=1000`,
+        { signal: controller.signal }
       );
+      clearTimeout(timeoutId);
+
+      // Si el usuario ya cambió a otro cliente mientras cargaba, descartar respuesta vieja
+      if (reqId !== chatReqIdRef.current) return;
+
       if (data.chatMeta) setChatMeta(data.chatMeta);
       if (data.ok && Array.isArray(data.messages) && data.messages.length > 0) {
         setLiveMessages(data.messages);
         setDataSource(data.source === 'live_api' ? 'live_api' : 'db_fallback');
-        setLoadingChat(false);
-        return;
       }
-    } catch (err: any) {
-      console.warn('⚠️ Error al consultar chat en vivo:', err.message);
+    } catch {
+      clearTimeout(timeoutId);
+    } finally {
+      if (reqId === chatReqIdRef.current) {
+        setLoadingChat(false);
+      }
     }
-
-    setLiveMessages(null);
-    setDataSource('snapshot');
-    setLoadingChat(false);
   }, []);
 
   useEffect(() => {
     fetchChatConversation(selectedRow);
-  }, [selectedRow, fetchChatConversation]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedOrderId, fetchChatConversation]);
 
-  // Atajos de teclado: F (Expandir/Colapsar Ficha), ← / → / ↑ / ↓ (Recorrer bandeja)
+  // Atajos de teclado: F (Expandir/Colapsar Ficha), ↑ ↓ (Recorrer bandeja)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-
       if (e.key.toLowerCase() === 'f') {
         e.preventDefault();
         setShowTechCard((prev) => !prev);
@@ -269,18 +359,17 @@ export function TrackingView({
       selectedRow?.fh_pulso_soporte ||
       null;
 
-    // 1. Buscar si algún mensaje del cliente coincide con el clic en botón de soporte/observación
     const triggerRegex =
       /tengo una observaci[oó]n|puls[oó] soporte|solicito soporte|necesito ayuda|bot[oó]n sos|hablar con (un )?asesor|soporte t[eé]cnico|ayuda con mi visita/i;
 
     let msgIndex = parsedChatMessages.findIndex((m) => {
+      if (m._fromLogChat) return false;
       const txt = String(m.texto || m.mensaje || m.body || m.contenido || '');
       const sender = String(m.emisor || m.rol || m.direction || '').toLowerCase();
       const isCli = sender.includes('cli') || sender.includes('inbound') || sender.includes('user') || m.from_me === false;
       return isCli && triggerRegex.test(txt);
     });
 
-    // 2. Si hay fecha exacta de pulso_soporte en la BD, ubicar el mensaje más cercano en el tiempo
     if (msgIndex === -1 && hasSosFlag && rawSosDate && parsedChatMessages.length > 0) {
       const targetMs = new Date(rawSosDate).getTime();
       if (!isNaN(targetMs)) {
@@ -292,8 +381,7 @@ export function TrackingView({
       }
     }
 
-    // 3. Si pulso_soporte = 'SI' y aún no hay índice, colocarlo justo antes de la primera respuesta de un Asesor humano (o después del disparo HSM inicial)
-    if (msgIndex === -1 && hasSosFlag && parsedChatMessages.length > 0) {
+    if (msgIndex === -1 && hasSosFlag && parsedChatMessages.length > 0 && !selectedRow?.log_chat_id) {
       const firstAgentIdx = parsedChatMessages.findIndex((m) => {
         const sender = String(m.emisor || m.rol || m.direction || '').toLowerCase();
         const txt = String(m.texto || m.mensaje || m.body || m.contenido || '');
@@ -304,7 +392,6 @@ export function TrackingView({
       if (firstAgentIdx !== -1) {
         msgIndex = firstAgentIdx;
       } else {
-        // Si solo hay plantillas/cliente, colocarlo tras el primer mensaje del cliente o al final
         const firstCliIdx = parsedChatMessages.findIndex((m) => {
           const sender = String(m.emisor || m.rol || m.direction || '').toLowerCase();
           return sender.includes('cli') || sender.includes('inbound') || sender.includes('user') || m.from_me === false;
@@ -331,35 +418,6 @@ export function TrackingView({
     };
   }, [selectedRow, parsedChatMessages]);
 
-  // Formateador homologado de Fecha y Hora (Ej: "05/11/2026 • 07:34 a. m.")
-  function formatChatDateTime(raw?: string | null): string {
-    if (!raw) return '';
-    const trimmed = String(raw).trim();
-    if (!trimmed) return '';
-
-    const parsed = new Date(trimmed);
-    if (isNaN(parsed.getTime())) {
-      // Si ya viene como "DD/MM/YYYY HH:mm", limpiamos milisegundos/Z si existieran
-      return trimmed.replace('T', ' ').replace(/\.\d+Z?$/, '');
-    }
-
-    const fecha = parsed.toLocaleDateString('es-PE', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      timeZone: 'America/Lima',
-    });
-
-    const hora = parsed.toLocaleTimeString('es-PE', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true,
-      timeZone: 'America/Lima',
-    });
-
-    return `${fecha} • ${hora}`;
-  }
-
   const activeTurno =
     chatMeta?.quien_tiene_la_palabra ||
     selectedRow?.quien_tiene_la_palabra ||
@@ -378,18 +436,15 @@ export function TrackingView({
   const activeSla = chatMeta?.semaforo_sla || selectedRow?.semaforo_sla || 'VERDE';
   const activeEstadoChat = chatMeta?.estado_chat || selectedRow?.estado_chat || null;
 
-  // Ícono circular de semáforo (sin texto ROJO/AMARILLO/VERDE)
   const renderSlaTrafficDot = (slaRaw?: string | null) => {
     const s = String(slaRaw || 'VERDE').toUpperCase();
     const isRed = s.includes('ROJO') || s.includes('CRIT') || s.includes('VENC');
     const isYellow = s.includes('AMAR') || s.includes('ALERT');
-
     const dotCls = isRed
       ? 'bg-rose-500 shadow-[0_0_8px_#f43f5e] ring-rose-500/30'
       : isYellow
         ? 'bg-amber-400 shadow-[0_0_8px_#fbbf24] ring-amber-400/30'
         : 'bg-emerald-400 shadow-[0_0_8px_#34d399] ring-emerald-400/30';
-
     return (
       <span
         title={`Semáforo SLA: ${s}`}
@@ -398,7 +453,6 @@ export function TrackingView({
     );
   };
 
-  // Etiqueta visual del último que escribió (Cliente, Asesor o Bot)
   const renderLastWriterBadge = (turnoRaw?: string | null) => {
     const t = String(turnoRaw || 'BOT').toUpperCase();
     const isCli = t.includes('CLI');
@@ -496,10 +550,16 @@ export function TrackingView({
             <div className="flex items-center gap-1 shrink-0">
               <button
                 type="button"
-                onClick={() => setSoloSos(!soloSos)}
+                onClick={() => {
+                  const next = !soloSos;
+                  setSoloSos(next);
+                  if (next) setSoloLogChat(false);
+                  setPage(1);
+                  setSelectedIndex(0);
+                }}
                 className={`h-6 inline-flex items-center gap-1 px-2 rounded-full border text-[10px] font-bold whitespace-nowrap shrink-0 transition ${soloSos
-                  ? 'bg-rose-600 text-white border-rose-600 shadow-2xs'
-                  : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                    ? 'bg-rose-600 text-white border-rose-600 shadow-2xs'
+                    : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
                   }`}
                 title="Filtrar chats que pulsaron el botón SOS / Soporte"
               >
@@ -509,10 +569,16 @@ export function TrackingView({
 
               <button
                 type="button"
-                onClick={() => setSoloLogChat(!soloLogChat)}
+                onClick={() => {
+                  const next = !soloLogChat;
+                  setSoloLogChat(next);
+                  if (next) setSoloSos(false);
+                  setPage(1);
+                  setSelectedIndex(0);
+                }}
                 className={`h-6 inline-flex items-center gap-1 px-2 rounded-full border text-[10px] font-bold whitespace-nowrap shrink-0 transition ${soloLogChat
-                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
-                  : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                    : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
                   }`}
                 title="Filtrar chats con Asistente Inteligente de Soporte (logs_chat)"
               >
@@ -522,10 +588,14 @@ export function TrackingView({
 
               <button
                 type="button"
-                onClick={() => setSoloConChat(!soloConChat)}
+                onClick={() => {
+                  setSoloConChat((prev) => !prev);
+                  setPage(1);
+                  setSelectedIndex(0);
+                }}
                 className={`h-6 inline-flex items-center gap-1 px-2 rounded-full border text-[10px] font-bold whitespace-nowrap shrink-0 transition ${soloConChat
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                   }`}
                 title="Alternar entre órdenes con chat en Mantra o todas las órdenes"
               >
@@ -548,10 +618,19 @@ export function TrackingView({
             ].map((btn) => (
               <button
                 key={btn.id}
-                onClick={() => setTurnoFilter(btn.id)}
+                type="button"
+                onClick={() => {
+                  setTurnoFilter(btn.id);
+                  if (btn.id === 'Todos') {
+                    setSoloSos(false);
+                    setSoloLogChat(false);
+                  }
+                  setPage(1);
+                  setSelectedIndex(0);
+                }}
                 className={`py-1.5 px-1.5 rounded-lg font-bold transition truncate ${turnoFilter === btn.id
-                  ? 'bg-[#FF5500] text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                    ? 'bg-[#FF5500] text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
                   }`}
               >
                 {btn.label}
@@ -563,7 +642,11 @@ export function TrackingView({
           <div className="grid grid-cols-1 text-[11px]">
             <select
               value={slaFilter}
-              onChange={(e) => setSlaFilter(e.target.value)}
+              onChange={(e) => {
+                setSlaFilter(e.target.value);
+                setPage(1);
+                setSelectedIndex(0);
+              }}
               className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-slate-700 font-medium focus:outline-none focus:border-[#FF5500]"
             >
               <option value="Todos">Semáforo SLA: Todos</option>
@@ -575,7 +658,7 @@ export function TrackingView({
         </div>
 
         {/* Lista de Conversaciones */}
-        <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+        <div className={`flex-1 overflow-y-auto divide-y divide-slate-100 transition-opacity ${loadingPage ? 'opacity-60' : 'opacity-100'}`}>
           {serverOrders.length > 0 ? (
             serverOrders.map((item, idx) => {
               const isSelected = selectedRow?.orden_id === item.orden_id;
@@ -593,8 +676,8 @@ export function TrackingView({
                     setSelectedIndex(idx);
                   }}
                   className={`p-3 cursor-pointer transition ${isSelected
-                    ? 'bg-[#FFF0E5]/70 border-l-4 border-l-[#FF5500]'
-                    : 'hover:bg-slate-50'
+                      ? 'bg-[#FFF0E5]/70 border-l-4 border-l-[#FF5500]'
+                      : 'hover:bg-slate-50'
                     }`}
                 >
                   <div className="flex items-center justify-between text-xs gap-2">
@@ -614,8 +697,6 @@ export function TrackingView({
                   <div className="font-bold text-slate-900 text-xs mt-1.5 truncate">
                     {item.cliente || '-'}
                   </div>
-
-                  {/* Sin fila extra de motivo; el ícono del robot va junto a los badges inferiores */}
 
                   <div className="flex items-center justify-between text-[10px] text-slate-500 mt-1">
                     <span className="flex items-center gap-1 text-emerald-700 font-semibold">
@@ -647,14 +728,14 @@ export function TrackingView({
                       )}
                       <span
                         className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${stWsp === 'READ'
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : stWsp.includes('DELIVER')
-                            ? 'bg-sky-100 text-sky-800'
-                            : stWsp === 'SENT'
-                              ? 'bg-blue-100 text-blue-800'
-                              : stWsp === 'FAILED'
-                                ? 'bg-rose-100 text-rose-800'
-                                : 'bg-slate-100 text-slate-600'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : stWsp.includes('DELIVER')
+                              ? 'bg-sky-100 text-sky-800'
+                              : stWsp === 'SENT'
+                                ? 'bg-blue-100 text-blue-800'
+                                : stWsp === 'FAILED'
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : 'bg-slate-100 text-slate-600'
                           }`}
                       >
                         {stWsp}
@@ -665,8 +746,24 @@ export function TrackingView({
               );
             })
           ) : (
-            <div className="p-8 text-center text-xs text-slate-500">
-              No se encontraron conversaciones con los filtros actuales. Cambia el botón <strong>"💬 Con Chat"</strong> a <strong>"📋 Todas"</strong> o activa <strong>"Todo el Histórico"</strong> arriba.
+            <div className="p-8 text-center text-xs text-slate-500 space-y-2">
+              <p>No se encontraron conversaciones con los filtros actuales.</p>
+              {(soloSos || soloLogChat || turnoFilter !== 'Todos' || slaFilter !== 'Todos') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSoloSos(false);
+                    setSoloLogChat(false);
+                    setTurnoFilter('Todos');
+                    setSlaFilter('Todos');
+                    setPage(1);
+                    setSelectedIndex(0);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-bold text-[11px] hover:bg-orange-100 transition"
+                >
+                  Restablecer filtros de bandeja
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -674,7 +771,11 @@ export function TrackingView({
         {/* Paginación de 50 en 50 */}
         <div className="p-2.5 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-600">
           <button
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            type="button"
+            onClick={() => {
+              setPage((p) => Math.max(1, p - 1));
+              setSelectedIndex(0);
+            }}
             disabled={page <= 1 || loadingPage}
             className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:bg-[#FF5500] hover:border-[#FF5500] hover:text-white disabled:opacity-40 font-semibold transition"
           >
@@ -685,7 +786,11 @@ export function TrackingView({
             <strong className="text-slate-900">{totalPages.toLocaleString('es-PE')}</strong>
           </span>
           <button
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            type="button"
+            onClick={() => {
+              setPage((p) => Math.min(totalPages, p + 1));
+              setSelectedIndex(0);
+            }}
             disabled={page >= totalPages || loadingPage}
             className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:bg-[#FF5500] hover:border-[#FF5500] hover:text-white disabled:opacity-40 font-semibold transition"
           >
@@ -739,7 +844,7 @@ export function TrackingView({
                     )}
                     {loadingChat ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 text-[10px] font-bold">
-                        <RefreshCw size={10} className="animate-spin" /> Conectando API...
+                        <RefreshCw size={10} className="animate-spin" /> Sincronizando...
                       </span>
                     ) : dataSource === 'live_api' ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
@@ -762,6 +867,7 @@ export function TrackingView({
                     </span>
                     <span>•</span>
                     <button
+                      type="button"
                       onClick={() =>
                         copyToClipboard(
                           String(
@@ -775,7 +881,7 @@ export function TrackingView({
                       className="inline-flex items-center gap-1 text-sky-700 hover:text-sky-900 font-bold transition"
                       title="Copiar Cód.Segui"
                     >
-                      <span>Codigo: {selectedRow.codi_segui_ot || selectedRow.ticket || '-'}</span>
+                      <span>Cód.Segui: {selectedRow.codi_segui_ot || selectedRow.ticket || '-'}</span>
                       {copiedCode ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
                     </button>
                   </div>
@@ -785,10 +891,11 @@ export function TrackingView({
               {/* Controles Superiores */}
               <div className="flex items-center gap-2 text-xs">
                 <button
+                  type="button"
                   onClick={() => setShowTechCard(!showTechCard)}
                   className={`flex items-center gap-1 px-3 py-1.5 rounded-xl border text-[11px] font-bold transition ${showTechCard
-                    ? 'bg-slate-100 text-slate-900 border-slate-300'
-                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      ? 'bg-slate-100 text-slate-900 border-slate-300'
+                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                     }`}
                   title="Mostrar/Ocultar Ficha Técnica (Tecla F)"
                 >
@@ -796,6 +903,7 @@ export function TrackingView({
                   {showTechCard ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                 </button>
                 <button
+                  type="button"
                   onClick={() => onSelectOrder(selectedRow)}
                   className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[#FF5500] hover:bg-[#E04B00] text-white font-bold text-[11px] transition shadow-xs shadow-orange-500/20"
                 >
@@ -936,23 +1044,19 @@ export function TrackingView({
                         <div className="flex flex-col items-start">
                           <div
                             className={`max-w-[78%] rounded-2xl rounded-tl-sm p-3.5 shadow-xs space-y-2 ${isFromLogChat
-                              ? 'bg-indigo-50/40 border border-indigo-200/90'
-                              : 'bg-white border border-slate-200'
+                                ? 'bg-indigo-50/40 border border-indigo-200/90'
+                                : 'bg-white border border-slate-200'
                               }`}
                           >
                             <div className="flex items-center justify-between gap-4">
                               <span
                                 className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold border ${isFromLogChat
-                                  ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
-                                  : 'bg-sky-100 text-sky-800 border-sky-200'
+                                    ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
+                                    : 'bg-sky-100 text-sky-800 border-sky-200'
                                   }`}
                               >
                                 <User size={11} />
-                                <span>
-                                  {isFromLogChat
-                                    ? `Cliente (Opción SOS) • ${selectedRow.cliente}`
-                                    : `Cliente • ${selectedRow.cliente}`}
-                                </span>
+                                <span>Cliente • {selectedRow.cliente}</span>
                               </span>
                               <span className="text-[10px] text-slate-400">{timeLabel}</span>
                             </div>

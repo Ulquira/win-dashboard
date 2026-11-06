@@ -911,7 +911,7 @@ app.get('/api/orders/search', async (req, res) => {
   }
 });
 
-// 4. Endpoint de Búsqueda Paginada (50 en 50) para Seguimiento (Cruzando con historial_chats_mantra)
+// 4. Endpoint de Búsqueda Paginada (50 en 50) para Seguimiento (Optimizado con Caché y Joins ligeros)
 app.get('/api/tracking/search', async (req, res) => {
   try {
     const todayIso = new Date().toLocaleDateString('en-CA');
@@ -934,10 +934,17 @@ app.get('/api/tracking/search', async (req, res) => {
     const fSoloConChat = req.query.soloConChat === 'true';
     const fSoloSos = req.query.soloSos === 'true';
     const fSoloLogChat = req.query.soloLogChat === 'true';
+    const refresh = req.query.refresh === 'true';
 
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(100, Math.max(10, Number(req.query.pageSize) || 50));
     const offset = (page - 1) * pageSize;
+
+    const cacheKey = `trk_${startDate}_${endDate}_${service}_${zone}_${q}_${ignoreDates}_${fEstadoChat}_${fSla}_${fTurno}_${fSoloConChat}_${fSoloSos}_${fSoloLogChat}_${page}_${pageSize}`;
+    if (!refresh) {
+      const cached = queryCache.get(cacheKey);
+      if (cached) return res.json(cached);
+    }
 
     const whereClauses: string[] = [];
     const params: any[] = [];
@@ -960,16 +967,12 @@ app.get('/api/tracking/search', async (req, res) => {
       params.push(zone, zone);
     }
 
-    if (fSoloConChat) {
-      whereClauses.push('(h.orden_id IS NOT NULL OR h.phone IS NOT NULL OR lc.orden_id IS NOT NULL)');
-    }
-
-    if (fSoloSos) {
-      whereClauses.push("(UPPER(TRIM(COALESCE(v.pulso_soporte, 'NO'))) IN ('SI', 'SÍ', '1', 'TRUE') OR lc.orden_id IS NOT NULL)");
-    }
-
     if (fSoloLogChat) {
       whereClauses.push('lc.orden_id IS NOT NULL');
+    } else if (fSoloSos) {
+      whereClauses.push("(UPPER(TRIM(COALESCE(v.pulso_soporte, 'NO'))) IN ('SI', 'SÍ', '1', 'TRUE') OR lc.orden_id IS NOT NULL)");
+    } else if (fSoloConChat) {
+      whereClauses.push('(h.orden_id IS NOT NULL OR h.phone IS NOT NULL OR lc.orden_id IS NOT NULL)');
     }
 
     if (fEstadoChat !== 'Todos') {
@@ -983,8 +986,13 @@ app.get('/api/tracking/search', async (req, res) => {
     }
 
     if (fTurno !== 'Todos') {
-      whereClauses.push("UPPER(COALESCE(h.quien_tiene_la_palabra, '')) LIKE ?");
-      params.push(`%${fTurno.toUpperCase()}%`);
+      const tUpper = fTurno.toUpperCase();
+      if (tUpper === 'BOT') {
+        whereClauses.push("(UPPER(COALESCE(h.quien_tiene_la_palabra, 'BOT')) LIKE '%BOT%' OR lc.orden_id IS NOT NULL)");
+      } else {
+        whereClauses.push("UPPER(COALESCE(h.quien_tiene_la_palabra, '')) LIKE ?");
+        params.push(`%${tUpper}%`);
+      }
     }
 
     if (q) {
@@ -1006,7 +1014,7 @@ app.get('/api/tracking/search', async (req, res) => {
 
     const logsChatSubquery = `
       LEFT JOIN (
-        SELECT l1.*
+        SELECT l1.id, l1.orden_id, l1.token, l1.grupo_servicio, l1.motivo, l1.estado_chat, l1.mensajes_json, l1.updated_at
         FROM logs_chat l1
         INNER JOIN (
           SELECT orden_id, MAX(id) AS max_id
@@ -1016,13 +1024,16 @@ app.get('/api/tracking/search', async (req, res) => {
       ) lc ON lc.orden_id = v.orden_id
     `;
 
+    // En COUNT(*) solo unimos vw_winordetraba si el usuario escribió en el buscador 'q'
+    const countWinJoin = q ? `LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id` : '';
+
     const [countResult, rowsResult]: any = await Promise.all([
       pool.query(
         `
         SELECT COUNT(*) AS total
         FROM vw_reporte_funnel_casos_360 v
         LEFT JOIN historial_chats_mantra h ON h.orden_id = v.orden_id
-        LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
+        ${countWinJoin}
         ${logsChatSubquery}
         ${whereSql}
         `,
@@ -1073,17 +1084,24 @@ app.get('/api/tracking/search', async (req, res) => {
     const total = Number(countResult?.[0]?.[0]?.total || 0);
     const rows = (rowsResult?.[0] || []).map((r: any) => ({
       ...r,
+      servicio_tipo:
+        servicioToTipoMap.get(String(r.producto || '').trim().toUpperCase()) ||
+        homologarTipoServicio(String(r.servicio_tipo || '')) ||
+        r.servicio_tipo,
       ultimos_mensajes_json: r.chat_json_mantra || r.ultimos_mensajes_json || null,
     }));
 
-    return res.json({
+    const payload = {
       ok: true,
       total,
       page,
       pageSize,
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
       orders: rows,
-    });
+    };
+
+    queryCache.set(cacheKey, payload, 45);
+    return res.json(payload);
   } catch (error: any) {
     console.error('❌ Error en /api/tracking/search:', error.message);
     return res.status(500).json({ ok: false, error: error.message });

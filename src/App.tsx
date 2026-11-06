@@ -404,6 +404,7 @@ export default function App() {
             service={service}
             globalSearch={globalSearch}
             ignoreDates={ignoreDates}
+            consultTrigger={consultTrigger}
             onSelectOrder={setSelectedOrder}
           />
         )}
