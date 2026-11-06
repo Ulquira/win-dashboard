@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import {
     ClipboardList, CheckCircle, Truck, Clock, XCircle, Users,
-    TrendingUp, Award, MapPin, Wrench, Layers, RefreshCw,
+    TrendingUp, Award, MapPin, Wrench, Layers,
     BarChart2, ShieldCheck, AlertTriangle
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
@@ -25,56 +26,47 @@ export function OperationsDashboardView({
     consultTrigger = 0,
 }: OperationsDashboardViewProps) {
     const [debouncedQuery, setDebouncedQuery] = useState<string>(globalSearch);
-    const [loading, setLoading] = useState<boolean>(true);
-    const [error, setError] = useState<string | null>(null);
-    const [kpis, setKpis] = useState<OperationsKpis | null>(null);
-    const [byEstado, setByEstado] = useState<any[]>([]);
-    const [daily, setDaily] = useState<any[]>([]);
-    const [byPartner, setByPartner] = useState<any[]>([]);
-    const [byZona, setByZona] = useState<any[]>([]);
-    const [topCuadrillas, setTopCuadrillas] = useState<any[]>([]);
-    const [byMotivoTrabajo, setByMotivoTrabajo] = useState<any[]>([]);
-    const [byMotivoFin, setByMotivoFin] = useState<any[]>([]);
 
     useEffect(() => {
-        const timer = setTimeout(() => setDebouncedQuery(globalSearch), 350);
+        const timer = setTimeout(() => setDebouncedQuery(globalSearch), 300);
         return () => clearTimeout(timer);
     }, [globalSearch]);
 
-    const fetchOperations = useCallback((forceRefresh = false) => {
-        setLoading(true);
-        setError(null);
-        const params = new URLSearchParams({
-            startDate,
-            endDate,
-            service,
-            q: debouncedQuery,
-            ignoreDates: ignoreDates ? 'true' : 'false',
-            refresh: forceRefresh ? 'true' : 'false',
-        });
+    const {
+        data: opsData,
+        isFetching: loading,
+        isError,
+        error: queryError,
+    } = useQuery<any>({
+        queryKey: ['operationsDashboard', startDate, endDate, service, debouncedQuery, ignoreDates, consultTrigger],
+        queryFn: async ({ signal }): Promise<any> => {
+            const params = new URLSearchParams({
+                startDate,
+                endDate,
+                service,
+                q: debouncedQuery,
+                ignoreDates: ignoreDates ? 'true' : 'false',
+                refresh: consultTrigger > 0 ? 'true' : 'false',
+            });
+            return (apiFetch as any)(`/api/operations?${params.toString()}`, { signal });
+        },
+        placeholderData: (prev: any) => prev,
+    });
 
-        apiFetch(`/api/operations?${params.toString()}`)
-            .then((res) => {
-                if (res.ok) {
-                    setKpis(res.kpis);
-                    setByEstado(res.byEstado || []);
-                    setDaily(res.daily || []);
-                    setByPartner(res.byPartner || []);
-                    setByZona(res.byZona || []);
-                    setTopCuadrillas(res.topCuadrillas || []);
-                    setByMotivoTrabajo(res.byMotivoTrabajo || []);
-                    setByMotivoFin(res.byMotivoFin || []);
-                } else {
-                    setError(res.error || 'No se pudo cargar /api/operations');
-                }
-            })
-            .catch((err) => setError(err.message))
-            .finally(() => setLoading(false));
-    }, [startDate, endDate, service, debouncedQuery, ignoreDates]);
+    const error = isError
+        ? (queryError as Error)?.message
+        : opsData && !opsData.ok
+            ? opsData.error || 'No se pudo cargar /api/operations'
+            : null;
 
-    useEffect(() => {
-        fetchOperations(consultTrigger > 0);
-    }, [fetchOperations, consultTrigger]);
+    const kpis: OperationsKpis | null = opsData?.kpis || null;
+    const byEstado: any[] = opsData?.byEstado || [];
+    const daily: any[] = opsData?.daily || [];
+    const byPartner: any[] = opsData?.byPartner || [];
+    const byZona: any[] = opsData?.byZona || [];
+    const topCuadrillas: any[] = opsData?.topCuadrillas || [];
+    const byMotivoTrabajo: any[] = opsData?.byMotivoTrabajo || [];
+    const byMotivoFin: any[] = opsData?.byMotivoFin || [];
 
     const fmt = (n?: number) => Number(n || 0).toLocaleString('es-PE');
     const fmtDec = (n?: number) => Number(n || 0).toFixed(1).replace('.', ',');

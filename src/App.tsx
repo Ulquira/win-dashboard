@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { Activity, ClipboardList, Wrench } from 'lucide-react';
-
 import {
   ViewMode, NavSection, KpiData, EvolutionPoint,
   RealOrder, PartnerRankItem, CalculatedMetrics
@@ -16,9 +16,43 @@ import { TrackingView } from './views/TrackingView';
 import { OrdersView } from './views/OrdersView';
 import { apiFetch, API_BASE_URL } from './config/api';
 
+const VALID_NAVS: NavSection[] = [
+  'Inicio',
+  'Dashboard',
+  'Órdenes',
+  'Seguimiento',
+  'Eficiencia',
+  'Experiencia (CSAT)',
+];
+const VALID_VIEWS: ViewMode[] = ['ejecutiva', 'operativa', 'operaciones'];
+
+const DEFAULT_SERVICES = [
+  'INSTA - LIMA',
+  'INSTA - PROV',
+  'AVER - LIMA',
+  'AVER - PROV',
+  'POSTVENTA',
+];
+
+const EMPTY_ARRAY: any[] = [];
+
 export default function App() {
-  const [activeNav, setActiveNav] = useState<NavSection>('Dashboard');
-  const [viewMode, setViewMode] = useState<ViewMode>('ejecutiva');
+  const [activeNav, setActiveNav] = useState<NavSection>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = params.get('nav') as NavSection;
+    if (fromUrl && VALID_NAVS.includes(fromUrl)) return fromUrl;
+    const saved = localStorage.getItem('win_active_nav') as NavSection;
+    return saved && VALID_NAVS.includes(saved) ? saved : 'Dashboard';
+  });
+
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = params.get('view') as ViewMode;
+    if (fromUrl && VALID_VIEWS.includes(fromUrl)) return fromUrl;
+    const saved = localStorage.getItem('win_view_mode') as ViewMode;
+    return saved && VALID_VIEWS.includes(saved) ? saved : 'ejecutiva';
+  });
+
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     return localStorage.getItem('win_theme') === 'dark';
@@ -35,153 +69,119 @@ export default function App() {
     }
   }, [darkMode]);
 
-  const [startDate, setStartDate] = useState<string>(() => new Date().toLocaleDateString('en-CA'));
-  const [endDate, setEndDate] = useState<string>(() => new Date().toLocaleDateString('en-CA'));
-  const [selectedServices, setSelectedServices] = useState<string[]>([]);
-  const [globalSearch, setGlobalSearch] = useState<string>('');
-  const [ignoreDates, setIgnoreDates] = useState<boolean>(false);
+  useEffect(() => {
+    localStorage.setItem('win_active_nav', activeNav);
+    localStorage.setItem('win_view_mode', viewMode);
+
+    const url = new URL(window.location.href);
+    url.searchParams.set('nav', activeNav);
+    if (activeNav === 'Dashboard') {
+      url.searchParams.set('view', viewMode);
+    } else {
+      url.searchParams.delete('view');
+    }
+    window.history.replaceState({}, '', url.toString());
+  }, [activeNav, viewMode]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      const navParam = params.get('nav') as NavSection;
+      const viewParam = params.get('view') as ViewMode;
+      if (navParam && VALID_NAVS.includes(navParam)) setActiveNav(navParam);
+      if (viewParam && VALID_VIEWS.includes(viewParam)) setViewMode(viewParam);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const [startDate, setStartDate] = useState<string>(() => {
+    return sessionStorage.getItem('win_startDate') || new Date().toLocaleDateString('en-CA');
+  });
+  const [endDate, setEndDate] = useState<string>(() => {
+    return sessionStorage.getItem('win_endDate') || new Date().toLocaleDateString('en-CA');
+  });
+  const [selectedServices, setSelectedServices] = useState<string[]>(() => {
+    const saved = sessionStorage.getItem('win_selectedServices');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  });
+  const [globalSearch, setGlobalSearch] = useState<string>(() => {
+    return sessionStorage.getItem('win_globalSearch') || '';
+  });
+  const [ignoreDates, setIgnoreDates] = useState<boolean>(() => {
+    return sessionStorage.getItem('win_ignoreDates') === 'true';
+  });
+
+  useEffect(() => {
+    sessionStorage.setItem('win_startDate', startDate);
+    sessionStorage.setItem('win_endDate', endDate);
+    sessionStorage.setItem('win_selectedServices', JSON.stringify(selectedServices));
+    sessionStorage.setItem('win_globalSearch', globalSearch);
+    sessionStorage.setItem('win_ignoreDates', String(ignoreDates));
+  }, [startDate, endDate, selectedServices, globalSearch, ignoreDates]);
+
   const service = selectedServices.length > 0 ? selectedServices.join(',') : 'Todos los servicios';
   const zone = 'Todas las zonas';
-
-  const [serviceOptions, setServiceOptions] = useState<string[]>([]);
-  const [sectorOptions, setSectorOptions] = useState<string[]>([]);
-  const [partnerOptions, setPartnerOptions] = useState<string[]>([]);
-
-  const [kpis, setKpis] = useState<KpiData | null>(null);
-  const [evolution, setEvolution] = useState<EvolutionPoint[]>([]);
-  const [dailyInRange, setDailyInRange] = useState<any[]>([]);
-  const [byEstadoOt, setByEstadoOt] = useState<any[]>([]);
-  const [bySector, setBySector] = useState<any[]>([]);
-  const [byTipoOperacion, setByTipoOperacion] = useState<any[]>([]);
-  const [orders, setOrders] = useState<RealOrder[]>([]);
-  const [partners, setPartners] = useState<PartnerRankItem[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [dbOnline, setDbOnline] = useState<boolean>(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [selectedOrder, setSelectedOrder] = useState<RealOrder | null>(null);
   const [consultTrigger, setConsultTrigger] = useState<number>(0);
 
-  const fetchDashboardData = (
-    sDate = startDate,
-    eDate = endDate,
-    srv = service,
-    zn = zone,
-    forceRefresh = false
-  ) => {
-    setLoading(true);
-    setErrorMsg(null);
-    const params = new URLSearchParams({
-      startDate: sDate,
-      endDate: eDate,
-      service: srv,
-      zone: zn,
-      refresh: forceRefresh ? 'true' : 'false',
-    });
+  const { data: filtersData } = useQuery<any>({
+    queryKey: ['catalogFilters'],
+    queryFn: ({ signal }) => apiFetch('/api/filters', { signal }),
+    staleTime: 1000 * 60 * 30,
+  });
 
-    apiFetch(`/api/dashboard?${params.toString()}`)
-      .then((data) => {
-        if (data.ok) {
-          setKpis(data.kpis);
-          setEvolution(data.evolution || []);
-          setDailyInRange(data.dailyInRange || []);
-          setByEstadoOt(data.byEstadoOt || []);
-          setBySector(data.bySector || []);
-          setByTipoOperacion(data.byTipoOperacion || []);
-          setOrders(data.orders || []);
-          setPartners(data.partners || []);
-          setDbOnline(true);
+  const serviceOptions: string[] =
+    filtersData?.ok && Array.isArray(filtersData.servicios) && filtersData.servicios.length > 0
+      ? filtersData.servicios
+      : DEFAULT_SERVICES;
+  const sectorOptions: string[] = filtersData?.sectores || filtersData?.zonas || EMPTY_ARRAY;
+  const partnerOptions: string[] = filtersData?.partners || EMPTY_ARRAY;
 
-          const extractedServices = Array.from(
-            new Set([
-              ...(data.byTipoOperacion || []).map((t: any) => String(t.tipo || '').trim()),
-              ...(data.orders || []).map((o: any) => String(o.servicio_tipo || o.producto || '').trim()),
-            ])
-          ).filter((s) => s && s !== '-');
-
-          if (extractedServices.length > 0) {
-            setServiceOptions((prev) =>
-              Array.from(new Set([...prev, ...extractedServices])).sort()
-            );
-          }
-        } else {
-          setDbOnline(false);
-          setErrorMsg(data.error || 'Error desconocido en la respuesta de la API');
-        }
-      })
-      .catch((err) => {
-        setDbOnline(false);
-        setErrorMsg(`No se pudo conectar a la API ${API_BASE_URL} (${err.message})`);
-      })
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    let ignore = false;
-    const initialDate = new Date().toLocaleDateString('en-CA');
-    const params = new URLSearchParams({
-      startDate: initialDate,
-      endDate: initialDate,
-      service: 'Todos los servicios',
-      zone: 'Todas las zonas',
-      refresh: 'false',
-    });
-
-    apiFetch(`/api/dashboard?${params.toString()}`)
-      .then((data) => {
-        if (ignore) return;
-        if (data.ok) {
-          setKpis(data.kpis);
-          setEvolution(data.evolution || []);
-          setDailyInRange(data.dailyInRange || []);
-          setByEstadoOt(data.byEstadoOt || []);
-          setBySector(data.bySector || []);
-          setByTipoOperacion(data.byTipoOperacion || []);
-          setOrders(data.orders || []);
-          setPartners(data.partners || []);
-          setDbOnline(true);
-
-          const extractedServices = Array.from(
-            new Set([
-              ...(data.byTipoOperacion || []).map((t: any) => String(t.tipo || '').trim()),
-              ...(data.orders || []).map((o: any) => String(o.servicio_tipo || o.producto || '').trim()),
-            ])
-          ).filter((s) => s && s !== '-');
-
-          if (extractedServices.length > 0) {
-            setServiceOptions((prev) =>
-              Array.from(new Set([...prev, ...extractedServices])).sort()
-            );
-          }
-        } else {
-          setDbOnline(false);
-          setErrorMsg(data.error || 'Error desconocido en la respuesta de la API');
-        }
-      })
-      .catch((err) => {
-        if (ignore) return;
-        setDbOnline(false);
-        setErrorMsg(`No se pudo conectar a la API ${API_BASE_URL} (${err.message})`);
-      })
-      .finally(() => {
-        if (!ignore) setLoading(false);
+  const {
+    data: dashData,
+    isFetching: loading,
+    isError,
+    error: queryError,
+    refetch: refetchDashboard,
+  } = useQuery<any>({
+    queryKey: ['dashboardMain', startDate, endDate, service, zone, consultTrigger],
+    queryFn: ({ signal }) => {
+      const params = new URLSearchParams({
+        startDate,
+        endDate,
+        service,
+        zone,
+        refresh: consultTrigger > 0 ? 'true' : 'false',
       });
+      return apiFetch(`/api/dashboard?${params.toString()}`, { signal });
+    },
+    placeholderData: keepPreviousData,
+  });
 
-    apiFetch('/api/filters')
-      .then((data) => {
-        if (ignore) return;
-        if (data.ok) {
-          setServiceOptions(data.servicios || []);
-          setSectorOptions(data.sectores || data.zonas || []);
-          setPartnerOptions(data.partners || []);
-        }
-      })
-      .catch((err) => console.error('Error cargando filtros desde API:', err));
+  const dbOnline = Boolean(dashData?.ok && !isError);
+  const errorMsg = isError
+    ? `No se pudo conectar a la API ${API_BASE_URL} (${(queryError as Error)?.message || 'Error'})`
+    : dashData && !dashData.ok
+      ? dashData.error || 'Error desconocido en la respuesta de la API'
+      : null;
 
-    return () => {
-      ignore = true;
-    };
-  }, []);
+  const kpis: KpiData | null = dashData?.kpis || null;
+  const evolution: EvolutionPoint[] = dashData?.evolution || EMPTY_ARRAY;
+  const dailyInRange: any[] = dashData?.dailyInRange || EMPTY_ARRAY;
+  const byEstadoOt: any[] = dashData?.byEstadoOt || EMPTY_ARRAY;
+  const bySector: any[] = dashData?.bySector || EMPTY_ARRAY;
+  const byTipoOperacion: any[] = dashData?.byTipoOperacion || EMPTY_ARRAY;
+  const orders: RealOrder[] = dashData?.orders || EMPTY_ARRAY;
+  const partners: PartnerRankItem[] = dashData?.partners || EMPTY_ARRAY;
 
   const calc: CalculatedMetrics = useMemo(() => {
     const total = Number(kpis?.total_ordenes || 0);
@@ -261,7 +261,6 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen bg-[#F8F9FA] text-slate-800 font-sans relative">
-      {/* Backdrop para móviles */}
       {mobileMenuOpen && (
         <div
           className="fixed inset-0 bg-slate-900/30 backdrop-blur-xs z-40 md:hidden transition-opacity"
@@ -283,7 +282,10 @@ export default function App() {
           <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-2xl text-xs flex items-center justify-between shadow-xs">
             <span><strong>Aviso de conexión:</strong> {errorMsg}</span>
             <button
-              onClick={() => fetchDashboardData(startDate, endDate, service, zone, true)}
+              onClick={() => {
+                setConsultTrigger((prev) => prev + 1);
+                refetchDashboard();
+              }}
               className="px-3 py-1 bg-rose-100 hover:bg-rose-200 text-rose-900 rounded-lg font-bold transition"
             >
               Reintentar
@@ -307,10 +309,7 @@ export default function App() {
           setSelectedServices={setSelectedServices}
           setGlobalSearch={setGlobalSearch}
           setIgnoreDates={setIgnoreDates}
-          onConsult={() => {
-            setConsultTrigger((prev) => prev + 1);
-            fetchDashboardData(startDate, endDate, service, zone, true);
-          }}
+          onConsult={() => setConsultTrigger((prev) => prev + 1)}
           onToggleSidebar={() => setMobileMenuOpen(!mobileMenuOpen)}
           darkMode={darkMode}
           onToggleDarkMode={() => setDarkMode((prev) => !prev)}
@@ -323,8 +322,8 @@ export default function App() {
                 <button
                   onClick={() => setViewMode('ejecutiva')}
                   className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'ejecutiva'
-                    ? 'bg-white text-[#FF5500] shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
+                      ? 'bg-white text-[#FF5500] shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
                     }`}
                 >
                   <Activity size={14} className={viewMode === 'ejecutiva' ? 'text-[#FF5500]' : 'text-slate-400'} />
@@ -333,8 +332,8 @@ export default function App() {
                 <button
                   onClick={() => setViewMode('operativa')}
                   className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'operativa'
-                    ? 'bg-white text-[#FF5500] shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
+                      ? 'bg-white text-[#FF5500] shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
                     }`}
                 >
                   <ClipboardList size={14} className={viewMode === 'operativa' ? 'text-[#FF5500]' : 'text-slate-400'} />
@@ -343,8 +342,8 @@ export default function App() {
                 <button
                   onClick={() => setViewMode('operaciones')}
                   className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'operaciones'
-                    ? 'bg-white text-[#FF5500] shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
+                      ? 'bg-white text-[#FF5500] shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
                     }`}
                 >
                   <Wrench size={14} className={viewMode === 'operaciones' ? 'text-[#FF5500]' : 'text-slate-400'} />

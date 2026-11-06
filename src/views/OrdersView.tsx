@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import {
   Filter, ChevronDown, User, ChevronLeft, ChevronRight, RefreshCw, Check
 } from 'lucide-react';
@@ -31,15 +32,10 @@ export function OrdersView({
   onSelectOrder,
 }: OrdersViewProps) {
   const [debouncedQuery, setDebouncedQuery] = useState<string>(globalSearch);
-
-  const [page, setPage] = useState<number>(1);
+  const [page, setPage] = useState<number>(() => {
+    return Number(sessionStorage.getItem('ord_page')) || 1;
+  });
   const pageSize = 50;
-  const [totalRecords, setTotalRecords] = useState<number>(initialOrders.length);
-  const [totalPages, setTotalPages] = useState<number>(
-    Math.max(1, Math.ceil((initialOrders.length || 1) / 50))
-  );
-  const [serverOrders, setServerOrders] = useState<RealOrder[]>(initialOrders.slice(0, 50));
-  const [loadingPage, setLoadingPage] = useState<boolean>(false);
 
   const [openHeaderCol, setOpenHeaderCol] = useState<string | null>(null);
   const [sortConfig, setSortConfig] = useState<{ col: string; dir: 'asc' | 'desc' }>({
@@ -47,7 +43,7 @@ export function OrdersView({
     dir: 'desc',
   });
 
-  // Filtros de cabecera con soporte Multiselección (arrays)
+  // Filtros de cabecera con persistencia en sessionStorage
   const [colFilters, setColFilters] = useState<{
     orden: string;
     cliente: string;
@@ -57,16 +53,31 @@ export function OrdersView({
     estadoOt: string[];
     wsp: string[];
     tracking: string[];
-  }>({
-    orden: '',
-    cliente: '',
-    operacion: [],
-    sector: [],
-    partner: [],
-    estadoOt: [],
-    wsp: [],
-    tracking: [],
+  }>(() => {
+    const saved = sessionStorage.getItem('ord_colFilters');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        // Fallback al estado limpio
+      }
+    }
+    return {
+      orden: '',
+      cliente: '',
+      operacion: [],
+      sector: [],
+      partner: [],
+      estadoOt: [],
+      wsp: [],
+      tracking: [],
+    };
   });
+
+  useEffect(() => {
+    sessionStorage.setItem('ord_page', String(page));
+    sessionStorage.setItem('ord_colFilters', JSON.stringify(colFilters));
+  }, [page, colFilters]);
 
   const toggleMultiFilter = (
     key: 'operacion' | 'sector' | 'partner' | 'estadoOt' | 'wsp' | 'tracking',
@@ -77,6 +88,7 @@ export function OrdersView({
       const next = arr.includes(val) ? arr.filter((x) => x !== val) : [...arr, val];
       return { ...prev, [key]: next };
     });
+    setPage(1);
   };
 
   const activeColFilterCount = useMemo(() => {
@@ -95,65 +107,57 @@ export function OrdersView({
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      setDebouncedQuery(globalSearch);
-      setPage(1);
-    }, 350);
+      setDebouncedQuery((prev) => {
+        if (prev !== globalSearch) setPage(1);
+        return globalSearch;
+      });
+    }, 300);
     return () => clearTimeout(timer);
   }, [globalSearch]);
 
-  const [prevFilterKey, setPrevFilterKey] = useState<string>('');
-  const currentFilterKey = `${startDate}_${endDate}_${service}_${ignoreDates}_${JSON.stringify(colFilters)}`;
-  if (prevFilterKey !== currentFilterKey) {
-    setPrevFilterKey(currentFilterKey);
-    if (page !== 1) setPage(1);
-  }
-
-  useEffect(() => {
-    let ignore = false;
-    Promise.resolve().then(() => {
-      if (!ignore) setLoadingPage(true);
-    });
-
-    const serializeArr = (arr: string[]) => (arr.length > 0 ? arr.join(',') : 'Todos');
-
-    const params = new URLSearchParams({
+  const {
+    data: ordersData,
+    isFetching: loadingPage,
+  } = useQuery<any>({
+    queryKey: [
+      'ordersSearch',
       startDate,
       endDate,
       service,
-      q: debouncedQuery,
-      ignoreDates: ignoreDates ? 'true' : 'false',
-      orden: colFilters.orden,
-      cliente: colFilters.cliente,
-      operacion: serializeArr(colFilters.operacion),
-      sector: serializeArr(colFilters.sector),
-      partner: serializeArr(colFilters.partner),
-      estadoOt: serializeArr(colFilters.estadoOt),
-      wsp: serializeArr(colFilters.wsp),
-      tracking: serializeArr(colFilters.tracking),
-      page: String(page),
-      pageSize: String(pageSize),
-    });
-
-    apiFetch(`/api/orders/search?${params.toString()}`)
-      .then((data) => {
-        if (ignore) return;
-        if (data.ok && Array.isArray(data.orders)) {
-          setServerOrders(data.orders);
-          setTotalRecords(Number(data.total || 0));
-          setTotalPages(Number(data.totalPages || 1));
-        }
-      })
-      .catch((err) => {
-        if (!ignore) console.error('Error buscando órdenes en API:', err);
-      })
-      .finally(() => {
-        if (!ignore) setLoadingPage(false);
+      debouncedQuery,
+      ignoreDates,
+      colFilters,
+      page,
+    ],
+    queryFn: async ({ signal }): Promise<any> => {
+      const serializeArr = (arr: string[]) => (arr.length > 0 ? arr.join(',') : 'Todos');
+      const params = new URLSearchParams({
+        startDate,
+        endDate,
+        service,
+        q: debouncedQuery,
+        ignoreDates: ignoreDates ? 'true' : 'false',
+        orden: colFilters.orden,
+        cliente: colFilters.cliente,
+        operacion: serializeArr(colFilters.operacion),
+        sector: serializeArr(colFilters.sector),
+        partner: serializeArr(colFilters.partner),
+        estadoOt: serializeArr(colFilters.estadoOt),
+        wsp: serializeArr(colFilters.wsp),
+        tracking: serializeArr(colFilters.tracking),
+        page: String(page),
+        pageSize: String(pageSize),
       });
+      return (apiFetch as any)(`/api/orders/search?${params.toString()}`, { signal });
+    },
+    placeholderData: (prev: any) => prev,
+  });
 
-    return () => {
-      ignore = true;
-    };
-  }, [startDate, endDate, service, debouncedQuery, ignoreDates, colFilters, page]);
+  const serverOrders: RealOrder[] = ordersData?.orders || initialOrders.slice(0, 50);
+  const totalRecords = Number(ordersData?.total ?? initialOrders.length);
+  const totalPages = Number(
+    ordersData?.totalPages ?? Math.max(1, Math.ceil((initialOrders.length || 1) / 50))
+  );
 
   const resetAllOrderFilters = () => {
     setColFilters({
@@ -286,8 +290,8 @@ export function OrdersView({
                     setOpenHeaderCol(openHeaderCol === 'orden' ? null : 'orden');
                   }}
                   className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer transition ${colFilters.orden
-                      ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
-                      : 'hover:bg-slate-100'
+                    ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
+                    : 'hover:bg-slate-100'
                     }`}
                 >
                   <span>N° Orden / Ticket</span>
@@ -320,8 +324,8 @@ export function OrdersView({
                     setOpenHeaderCol(openHeaderCol === 'cliente' ? null : 'cliente');
                   }}
                   className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer transition ${colFilters.cliente
-                      ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
-                      : 'hover:bg-slate-100'
+                    ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
+                    : 'hover:bg-slate-100'
                     }`}
                 >
                   <span>Cliente / Doc. / Cód. Seg.</span>
@@ -353,8 +357,8 @@ export function OrdersView({
                     setOpenHeaderCol(openHeaderCol === 'operacion' ? null : 'operacion');
                   }}
                   className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer transition ${colFilters.operacion.length > 0
-                      ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
-                      : 'hover:bg-slate-100'
+                    ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
+                    : 'hover:bg-slate-100'
                     }`}
                 >
                   <span>Operación / Producto</span>
@@ -406,8 +410,8 @@ export function OrdersView({
                     setOpenHeaderCol(openHeaderCol === 'sector' ? null : 'sector');
                   }}
                   className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer transition ${colFilters.sector.length > 0
-                      ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
-                      : 'hover:bg-slate-100'
+                    ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
+                    : 'hover:bg-slate-100'
                     }`}
                 >
                   <span>Sector / Distrito</span>
@@ -459,8 +463,8 @@ export function OrdersView({
                     setOpenHeaderCol(openHeaderCol === 'partner' ? null : 'partner');
                   }}
                   className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer transition ${colFilters.partner.length > 0
-                      ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
-                      : 'hover:bg-slate-100'
+                    ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
+                    : 'hover:bg-slate-100'
                     }`}
                 >
                   <span>Partner / Cuadrilla</span>
@@ -512,8 +516,8 @@ export function OrdersView({
                     setOpenHeaderCol(openHeaderCol === 'estadoOt' ? null : 'estadoOt');
                   }}
                   className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg cursor-pointer transition ${colFilters.estadoOt.length > 0
-                      ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
-                      : 'hover:bg-slate-100'
+                    ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
+                    : 'hover:bg-slate-100'
                     }`}
                 >
                   <span>Estado OT</span>
@@ -562,8 +566,8 @@ export function OrdersView({
                     setOpenHeaderCol(openHeaderCol === 'wsp' ? null : 'wsp');
                   }}
                   className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg cursor-pointer transition ${colFilters.wsp.length > 0
-                      ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
-                      : 'hover:bg-slate-100'
+                    ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
+                    : 'hover:bg-slate-100'
                     }`}
                 >
                   <span>WhatsApp</span>
@@ -612,8 +616,8 @@ export function OrdersView({
                     setOpenHeaderCol(openHeaderCol === 'tracking' ? null : 'tracking');
                   }}
                   className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg cursor-pointer transition ${colFilters.tracking.length > 0
-                      ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
-                      : 'hover:bg-slate-100'
+                    ? 'bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold'
+                    : 'hover:bg-slate-100'
                     }`}
                 >
                   <span>Tracking</span>
@@ -738,14 +742,14 @@ export function OrdersView({
                   <td className="py-2.5 px-1.5 text-center whitespace-nowrap">
                     <span
                       className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${stWspLower === 'read'
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : stWspLower.includes('deliver')
-                            ? 'bg-sky-100 text-sky-800'
-                            : stWspLower === 'sent'
-                              ? 'bg-blue-100 text-blue-800'
-                              : stWspLower === 'failed'
-                                ? 'bg-rose-100 text-rose-800'
-                                : 'bg-slate-100 text-slate-600'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : stWspLower.includes('deliver')
+                          ? 'bg-sky-100 text-sky-800'
+                          : stWspLower === 'sent'
+                            ? 'bg-blue-100 text-blue-800'
+                            : stWspLower === 'failed'
+                              ? 'bg-rose-100 text-rose-800'
+                              : 'bg-slate-100 text-slate-600'
                         }`}
                     >
                       {wspLabel}
@@ -754,8 +758,8 @@ export function OrdersView({
                   <td className="py-2.5 px-1.5 text-center whitespace-nowrap">
                     <span
                       className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${o.ingreso_tracking === 'SI'
-                          ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                          : 'bg-slate-100 text-slate-500'
+                        ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                        : 'bg-slate-100 text-slate-500'
                         }`}
                     >
                       {o.ingreso_tracking === 'SI' ? 'SÍ INGRESÓ' : 'NO'}

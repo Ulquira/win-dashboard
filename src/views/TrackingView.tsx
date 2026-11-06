@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import {
   User, Sparkles, Headset, ExternalLink, MessageSquare,
   ChevronLeft, ChevronRight, RefreshCw, CheckCheck,
@@ -42,7 +43,6 @@ interface TrackingViewProps {
   onSelectOrder: (order: RealOrder) => void;
 }
 
-// Formateador homologado de Fecha y Hora (Ej: "05/11/2026 • 07:34 a. m.")
 function formatChatDateTime(raw?: string | null): string {
   if (!raw) return '';
   const trimmed = String(raw).trim();
@@ -81,34 +81,49 @@ export function TrackingView({
   onSelectOrder,
 }: TrackingViewProps) {
   const [debouncedQuery, setDebouncedQuery] = useState<string>(globalSearch);
-  const [soloConChat, setSoloConChat] = useState<boolean>(true);
-  const [soloSos, setSoloSos] = useState<boolean>(false);
-  const [soloLogChat, setSoloLogChat] = useState<boolean>(false);
-  const [slaFilter, setSlaFilter] = useState<string>('Todos');
-  const [turnoFilter, setTurnoFilter] = useState<string>('Todos');
 
-  // Paginación Server-Side (50 en 50)
-  const [page, setPage] = useState<number>(1);
+  // Persistir filtros de bandeja para que al cambiar de pestaña y volver no se pierda la ubicación
+  const [soloConChat, setSoloConChat] = useState<boolean>(() => {
+    const saved = sessionStorage.getItem('trk_soloConChat');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const [soloSos, setSoloSos] = useState<boolean>(() => {
+    return sessionStorage.getItem('trk_soloSos') === 'true';
+  });
+  const [soloLogChat, setSoloLogChat] = useState<boolean>(() => {
+    return sessionStorage.getItem('trk_soloLogChat') === 'true';
+  });
+  const [slaFilter, setSlaFilter] = useState<string>(() => {
+    return sessionStorage.getItem('trk_sla') || 'Todos';
+  });
+  const [turnoFilter, setTurnoFilter] = useState<string>(() => {
+    return sessionStorage.getItem('trk_turno') || 'Todos';
+  });
+  const [page, setPage] = useState<number>(() => {
+    return Number(sessionStorage.getItem('trk_page')) || 1;
+  });
   const pageSize = 50;
-  const [totalRecords, setTotalRecords] = useState<number>(initialOrders.length);
-  const [totalPages, setTotalPages] = useState<number>(1);
-  const [serverOrders, setServerOrders] = useState<RealOrder[]>(initialOrders.slice(0, 50));
-  const [loadingPage, setLoadingPage] = useState<boolean>(false);
 
-  // Estados del Visor Derecho y Ficha Técnica Colapsable
-  const [selectedIndex, setSelectedIndex] = useState<number>(0);
+  const [selectedIndex, setSelectedIndex] = useState<number>(() => {
+    return Number(sessionStorage.getItem('trk_selectedIndex')) || 0;
+  });
   const [showTechCard, setShowTechCard] = useState<boolean>(true);
-  const [loadingChat, setLoadingChat] = useState<boolean>(false);
-  const [dataSource, setDataSource] = useState<'live_api' | 'db_fallback' | 'snapshot'>('snapshot');
-  const [liveMessages, setLiveMessages] = useState<RawChatMessage[] | null>(null);
-  const [chatMeta, setChatMeta] = useState<any>(null);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
 
-  // Controladores para cancelar peticiones obsoletas y evitar que se buguee la vista
-  const searchReqIdRef = useRef<number>(0);
-  const chatReqIdRef = useRef<number>(0);
+  const chatContainerRef = useRef<HTMLDivElement | null>(null);
+  const [showScrollDownBtn, setShowScrollDownBtn] = useState<boolean>(false);
 
-  // Sincronización con el buscador dinámico del Header superior
+  // Guardar estado de filtros en sessionStorage automáticamente
+  useEffect(() => {
+    sessionStorage.setItem('trk_soloConChat', String(soloConChat));
+    sessionStorage.setItem('trk_soloSos', String(soloSos));
+    sessionStorage.setItem('trk_soloLogChat', String(soloLogChat));
+    sessionStorage.setItem('trk_sla', slaFilter);
+    sessionStorage.setItem('trk_turno', turnoFilter);
+    sessionStorage.setItem('trk_page', String(page));
+    sessionStorage.setItem('trk_selectedIndex', String(selectedIndex));
+  }, [soloConChat, soloSos, soloLogChat, slaFilter, turnoFilter, page, selectedIndex]);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedQuery((prev) => {
@@ -122,21 +137,27 @@ export function TrackingView({
     return () => clearTimeout(timer);
   }, [globalSearch]);
 
-  // Resetear a página 1 cuando cambian los filtros globales del Header
-  const prevGlobalKeyRef = useRef<string>(`${startDate}_${endDate}_${service}_${ignoreDates}`);
-  const currentGlobalKey = `${startDate}_${endDate}_${service}_${ignoreDates}`;
-  if (prevGlobalKeyRef.current !== currentGlobalKey) {
-    prevGlobalKeyRef.current = currentGlobalKey;
-    if (page !== 1) setPage(1);
-    if (selectedIndex !== 0) setSelectedIndex(0);
-  }
-
-  const fetchPaginatedTracking = useCallback(
-    async (forceRefresh = false) => {
-      const reqId = ++searchReqIdRef.current;
-      const controller = new AbortController();
-
-      setLoadingPage(true);
+  // 1. Consulta de Bandeja gestionada con React Query (caché instantáneo + cancelación automática)
+  const {
+    data: trackingData,
+    isFetching: loadingPage,
+  } = useQuery<any>({
+    queryKey: [
+      'trackingSearch',
+      startDate,
+      endDate,
+      service,
+      debouncedQuery,
+      ignoreDates,
+      soloConChat,
+      soloSos,
+      soloLogChat,
+      slaFilter,
+      turnoFilter,
+      page,
+      consultTrigger,
+    ],
+    queryFn: async ({ signal }): Promise<any> => {
       const params = new URLSearchParams({
         startDate,
         endDate,
@@ -150,112 +171,53 @@ export function TrackingView({
         turno: turnoFilter,
         page: String(page),
         pageSize: String(pageSize),
-        refresh: forceRefresh ? 'true' : 'false',
+        refresh: consultTrigger > 0 ? 'true' : 'false',
       });
-
-      try {
-        const data = await apiFetch(`/api/tracking/search?${params.toString()}`, {
-          signal: controller.signal,
-        });
-        // Ignorar si ya salió otra petición más reciente
-        if (reqId !== searchReqIdRef.current) return;
-
-        if (data.ok && Array.isArray(data.orders)) {
-          setServerOrders(data.orders);
-          setTotalRecords(Number(data.total || 0));
-          setTotalPages(Number(data.totalPages || 1));
-          setSelectedIndex(0);
-        }
-      } catch (err: any) {
-        if (err.name !== 'AbortError' && reqId === searchReqIdRef.current) {
-          console.error('Error en /api/tracking/search (API):', err);
-        }
-      } finally {
-        if (reqId === searchReqIdRef.current) {
-          setLoadingPage(false);
-        }
-      }
+      return (apiFetch as any)(`/api/tracking/search?${params.toString()}`, { signal });
     },
-    [
-      startDate,
-      endDate,
-      service,
-      debouncedQuery,
-      ignoreDates,
-      soloConChat,
-      soloSos,
-      soloLogChat,
-      slaFilter,
-      turnoFilter,
-      page,
-    ]
-  );
+    placeholderData: (prev: any) => prev,
+  });
 
-  useEffect(() => {
-    fetchPaginatedTracking(consultTrigger > 0);
-  }, [fetchPaginatedTracking, consultTrigger]);
+  const serverOrders: RealOrder[] = trackingData?.orders || initialOrders.slice(0, 50);
+  const totalRecords = Number(trackingData?.total ?? initialOrders.length);
+  const totalPages = Number(trackingData?.totalPages ?? 1);
 
-  const selectedRow: RealOrder | null = serverOrders[selectedIndex] || serverOrders[0] || null;
+  const selectedRow: RealOrder | null =
+    serverOrders[selectedIndex] || serverOrders[0] || null;
   const selectedOrderId = selectedRow?.orden_id ?? null;
 
-  // Consumo completo de mensajes del chat seleccionado sin arrastrar estado del cliente anterior
-  const fetchChatConversation = useCallback(async (row: RealOrder | null) => {
-    const reqId = ++chatReqIdRef.current;
-
-    // Limpiar inmediatamente los mensajes en vivo del cliente anterior para que el render sea instantáneo
-    setLiveMessages(null);
-    setChatMeta(null);
-    setDataSource('snapshot');
-
-    if (!row) {
-      setLoadingChat(false);
-      return;
-    }
-
-    const phone = String(row.mantra_phone || row.telefono || '').replace(/\D/g, '');
-    const grupo = String(row.servicio_tipo || row.producto || 'GENERAL');
-
-    if (!phone && !row.orden_id) {
-      setLoadingChat(false);
-      return;
-    }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4500);
-
-    setLoadingChat(true);
-    try {
-      const data = await apiFetch(
+  // 2. Consulta del Hilo de Chat en Vivo gestionada por React Query (cacheada por orden_id)
+  const {
+    data: liveChatData,
+    isFetching: loadingChat,
+  } = useQuery<any>({
+    queryKey: ['mantraLiveChat', selectedOrderId, consultTrigger],
+    enabled: Boolean(selectedRow && (selectedRow.mantra_phone || selectedRow.telefono || selectedRow.orden_id)),
+    staleTime: 1000 * 45, // 45s de caché por conversación
+    queryFn: async ({ signal }): Promise<any> => {
+      const phone = String(selectedRow?.mantra_phone || selectedRow?.telefono || '').replace(/\D/g, '');
+      const grupo = String(selectedRow?.servicio_tipo || selectedRow?.producto || 'GENERAL');
+      return (apiFetch as any)(
         `/api/4dm1n_/mantra-chat?phone=${encodeURIComponent(
           phone
-        )}&ordenId=${encodeURIComponent(String(row.orden_id || ''))}&grupoServicio=${encodeURIComponent(
+        )}&ordenId=${encodeURIComponent(String(selectedRow?.orden_id || ''))}&grupoServicio=${encodeURIComponent(
           grupo
         )}&limit=1000`,
-        { signal: controller.signal }
+        { signal }
       );
-      clearTimeout(timeoutId);
+    },
+  });
 
-      // Si el usuario ya cambió a otro cliente mientras cargaba, descartar respuesta vieja
-      if (reqId !== chatReqIdRef.current) return;
-
-      if (data.chatMeta) setChatMeta(data.chatMeta);
-      if (data.ok && Array.isArray(data.messages) && data.messages.length > 0) {
-        setLiveMessages(data.messages);
-        setDataSource(data.source === 'live_api' ? 'live_api' : 'db_fallback');
-      }
-    } catch {
-      clearTimeout(timeoutId);
-    } finally {
-      if (reqId === chatReqIdRef.current) {
-        setLoadingChat(false);
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchChatConversation(selectedRow);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedOrderId, fetchChatConversation]);
+  const liveMessages: RawChatMessage[] | null =
+    liveChatData?.ok && Array.isArray(liveChatData.messages) && liveChatData.messages.length > 0
+      ? liveChatData.messages
+      : null;
+  const chatMeta = liveChatData?.chatMeta || null;
+  const dataSource: 'live_api' | 'db_fallback' | 'snapshot' = liveMessages
+    ? liveChatData?.source === 'live_api'
+      ? 'live_api'
+      : 'db_fallback'
+    : 'snapshot';
 
   // Atajos de teclado: F (Expandir/Colapsar Ficha), ↑ ↓ (Recorrer bandeja)
   useEffect(() => {
@@ -295,7 +257,6 @@ export function TrackingView({
       }
     }
 
-    // Parsear mensajes del Asistente Inteligente de Soporte (tabla logs_chat)
     let logChatList: RawChatMessage[] = [];
     if (selectedRow.log_mensajes_json) {
       try {
@@ -343,14 +304,36 @@ export function TrackingView({
     });
   }, [selectedRow, liveMessages]);
 
-  // Verifica si una orden tiene pulso_soporte = 'SI'
+  const scrollToBottom = useCallback((smooth = false) => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+    el.scrollTo({
+      top: el.scrollHeight,
+      behavior: smooth ? 'smooth' : 'auto',
+    });
+    setShowScrollDownBtn(false);
+  }, []);
+
+  const handleChatScroll = () => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setShowScrollDownBtn(distanceFromBottom > 120);
+  };
+
+  // Auto-scroll hacia abajo al abrir un chat o actualizarse el hilo
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      scrollToBottom(false);
+    });
+  }, [selectedOrderId, parsedChatMessages.length, loadingChat, scrollToBottom]);
+
   const isOrderSos = (row?: RealOrder | null) => {
     if (!row) return false;
     const val = String(row.pulso_soporte || '').trim().toUpperCase();
     return val === 'SI' || val === 'SÍ' || val === '1' || val === 'TRUE';
   };
 
-  // Calcula en qué posición exacta de la línea de tiempo colocar el evento SOS
   const sosTimelineInfo = useMemo(() => {
     const hasSosFlag = isOrderSos(selectedRow);
     const rawSosDate =
@@ -558,8 +541,8 @@ export function TrackingView({
                   setSelectedIndex(0);
                 }}
                 className={`h-6 inline-flex items-center gap-1 px-2 rounded-full border text-[10px] font-bold whitespace-nowrap shrink-0 transition ${soloSos
-                    ? 'bg-rose-600 text-white border-rose-600 shadow-2xs'
-                    : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                  ? 'bg-rose-600 text-white border-rose-600 shadow-2xs'
+                  : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
                   }`}
                 title="Filtrar chats que pulsaron el botón SOS / Soporte"
               >
@@ -577,8 +560,8 @@ export function TrackingView({
                   setSelectedIndex(0);
                 }}
                 className={`h-6 inline-flex items-center gap-1 px-2 rounded-full border text-[10px] font-bold whitespace-nowrap shrink-0 transition ${soloLogChat
-                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
-                    : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                  : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
                   }`}
                 title="Filtrar chats con Asistente Inteligente de Soporte (logs_chat)"
               >
@@ -594,8 +577,8 @@ export function TrackingView({
                   setSelectedIndex(0);
                 }}
                 className={`h-6 inline-flex items-center gap-1 px-2 rounded-full border text-[10px] font-bold whitespace-nowrap shrink-0 transition ${soloConChat
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                   }`}
                 title="Alternar entre órdenes con chat en Mantra o todas las órdenes"
               >
@@ -629,8 +612,8 @@ export function TrackingView({
                   setSelectedIndex(0);
                 }}
                 className={`py-1.5 px-1.5 rounded-lg font-bold transition truncate ${turnoFilter === btn.id
-                    ? 'bg-[#FF5500] text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                  ? 'bg-[#FF5500] text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
                   }`}
               >
                 {btn.label}
@@ -676,8 +659,8 @@ export function TrackingView({
                     setSelectedIndex(idx);
                   }}
                   className={`p-3 cursor-pointer transition ${isSelected
-                      ? 'bg-[#FFF0E5]/70 border-l-4 border-l-[#FF5500]'
-                      : 'hover:bg-slate-50'
+                    ? 'bg-[#FFF0E5]/70 border-l-4 border-l-[#FF5500]'
+                    : 'hover:bg-slate-50'
                     }`}
                 >
                   <div className="flex items-center justify-between text-xs gap-2">
@@ -728,14 +711,14 @@ export function TrackingView({
                       )}
                       <span
                         className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${stWsp === 'READ'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : stWsp.includes('DELIVER')
-                              ? 'bg-sky-100 text-sky-800'
-                              : stWsp === 'SENT'
-                                ? 'bg-blue-100 text-blue-800'
-                                : stWsp === 'FAILED'
-                                  ? 'bg-rose-100 text-rose-800'
-                                  : 'bg-slate-100 text-slate-600'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : stWsp.includes('DELIVER')
+                            ? 'bg-sky-100 text-sky-800'
+                            : stWsp === 'SENT'
+                              ? 'bg-blue-100 text-blue-800'
+                              : stWsp === 'FAILED'
+                                ? 'bg-rose-100 text-rose-800'
+                                : 'bg-slate-100 text-slate-600'
                           }`}
                       >
                         {stWsp}
@@ -894,8 +877,8 @@ export function TrackingView({
                   type="button"
                   onClick={() => setShowTechCard(!showTechCard)}
                   className={`flex items-center gap-1 px-3 py-1.5 rounded-xl border text-[11px] font-bold transition ${showTechCard
-                      ? 'bg-slate-100 text-slate-900 border-slate-300'
-                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                    ? 'bg-slate-100 text-slate-900 border-slate-300'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                     }`}
                   title="Mostrar/Ocultar Ficha Técnica (Tecla F)"
                 >
@@ -971,183 +954,202 @@ export function TrackingView({
               </div>
             )}
 
-            {/* LIENZO DE CHAT COMPLETO */}
-            <div className="flex-1 overflow-y-auto p-5 space-y-4 bg-[#F8F9FA] bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] [background-size:16px_16px]">
-              {parsedChatMessages.length > 0 ? (
-                parsedChatMessages.map((msg, idx) => {
-                  const textContent = msg.texto || msg.mensaje || msg.body || msg.contenido || '';
-                  const senderRaw = String(msg.emisor || msg.rol || msg.direction || '').toLowerCase();
-                  const isFromLogChat = Boolean(msg._fromLogChat);
-                  const isCliente =
-                    senderRaw.includes('cli') ||
-                    senderRaw.includes('inbound') ||
-                    senderRaw.includes('user') ||
-                    msg.from_me === false;
+            {/* LIENZO DE CHAT COMPLETO CON BOTÓN FLOTANTE */}
+            <div className="relative flex-1 flex flex-col min-h-0 overflow-hidden">
+              <div
+                ref={chatContainerRef}
+                onScroll={handleChatScroll}
+                className="flex-1 overflow-y-auto p-5 space-y-4 bg-[#F8F9FA] bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] [background-size:16px_16px]"
+              >
+                {parsedChatMessages.length > 0 ? (
+                  parsedChatMessages.map((msg, idx) => {
+                    const textContent = msg.texto || msg.mensaje || msg.body || msg.contenido || '';
+                    const senderRaw = String(msg.emisor || msg.rol || msg.direction || '').toLowerCase();
+                    const isFromLogChat = Boolean(msg._fromLogChat);
+                    const isCliente =
+                      senderRaw.includes('cli') ||
+                      senderRaw.includes('inbound') ||
+                      senderRaw.includes('user') ||
+                      msg.from_me === false;
 
-                  const isAsistenteWin =
-                    !isCliente &&
-                    (isFromLogChat ||
-                      String(msg.emisor || '').toUpperCase() === 'ASISTENTE_WIN' ||
-                      String(msg.rol || '').toLowerCase() === 'bot');
+                    const isAsistenteWin =
+                      !isCliente &&
+                      (isFromLogChat ||
+                        String(msg.emisor || '').toUpperCase() === 'ASISTENTE_WIN' ||
+                        String(msg.rol || '').toLowerCase() === 'bot');
 
-                  const isTemplate =
-                    !isCliente &&
-                    !isAsistenteWin &&
-                    (msg.tipo === 'template' ||
-                      Boolean(msg.es_plantilla) ||
-                      /enruta\.win\.pe|confirmaci[oó]n de visita|plantilla preaprobada|\|\s*\[/i.test(textContent));
+                    const isTemplate =
+                      !isCliente &&
+                      !isAsistenteWin &&
+                      (msg.tipo === 'template' ||
+                        Boolean(msg.es_plantilla) ||
+                        /enruta\.win\.pe|confirmaci[oó]n de visita|plantilla preaprobada|\|\s*\[/i.test(textContent));
 
-                  const timeLabel = formatChatDateTime(msg.fecha_utc || msg.fecha || msg.timestamp || '');
-                  const showSosMilestoneHere = sosTimelineInfo.active && sosTimelineInfo.msgIndex === idx;
-                  const showLogChatBannerHere = Boolean(msg._firstLogChatMsg);
+                    const timeLabel = formatChatDateTime(msg.fecha_utc || msg.fecha || msg.timestamp || '');
+                    const showSosMilestoneHere = sosTimelineInfo.active && sosTimelineInfo.msgIndex === idx;
+                    const showLogChatBannerHere = Boolean(msg._firstLogChatMsg);
 
-                  const sosMilestoneBanner = showSosMilestoneHere ? (
-                    <div className="my-2.5 flex items-center gap-3 select-none">
-                      <div className="flex-1 h-px bg-gradient-to-r from-transparent via-rose-300 to-rose-400" />
-                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-50 border border-rose-200 text-rose-800 text-[10.5px] font-extrabold shadow-2xs">
-                        <LifeBuoy size={12} className="text-rose-600 shrink-0" />
-                        <span>SOS</span>
-                        {sosTimelineInfo.timestampLabel && (
-                          <span className="text-[10px] font-medium text-rose-600 pl-1 border-l border-rose-200">
-                            {sosTimelineInfo.timestampLabel}
-                          </span>
-                        )}
+                    const sosMilestoneBanner = showSosMilestoneHere ? (
+                      <div className="my-2.5 flex items-center gap-3 select-none">
+                        <div className="flex-1 h-px bg-gradient-to-r from-transparent via-rose-300 to-rose-400" />
+                        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-50 border border-rose-200 text-rose-800 text-[10.5px] font-extrabold shadow-2xs">
+                          <LifeBuoy size={12} className="text-rose-600 shrink-0" />
+                          <span>SOS</span>
+                          {sosTimelineInfo.timestampLabel && (
+                            <span className="text-[10px] font-medium text-rose-600 pl-1 border-l border-rose-200">
+                              {sosTimelineInfo.timestampLabel}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex-1 h-px bg-gradient-to-l from-transparent via-rose-300 to-rose-400" />
                       </div>
-                      <div className="flex-1 h-px bg-gradient-to-l from-transparent via-rose-300 to-rose-400" />
-                    </div>
-                  ) : null;
+                    ) : null;
 
-                  const logChatMilestoneBanner = showLogChatBannerHere ? (
-                    <div className="my-2.5 flex items-center gap-3 select-none">
-                      <div className="flex-1 h-px bg-gradient-to-r from-transparent via-indigo-300 to-indigo-400" />
-                      <div
-                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-800 text-[10.5px] font-extrabold shadow-2xs"
-                        title={selectedRow.log_motivo_sos || 'Bot SOS'}
-                      >
-                        <Bot size={13} className="text-indigo-600 shrink-0" />
-                        <span>SOS</span>
-                        {timeLabel && (
-                          <span className="text-[10px] font-medium text-indigo-600 pl-1 border-l border-indigo-200">
-                            {timeLabel}
-                          </span>
-                        )}
+                    const logChatMilestoneBanner = showLogChatBannerHere ? (
+                      <div className="my-2.5 flex items-center gap-3 select-none">
+                        <div className="flex-1 h-px bg-gradient-to-r from-transparent via-indigo-300 to-indigo-400" />
+                        <div
+                          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-800 text-[10.5px] font-extrabold shadow-2xs"
+                          title={selectedRow.log_motivo_sos || 'Bot SOS'}
+                        >
+                          <Bot size={13} className="text-indigo-600 shrink-0" />
+                          <span>SOS</span>
+                          {timeLabel && (
+                            <span className="text-[10px] font-medium text-indigo-600 pl-1 border-l border-indigo-200">
+                              {timeLabel}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex-1 h-px bg-gradient-to-l from-transparent via-indigo-300 to-indigo-400" />
                       </div>
-                      <div className="flex-1 h-px bg-gradient-to-l from-transparent via-indigo-300 to-indigo-400" />
-                    </div>
-                  ) : null;
+                    ) : null;
 
-                  if (isCliente) {
-                    return (
-                      <React.Fragment key={idx}>
-                        {sosMilestoneBanner}
-                        {logChatMilestoneBanner}
-                        <div className="flex flex-col items-start">
-                          <div
-                            className={`max-w-[78%] rounded-2xl rounded-tl-sm p-3.5 shadow-xs space-y-2 ${isFromLogChat
+                    if (isCliente) {
+                      return (
+                        <React.Fragment key={idx}>
+                          {sosMilestoneBanner}
+                          {logChatMilestoneBanner}
+                          <div className="flex flex-col items-start">
+                            <div
+                              className={`max-w-[78%] rounded-2xl rounded-tl-sm p-3.5 shadow-xs space-y-2 ${isFromLogChat
                                 ? 'bg-indigo-50/40 border border-indigo-200/90'
                                 : 'bg-white border border-slate-200'
-                              }`}
-                          >
-                            <div className="flex items-center justify-between gap-4">
-                              <span
-                                className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold border ${isFromLogChat
+                                }`}
+                            >
+                              <div className="flex items-center justify-between gap-4">
+                                <span
+                                  className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold border ${isFromLogChat
                                     ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
                                     : 'bg-sky-100 text-sky-800 border-sky-200'
-                                  }`}
-                              >
-                                <User size={11} />
-                                <span>Cliente • {selectedRow.cliente}</span>
-                              </span>
-                              <span className="text-[10px] text-slate-400">{timeLabel}</span>
+                                    }`}
+                                >
+                                  <User size={11} />
+                                  <span>Cliente • {selectedRow.cliente}</span>
+                                </span>
+                                <span className="text-[10px] text-slate-400">{timeLabel}</span>
+                              </div>
+                              {renderFormattedChatMessage(textContent)}
                             </div>
-                            {renderFormattedChatMessage(textContent)}
                           </div>
-                        </div>
-                      </React.Fragment>
-                    );
-                  }
+                        </React.Fragment>
+                      );
+                    }
 
-                  if (isAsistenteWin) {
+                    if (isAsistenteWin) {
+                      return (
+                        <React.Fragment key={idx}>
+                          {sosMilestoneBanner}
+                          {logChatMilestoneBanner}
+                          <div className="flex flex-col items-end">
+                            <div className="max-w-[78%] rounded-2xl rounded-tr-sm p-3.5 bg-indigo-50/90 border border-indigo-200 shadow-xs space-y-2">
+                              <div className="flex items-center justify-between gap-4 border-b border-indigo-200/60 pb-1.5">
+                                <span
+                                  className="inline-flex items-center justify-center w-6 h-5 rounded-full bg-indigo-600 text-white"
+                                  title="Bot SOS"
+                                >
+                                  <Bot size={12} />
+                                </span>
+                                <span className="text-[10px] text-indigo-700 font-semibold">{timeLabel}</span>
+                              </div>
+                              {renderFormattedChatMessage(textContent)}
+                            </div>
+                          </div>
+                        </React.Fragment>
+                      );
+                    }
+
+                    if (isTemplate) {
+                      return (
+                        <React.Fragment key={idx}>
+                          {sosMilestoneBanner}
+                          {logChatMilestoneBanner}
+                          <div className="flex flex-col items-end">
+                            <div className="max-w-[80%] rounded-2xl rounded-tr-sm p-4 bg-purple-50/90 border border-purple-200 shadow-xs space-y-2.5">
+                              <div className="flex items-center justify-between gap-4 border-b border-purple-200/70 pb-2">
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                                  <Sparkles size={11} />
+                                  <span>{msg.nombre_plantilla || 'Plantilla Oficial Meta HSM'}</span>
+                                </span>
+                                <span className="inline-flex items-center gap-1 text-[10px] text-purple-800 font-semibold">
+                                  <ShieldCheck size={12} className="text-emerald-600" />
+                                  Disparo Automático HSM
+                                </span>
+                              </div>
+                              {renderFormattedChatMessage(textContent)}
+                              <div className="flex items-center justify-between pt-1 text-[10px] text-slate-500">
+                                <span>{timeLabel}</span>
+                                <span className="inline-flex items-center gap-1 font-bold text-sky-700">
+                                  <CheckCheck size={12} />
+                                  {String(msg.estado || selectedRow.estado_wsp || 'SENT').toUpperCase()}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </React.Fragment>
+                      );
+                    }
+
                     return (
                       <React.Fragment key={idx}>
                         {sosMilestoneBanner}
                         {logChatMilestoneBanner}
                         <div className="flex flex-col items-end">
-                          <div className="max-w-[78%] rounded-2xl rounded-tr-sm p-3.5 bg-indigo-50/90 border border-indigo-200 shadow-xs space-y-2">
-                            <div className="flex items-center justify-between gap-4 border-b border-indigo-200/60 pb-1.5">
-                              <span
-                                className="inline-flex items-center justify-center w-6 h-5 rounded-full bg-indigo-600 text-white"
-                                title="Bot SOS"
-                              >
-                                <Bot size={12} />
+                          <div className="max-w-[78%] rounded-2xl rounded-tr-sm p-3.5 bg-[#FFF0E5]/90 border border-orange-200 shadow-xs space-y-2">
+                            <div className="flex items-center justify-between gap-4">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-white text-[#FF5500] border border-orange-200">
+                                <Headset size={11} />
+                                <span>Asesor WIN • {msg.agente || msg.usuario || 'Agente Mantra'}</span>
                               </span>
-                              <span className="text-[10px] text-indigo-700 font-semibold">{timeLabel}</span>
+                              <span className="text-[10px] text-slate-500">{timeLabel}</span>
                             </div>
                             {renderFormattedChatMessage(textContent)}
                           </div>
                         </div>
                       </React.Fragment>
                     );
-                  }
+                  })
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center text-center py-12 text-slate-400">
+                    <MessageSquare size={32} className="text-slate-300 mb-2" />
+                    <p className="text-sm font-bold text-slate-600">Sin mensajes en historial_chats_mantra para este caso</p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Estado WSP: {selectedRow.estado_wsp || 'NO ENVIADO'} • Ingreso Tracking: {selectedRow.ingreso_tracking || 'NO'}
+                    </p>
+                  </div>
+                )}
+              </div>
 
-                  if (isTemplate) {
-                    return (
-                      <React.Fragment key={idx}>
-                        {sosMilestoneBanner}
-                        {logChatMilestoneBanner}
-                        <div className="flex flex-col items-end">
-                          <div className="max-w-[80%] rounded-2xl rounded-tr-sm p-4 bg-purple-50/90 border border-purple-200 shadow-xs space-y-2.5">
-                            <div className="flex items-center justify-between gap-4 border-b border-purple-200/70 pb-2">
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
-                                <Sparkles size={11} />
-                                <span>{msg.nombre_plantilla || 'Plantilla Oficial Meta HSM'}</span>
-                              </span>
-                              <span className="inline-flex items-center gap-1 text-[10px] text-purple-800 font-semibold">
-                                <ShieldCheck size={12} className="text-emerald-600" />
-                                Disparo Automático HSM
-                              </span>
-                            </div>
-                            {renderFormattedChatMessage(textContent)}
-                            <div className="flex items-center justify-between pt-1 text-[10px] text-slate-500">
-                              <span>{timeLabel}</span>
-                              <span className="inline-flex items-center gap-1 font-bold text-sky-700">
-                                <CheckCheck size={12} />
-                                {String(msg.estado || selectedRow.estado_wsp || 'SENT').toUpperCase()}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      </React.Fragment>
-                    );
-                  }
-
-                  return (
-                    <React.Fragment key={idx}>
-                      {sosMilestoneBanner}
-                      {logChatMilestoneBanner}
-                      <div className="flex flex-col items-end">
-                        <div className="max-w-[78%] rounded-2xl rounded-tr-sm p-3.5 bg-[#FFF0E5]/90 border border-orange-200 shadow-xs space-y-2">
-                          <div className="flex items-center justify-between gap-4">
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-white text-[#FF5500] border border-orange-200">
-                              <Headset size={11} />
-                              <span>Asesor WIN • {msg.agente || msg.usuario || 'Agente Mantra'}</span>
-                            </span>
-                            <span className="text-[10px] text-slate-500">{timeLabel}</span>
-                          </div>
-                          {renderFormattedChatMessage(textContent)}
-                        </div>
-                      </div>
-                    </React.Fragment>
-                  );
-                })
-              ) : (
-                <div className="h-full flex flex-col items-center justify-center text-center py-12 text-slate-400">
-                  <MessageSquare size={32} className="text-slate-300 mb-2" />
-                  <p className="text-sm font-bold text-slate-600">Sin mensajes en historial_chats_mantra para este caso</p>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Estado WSP: {selectedRow.estado_wsp || 'NO ENVIADO'} • Ingreso Tracking: {selectedRow.ingreso_tracking || 'NO'}
-                  </p>
-                </div>
+              {/* Botón flotante para bajar al mensaje más reciente */}
+              {showScrollDownBtn && (
+                <button
+                  type="button"
+                  onClick={() => scrollToBottom(true)}
+                  className="absolute bottom-4 right-5 z-20 inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-[#FF5500] hover:bg-[#E04B00] text-white font-bold text-xs shadow-lg shadow-orange-500/30 transition transform hover:scale-105 cursor-pointer"
+                  title="Ir al mensaje más reciente"
+                >
+                  <span>Ir al último mensaje</span>
+                  <ChevronDown size={15} />
+                </button>
               )}
             </div>
 
