@@ -244,6 +244,29 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
 
                 {chartPolylines.points.map((pt, idx) => {
                   const showLabel = chartPolylines.points.length <= 10 || idx % 2 === 0 || idx === chartPolylines.points.length - 1;
+
+                  // Anti-colisión vertical entre Lectura (azul), Tracking s/Leído (amarillo) y Tracking s/Env (naranja)
+                  const closeToBlue = Math.abs(pt.yTrkLei - pt.yLec) < 14;
+                  const closeToOrange = Math.abs(pt.yTrk - pt.yTrkLei) < 14;
+
+                  const yLabelLec = closeToBlue && pt.yLec <= pt.yTrkLei ? pt.yLec - 8 : pt.yLec - 6;
+                  const yLabelTrkLei =
+                    closeToBlue && !closeToOrange
+                      ? pt.yTrkLei + 11 // Si está pegado al azul, poner el texto amarillo debajo de su punto
+                      : pt.yTrkLei - 6;
+                  const yLabelTrk =
+                    yLabelTrkLei > pt.yTrkLei && Math.abs(pt.yTrk - yLabelTrkLei) < 10
+                      ? pt.yTrk + 14
+                      : pt.yTrk + 12;
+
+                  const labelHalo: React.CSSProperties = {
+                    paintOrder: 'stroke',
+                    stroke: '#FFFFFF',
+                    strokeWidth: '3px',
+                    strokeLinecap: 'round',
+                    strokeLinejoin: 'round',
+                  };
+
                   return (
                     <g key={idx}>
                       <text x={pt.x} y={146} textAnchor="middle" fill="#64748B" fontSize="9.5" fontWeight="600">
@@ -251,20 +274,25 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
                       </text>
                       <circle cx={pt.x} cy={pt.yWhs} r="3.5" fill="#10B981" stroke="#FFFFFF" strokeWidth="1.5" />
                       {showLabel && (
-                        <text x={pt.x} y={pt.yWhs - 6} textAnchor="middle" fill="#047857" fontSize="8.5" fontWeight="700">
+                        <text x={pt.x} y={pt.yWhs - 6} textAnchor="middle" fill="#047857" fontSize="8.5" fontWeight="700" style={labelHalo}>
                           {pt.vWhs}
                         </text>
                       )}
                       <circle cx={pt.x} cy={pt.yLec} r="3.5" fill="#0284C7" stroke="#FFFFFF" strokeWidth="1.5" />
                       {showLabel && (
-                        <text x={pt.x} y={pt.yLec - 6} textAnchor="middle" fill="#0369A1" fontSize="8.5" fontWeight="700">
+                        <text x={pt.x} y={yLabelLec} textAnchor="middle" fill="#0369A1" fontSize="8.5" fontWeight="700" style={labelHalo}>
                           {pt.vLec}
                         </text>
                       )}
                       <circle cx={pt.x} cy={pt.yTrkLei} r="3.2" fill="#EAB308" stroke="#FFFFFF" strokeWidth="1.5" />
+                      {showLabel && (
+                        <text x={pt.x} y={yLabelTrkLei} textAnchor="middle" fill="#B45309" fontSize="8.5" fontWeight="700" style={labelHalo}>
+                          {pt.vTrkLei}
+                        </text>
+                      )}
                       <circle cx={pt.x} cy={pt.yTrk} r="3.5" fill="#FF5500" stroke="#FFFFFF" strokeWidth="1.5" />
                       {showLabel && (
-                        <text x={pt.x} y={pt.yTrk + 12} textAnchor="middle" fill="#C2410C" fontSize="8.5" fontWeight="700">
+                        <text x={pt.x} y={yLabelTrk} textAnchor="middle" fill="#C2410C" fontSize="8.5" fontWeight="700" style={labelHalo}>
                           {pt.vTrk}
                         </text>
                       )}
