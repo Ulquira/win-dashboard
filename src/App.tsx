@@ -1,9 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { Activity, ClipboardList, Wrench } from 'lucide-react';
+import { Activity, ClipboardList, Wrench, LogOut, Shield } from 'lucide-react';
 import {
   ViewMode, NavSection, KpiData, EvolutionPoint,
-  RealOrder, PartnerRankItem, CalculatedMetrics
+  RealOrder, PartnerRankItem, CalculatedMetrics, AuthUser
 } from './types/dashboard';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
@@ -14,7 +14,9 @@ import { OperationalView } from './views/OperationalView';
 import { OperationsDashboardView } from './views/OperationsDashboardView';
 import { TrackingView } from './views/TrackingView';
 import { OrdersView } from './views/OrdersView';
-import { apiFetch, API_BASE_URL } from './config/api';
+import { LoginView } from './views/LoginView';
+import { UsersRolesView } from './views/UsersRolesView';
+import { apiFetch, API_BASE_URL, AUTH_TOKEN_KEY, AUTH_USER_KEY } from './config/api';
 
 const VALID_NAVS: NavSection[] = [
   'Inicio',
@@ -23,6 +25,7 @@ const VALID_NAVS: NavSection[] = [
   'Seguimiento',
   'Eficiencia',
   'Experiencia (CSAT)',
+  'Accesos',
 ];
 const VALID_VIEWS: ViewMode[] = ['ejecutiva', 'operativa', 'operaciones'];
 
@@ -37,6 +40,34 @@ const DEFAULT_SERVICES = [
 const EMPTY_ARRAY: any[] = [];
 
 export default function App() {
+  // Estado de Autenticación y Permisos RBAC
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
+    const saved = localStorage.getItem(AUTH_USER_KEY);
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (saved && token) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    const onForceLogout = () => setAuthUser(null);
+    window.addEventListener('win-auth-logout', onForceLogout);
+    return () => window.removeEventListener('win-auth-logout', onForceLogout);
+  }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_USER_KEY);
+    sessionStorage.clear();
+    setSelectedServices([]);
+    setAuthUser(null);
+  };
+
   const [activeNav, setActiveNav] = useState<NavSection>(() => {
     const params = new URLSearchParams(window.location.search);
     const fromUrl = params.get('nav') as NavSection;
@@ -127,22 +158,91 @@ export default function App() {
     sessionStorage.setItem('win_ignoreDates', String(ignoreDates));
   }, [startDate, endDate, selectedServices, globalSearch, ignoreDates]);
 
-  const service = selectedServices.length > 0 ? selectedServices.join(',') : 'Todos los servicios';
-  const zone = 'Todas las zonas';
-
   const [selectedOrder, setSelectedOrder] = useState<RealOrder | null>(null);
   const [consultTrigger, setConsultTrigger] = useState<number>(0);
 
   const { data: filtersData } = useQuery<any>({
     queryKey: ['catalogFilters'],
-    queryFn: ({ signal }) => apiFetch('/api/filters', { signal }),
+    enabled: Boolean(authUser),
+    queryFn: ({ signal }): Promise<any> => (apiFetch as any)('/api/filters', { signal }),
     staleTime: 1000 * 60 * 30,
   });
 
-  const serviceOptions: string[] =
+  // Filtrar servicios disponibles según el Rol del usuario logueado
+  const rawServiceOptions: string[] =
     filtersData?.ok && Array.isArray(filtersData.servicios) && filtersData.servicios.length > 0
       ? filtersData.servicios
       : DEFAULT_SERVICES;
+
+  const allowedRoleServices = authUser?.permisos?.servicios || ['*'];
+  const isAllServicesAllowed = allowedRoleServices.includes('*');
+
+  const serviceOptions: string[] = isAllServicesAllowed
+    ? rawServiceOptions
+    : rawServiceOptions.filter((s) => allowedRoleServices.includes(s));
+
+  // Subvistas del Dashboard permitidas por el Rol
+  const allowedViews = authUser?.permisos?.vistas || ['*'];
+  const canSeeView = (v: NavSection) =>
+    allowedViews.includes('*') || allowedViews.includes(v);
+
+  const allowedSubviews = authUser?.permisos?.subvistas || ['*'];
+  const canSeeSubview = (sv: ViewMode) =>
+    allowedSubviews.includes('*') || allowedSubviews.includes(sv);
+
+  // Sincronizar permisos y renovar token JWT desde la BD al montar
+  useEffect(() => {
+    if (!authUser) return;
+    apiFetch('/api/auth/me')
+      .then((res) => {
+        if (res?.ok && res.user) {
+          if (res.token) localStorage.setItem(AUTH_TOKEN_KEY, res.token);
+          localStorage.setItem(AUTH_USER_KEY, JSON.stringify(res.user));
+          setAuthUser(res.user);
+        }
+      })
+      .catch(() => { });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser?.id]);
+
+  // Forzar limpieza de servicios, vistas y subvistas cuando cambia el rol del usuario
+  useEffect(() => {
+    if (!authUser) return;
+
+    // 1. Limpiar servicios seleccionados en el Header que no pertenezcan al rol
+    if (!isAllServicesAllowed) {
+      setSelectedServices((prev) => {
+        const valid = prev.filter((s) => allowedRoleServices.includes(s));
+        return valid.length !== prev.length ? valid : prev;
+      });
+    }
+
+    // 2. Si la vista actual (ej. 'Accesos') no está permitida para el rol, redirigir a la primera permitida
+    if (!canSeeView(activeNav)) {
+      const firstAllowed = VALID_NAVS.find((v) => canSeeView(v)) || 'Dashboard';
+      setActiveNav(firstAllowed);
+    }
+
+    // 3. Si la subvista del Dashboard (ej. 'operaciones') no está permitida, redirigir a la primera permitida
+    if (!canSeeSubview(viewMode)) {
+      const firstSub = VALID_VIEWS.find((sv) => canSeeSubview(sv)) || 'ejecutiva';
+      setViewMode(firstSub);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser, activeNav, viewMode]);
+
+  const validSelectedServices = isAllServicesAllowed
+    ? selectedServices
+    : selectedServices.filter((s) => allowedRoleServices.includes(s));
+
+  const service =
+    validSelectedServices.length > 0
+      ? validSelectedServices.join(',')
+      : isAllServicesAllowed
+        ? 'Todos los servicios'
+        : serviceOptions.join(',');
+
+  const zone = 'Todas las zonas';
   const sectorOptions: string[] = filtersData?.sectores || filtersData?.zonas || EMPTY_ARRAY;
   const partnerOptions: string[] = filtersData?.partners || EMPTY_ARRAY;
 
@@ -153,8 +253,9 @@ export default function App() {
     error: queryError,
     refetch: refetchDashboard,
   } = useQuery<any>({
-    queryKey: ['dashboardMain', startDate, endDate, service, zone, consultTrigger],
-    queryFn: ({ signal }) => {
+    queryKey: ['dashboardMain', startDate, endDate, service, zone, consultTrigger, authUser?.documento],
+    enabled: Boolean(authUser),
+    queryFn: async ({ signal }): Promise<any> => {
       const params = new URLSearchParams({
         startDate,
         endDate,
@@ -162,9 +263,9 @@ export default function App() {
         zone,
         refresh: consultTrigger > 0 ? 'true' : 'false',
       });
-      return apiFetch(`/api/dashboard?${params.toString()}`, { signal });
+      return (apiFetch as any)(`/api/dashboard?${params.toString()}`, { signal });
     },
-    placeholderData: keepPreviousData,
+    placeholderData: (prev: any) => prev,
   });
 
   const dbOnline = Boolean(dashData?.ok && !isError);
@@ -259,6 +360,11 @@ export default function App() {
     };
   }, [kpis]);
 
+  // Si no hay sesión activa, renderizar pantalla de Login
+  if (!authUser) {
+    return <LoginView onLoginSuccess={(user) => setAuthUser(user)} />;
+  }
+
   return (
     <div className="flex min-h-screen bg-[#F8F9FA] text-slate-800 font-sans relative">
       {mobileMenuOpen && (
@@ -275,9 +381,40 @@ export default function App() {
         setViewMode={setViewMode}
         isOpen={mobileMenuOpen}
         onClose={() => setMobileMenuOpen(false)}
+        allowedViews={authUser.permisos?.vistas || ['*']}
+        allowedSubviews={authUser.permisos?.subvistas || ['*']}
       />
 
-      <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto space-y-6 max-w-full min-w-0">
+      <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto space-y-5 max-w-full min-w-0">
+        {/* Barra superior de sesión activa y rol */}
+        <div className="flex flex-wrap items-center justify-between gap-2 bg-white border border-slate-100 rounded-2xl px-4 py-2 shadow-2xs text-xs">
+          <div className="flex items-center gap-2.5">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold text-[11px]">
+              <Shield size={12} />
+              <span>{authUser.permisos?.rolNombre || 'Usuario'}</span>
+            </span>
+            <span className="text-slate-700 font-bold">{authUser.nombre}</span>
+            <span className="text-slate-400 text-[11px]">({authUser.documento})</span>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {!isAllServicesAllowed && (
+              <span className="text-[11px] text-slate-500 hidden sm:inline">
+                Alcance:{' '}
+                <strong className="text-slate-800">{serviceOptions.join(' • ')}</strong>
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-700 hover:text-rose-700 font-bold text-[11px] transition cursor-pointer"
+            >
+              <LogOut size={12} />
+              <span>Salir</span>
+            </button>
+          </div>
+        </div>
+
         {errorMsg && (
           <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-2xl text-xs flex items-center justify-between shadow-xs">
             <span><strong>Aviso de conexión:</strong> {errorMsg}</span>
@@ -319,36 +456,42 @@ export default function App() {
           <>
             <div className="flex items-center justify-between">
               <div className="flex flex-wrap items-center gap-2 bg-slate-200/60 p-1 rounded-2xl border border-slate-200/60">
-                <button
-                  onClick={() => setViewMode('ejecutiva')}
-                  className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'ejecutiva'
+                {canSeeSubview('ejecutiva') && (
+                  <button
+                    onClick={() => setViewMode('ejecutiva')}
+                    className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'ejecutiva'
                       ? 'bg-white text-[#FF5500] shadow-sm'
                       : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                >
-                  <Activity size={14} className={viewMode === 'ejecutiva' ? 'text-[#FF5500]' : 'text-slate-400'} />
-                  <span>Vista Ejecutiva</span>
-                </button>
-                <button
-                  onClick={() => setViewMode('operativa')}
-                  className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'operativa'
+                      }`}
+                  >
+                    <Activity size={14} className={viewMode === 'ejecutiva' ? 'text-[#FF5500]' : 'text-slate-400'} />
+                    <span>Vista Ejecutiva</span>
+                  </button>
+                )}
+                {canSeeSubview('operativa') && (
+                  <button
+                    onClick={() => setViewMode('operativa')}
+                    className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'operativa'
                       ? 'bg-white text-[#FF5500] shadow-sm'
                       : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                >
-                  <ClipboardList size={14} className={viewMode === 'operativa' ? 'text-[#FF5500]' : 'text-slate-400'} />
-                  <span>Vista Operativa</span>
-                </button>
-                <button
-                  onClick={() => setViewMode('operaciones')}
-                  className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'operaciones'
+                      }`}
+                  >
+                    <ClipboardList size={14} className={viewMode === 'operativa' ? 'text-[#FF5500]' : 'text-slate-400'} />
+                    <span>Vista Operativa</span>
+                  </button>
+                )}
+                {canSeeSubview('operaciones') && (
+                  <button
+                    onClick={() => setViewMode('operaciones')}
+                    className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'operaciones'
                       ? 'bg-white text-[#FF5500] shadow-sm'
                       : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                >
-                  <Wrench size={14} className={viewMode === 'operaciones' ? 'text-[#FF5500]' : 'text-slate-400'} />
-                  <span>Operaciones Campo</span>
-                </button>
+                      }`}
+                  >
+                    <Wrench size={14} className={viewMode === 'operaciones' ? 'text-[#FF5500]' : 'text-slate-400'} />
+                    <span>Operaciones Campo</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -407,6 +550,8 @@ export default function App() {
             onSelectOrder={setSelectedOrder}
           />
         )}
+        {activeNav === 'Accesos' && canSeeView('Accesos') && <UsersRolesView />}
+
         <OrderDetailDrawer
           selectedOrder={selectedOrder}
           onClose={() => setSelectedOrder(null)}

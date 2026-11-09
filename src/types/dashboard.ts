@@ -5,7 +5,8 @@ export type NavSection =
   | 'Órdenes'
   | 'Seguimiento'
   | 'Eficiencia'
-  | 'Experiencia (CSAT)';
+  | 'Experiencia (CSAT)'
+  | 'Accesos';
 
 export interface OperationsKpis {
   total_ordenes: number;
@@ -133,4 +134,19 @@ export interface CalculatedMetrics {
   prefPct: string;
   prefOverReadPct: string;
   prefBarWidth: number;
+}
+export interface RolePermissions {
+  rolCodigo: string;
+  rolNombre: string;
+  vistas: string[];      // ["*"] o lista de NavSection
+  subvistas: string[];   // ["*"] o lista de ViewMode
+  servicios: string[];   // ["*"] o lista de los 5 servicios homologados
+}
+
+export interface AuthUser {
+  id: number;
+  documento: string;
+  nombre: string;
+  email?: string;
+  permisos: RolePermissions;
 }

@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import NodeCache from 'node-cache';
 import compression from 'compression';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 dotenv.config();
@@ -218,6 +219,370 @@ function resolveProductosFromServiceFilter(serviceParam: string): {
   };
 }
 
+// ============================================================================
+// MÓDULO DE AUTENTICACIÓN INTERNA (DOCUMENTO + CONTRASEÑA) Y RBAC POR ROLES
+// ============================================================================
+const AUTH_SECRET = process.env.JWT_SECRET || SECRET_API_KEY || 'WIN_ENRUTA_SECRET_2026';
+
+function signAuthToken(payload: Record<string, any>): string {
+  const data = { ...payload, exp: Date.now() + 1000 * 60 * 60 * 12 }; // 12 horas
+  const base64Payload = Buffer.from(JSON.stringify(data)).toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', AUTH_SECRET)
+    .update(base64Payload)
+    .digest('base64url');
+  return `${base64Payload}.${signature}`;
+}
+
+function verifyAuthToken(token?: string): Record<string, any> | null {
+  if (!token || !token.includes('.')) return null;
+  const [base64Payload, signature] = token.split('.');
+  const expectedSig = crypto
+    .createHmac('sha256', AUTH_SECRET)
+    .update(base64Payload)
+    .digest('base64url');
+  if (signature !== expectedSig) return null;
+  try {
+    const decoded = JSON.parse(Buffer.from(base64Payload, 'base64url').toString('utf8'));
+    if (decoded.exp && Date.now() > decoded.exp) return null;
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
+function parseJsonSafe(raw: any, fallback: string[] = ['*']): string[] {
+  if (!raw) return fallback;
+  if (Array.isArray(raw)) return raw.map(String);
+  try {
+    const parsed = JSON.parse(String(raw));
+    return Array.isArray(parsed) ? parsed.map(String) : fallback;
+  } catch {
+    return String(raw)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+}
+
+// Helper que restringe cualquier filtro de servicio del frontend a los servicios permitidos por el Rol en el JWT
+function enforceRoleServiceScope(req: express.Request, requestedService: string): string {
+  const authHeader = String(req.headers.authorization || '');
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  const decoded = verifyAuthToken(token);
+  const allowed: string[] = decoded?.permisos?.servicios || ['*'];
+
+  if (allowed.includes('*') || allowed.length === 0) {
+    return requestedService;
+  }
+
+  if (
+    !requestedService ||
+    requestedService === 'Todos' ||
+    requestedService === 'Todos los servicios'
+  ) {
+    return allowed.join(',');
+  }
+
+  const reqList = requestedService
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => allowed.includes(s));
+
+  return reqList.length > 0 ? reqList.join(',') : allowed.join(',');
+}
+
+// POST /api/auth/login -> Valida Documento + Contraseña y devuelve Rol + Permisos reales desde MySQL
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const documento = String(req.body?.documento || '').trim();
+    const password = String(req.body?.password || '').trim();
+
+    if (!documento || !password) {
+      return res.status(400).json({ ok: false, error: 'Ingresa tu documento y contraseña.' });
+    }
+
+    const [rows]: any = await pool.query(
+      `
+      SELECT 
+        u.*,
+        r.codigo AS rol_codigo,
+        r.nombre AS rol_nombre,
+        r.vistas_permitidas,
+        r.subvistas_permitidas,
+        r.servicios_permitidos
+      FROM usuarios u
+      LEFT JOIN roles r ON r.id = u.rol_id
+      WHERE u.documento = ?
+      LIMIT 1
+      `,
+      [documento]
+    );
+    const userRow: any = rows?.[0] || null;
+
+    if (!userRow) {
+      return res.status(401).json({ ok: false, error: 'Documento o contraseña incorrectos.' });
+    }
+
+    if (userRow.activo !== undefined && Number(userRow.activo) === 0) {
+      return res.status(403).json({ ok: false, error: 'Tu usuario se encuentra inactivo. Contacta al administrador.' });
+    }
+
+    const dbPass = String(userRow.password ?? userRow.clave ?? userRow.password_hash ?? '');
+    const sha256Input = crypto.createHash('sha256').update(password).digest('hex');
+
+    const isPasswordValid =
+      dbPass === password ||
+      dbPass === sha256Input;
+
+    if (!isPasswordValid) {
+      return res.status(401).json({ ok: false, error: 'Documento o contraseña incorrectos.' });
+    }
+
+    const permisos = {
+      rolCodigo: String(userRow.rol_codigo || userRow.rol || 'ADMIN').toUpperCase(),
+      rolNombre: String(userRow.rol_nombre || userRow.rol || 'Administrador'),
+      vistas: parseJsonSafe(userRow.vistas_permitidas, ['*']),
+      subvistas: parseJsonSafe(userRow.subvistas_permitidas, ['*']),
+      servicios: parseJsonSafe(userRow.servicios_permitidos, ['*']),
+    };
+
+    const userPayload = {
+      id: Number(userRow.id || 1),
+      documento: String(userRow.documento || userRow.dni || documento),
+      nombre: String(userRow.nombre || userRow.nombres || `Usuario ${documento}`),
+      email: String(userRow.email || userRow.correo || ''),
+      permisos,
+    };
+
+    const token = signAuthToken(userPayload);
+    return res.json({ ok: true, token, user: userPayload });
+  } catch (err: any) {
+    console.error('❌ Error en /api/auth/login:', err.message);
+    return res.status(500).json({ ok: false, error: 'Error interno al validar credenciales: ' + err.message });
+  }
+});
+
+// Inicializar tablas RBAC automáticamente si no existen
+async function ensureRbacTables() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS roles (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        codigo VARCHAR(50) NOT NULL UNIQUE,
+        nombre VARCHAR(100) NOT NULL,
+        vistas_permitidas JSON NOT NULL,
+        subvistas_permitidas JSON NOT NULL,
+        servicios_permitidos JSON NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query(`
+      INSERT IGNORE INTO roles (id, codigo, nombre, vistas_permitidas, subvistas_permitidas, servicios_permitidos) VALUES
+      (1, 'ADMIN', 'Administrador Total', '["*"]', '["*"]', '["*"]'),
+      (2, 'INSTALACIONES_LIMA', 'Supervisor Instalaciones Lima', '["Dashboard", "Órdenes", "Seguimiento"]', '["ejecutiva", "operativa", "operaciones"]', '["INSTA - LIMA"]'),
+      (3, 'PROVINCIA', 'Coordinador Provincia', '["Dashboard", "Órdenes", "Seguimiento"]', '["operativa", "operaciones"]', '["INSTA - PROV", "AVER - PROV"]'),
+      (4, 'VISITA_TECNICA_AVERIAS', 'Supervisor Averías y Postventa', '["Dashboard", "Órdenes", "Seguimiento"]', '["ejecutiva", "operativa", "operaciones"]', '["AVER - LIMA", "AVER - PROV", "POSTVENTA"]')
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usuarios (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        documento VARCHAR(20) NOT NULL UNIQUE,
+        nombre VARCHAR(120) NOT NULL,
+        email VARCHAR(120) NULL,
+        password VARCHAR(255) NOT NULL,
+        rol_id INT NOT NULL DEFAULT 1,
+        activo TINYINT(1) NOT NULL DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query(`
+      INSERT IGNORE INTO usuarios (documento, nombre, email, password, rol_id, activo) VALUES
+      ('99999999', 'Admin General WIN', 'admin@win.pe', 'win2026', 1, 1)
+    `);
+  } catch (err: any) {
+    console.warn('⚠️ Aviso verificando tablas RBAC:', err.message);
+  }
+}
+await ensureRbacTables();
+
+function requireAdmin(req: express.Request, res: express.Response): Record<string, any> | null {
+  const authHeader = String(req.headers.authorization || '');
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  const decoded = verifyAuthToken(token);
+  if (!decoded) {
+    res.status(401).json({ ok: false, error: 'Sesión expirada o inválida' });
+    return null;
+  }
+  return decoded;
+}
+
+// GET /api/auth/me -> Verifica sesión activa y devuelve permisos actualizados desde BD
+app.get('/api/auth/me', async (req, res) => {
+  const decoded = requireAdmin(req, res);
+  if (!decoded) return;
+  try {
+    const [rows]: any = await pool.query(
+      `
+      SELECT 
+        u.*,
+        r.codigo AS rol_codigo,
+        r.nombre AS rol_nombre,
+        r.vistas_permitidas,
+        r.subvistas_permitidas,
+        r.servicios_permitidos
+      FROM usuarios u
+      LEFT JOIN roles r ON r.id = u.rol_id
+      WHERE u.id = ? OR u.documento = ?
+      LIMIT 1
+      `,
+      [decoded.id || 0, decoded.documento || '']
+    );
+    const userRow = rows?.[0];
+    if (!userRow || Number(userRow.activo) === 0) {
+      return res.status(401).json({ ok: false, error: 'Usuario inactivo o no encontrado' });
+    }
+    const freshUser = {
+      id: Number(userRow.id),
+      documento: String(userRow.documento),
+      nombre: String(userRow.nombre),
+      email: String(userRow.email || ''),
+      permisos: {
+        rolCodigo: String(userRow.rol_codigo || 'ADMIN').toUpperCase(),
+        rolNombre: String(userRow.rol_nombre || 'Administrador'),
+        vistas: parseJsonSafe(userRow.vistas_permitidas, ['*']),
+        subvistas: parseJsonSafe(userRow.subvistas_permitidas, ['*']),
+        servicios: parseJsonSafe(userRow.servicios_permitidos, ['*']),
+      },
+    };
+    return res.json({ ok: true, user: freshUser });
+  } catch {
+    return res.json({ ok: true, user: decoded });
+  }
+});
+
+// GET /api/admin/rbac -> Listar todos los usuarios y roles
+app.get('/api/admin/rbac', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const [rolesResult, usersResult]: any = await Promise.all([
+      pool.query(`SELECT * FROM roles ORDER BY id ASC`),
+      pool.query(`
+        SELECT u.id, u.documento, u.nombre, u.email, u.rol_id, u.activo, r.codigo AS rol_codigo, r.nombre AS rol_nombre
+        FROM usuarios u
+        LEFT JOIN roles r ON r.id = u.rol_id
+        ORDER BY u.id DESC
+      `),
+    ]);
+
+    const rolesRows = rolesResult?.[0] || [];
+    const userRows = usersResult?.[0] || [];
+
+    const roles = rolesRows.map((r: any) => ({
+      id: Number(r.id),
+      codigo: String(r.codigo || ''),
+      nombre: String(r.nombre || ''),
+      vistas: parseJsonSafe(r.vistas_permitidas, ['*']),
+      subvistas: parseJsonSafe(r.subvistas_permitidas, ['*']),
+      servicios: parseJsonSafe(r.servicios_permitidos, ['*']),
+    }));
+
+    return res.json({
+      ok: true,
+      roles,
+      usuarios: userRows,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/admin/roles -> Crear o actualizar un Rol y sus permisos
+app.post('/api/admin/roles', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { id, codigo, nombre, vistas, subvistas, servicios } = req.body;
+    const cleanCodigo = String(codigo || '').trim().toUpperCase().replace(/\s+/g, '_');
+    const cleanNombre = String(nombre || '').trim();
+
+    if (!cleanCodigo || !cleanNombre) {
+      return res.status(400).json({ ok: false, error: 'Código y nombre del rol son obligatorios.' });
+    }
+
+    const vJson = JSON.stringify(Array.isArray(vistas) && vistas.length > 0 ? vistas : ['Dashboard']);
+    const svJson = JSON.stringify(Array.isArray(subvistas) && subvistas.length > 0 ? subvistas : ['ejecutiva']);
+    const sJson = JSON.stringify(Array.isArray(servicios) && servicios.length > 0 ? servicios : ['*']);
+
+    if (id) {
+      await pool.query(
+        `UPDATE roles SET codigo = ?, nombre = ?, vistas_permitidas = ?, subvistas_permitidas = ?, servicios_permitidos = ? WHERE id = ?`,
+        [cleanCodigo, cleanNombre, vJson, svJson, sJson, Number(id)]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO roles (codigo, nombre, vistas_permitidas, subvistas_permitidas, servicios_permitidos) VALUES (?, ?, ?, ?, ?)`,
+        [cleanCodigo, cleanNombre, vJson, svJson, sJson]
+      );
+    }
+    return res.json({ ok: true });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/admin/users -> Crear o actualizar un Usuario
+app.post('/api/admin/users', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { id, documento, nombre, email, password, rol_id, activo } = req.body;
+    const docClean = String(documento || '').trim();
+    const nomClean = String(nombre || '').trim();
+    const mailClean = String(email || '').trim();
+    const rolIdNum = Number(rol_id) || 1;
+    const actNum = activo === false || Number(activo) === 0 ? 0 : 1;
+
+    if (!docClean || !nomClean) {
+      return res.status(400).json({ ok: false, error: 'Documento y nombre son obligatorios.' });
+    }
+
+    if (id) {
+      if (password && String(password).trim() !== '') {
+        await pool.query(
+          `UPDATE usuarios SET documento = ?, nombre = ?, email = ?, password = ?, rol_id = ?, activo = ? WHERE id = ?`,
+          [docClean, nomClean, mailClean, String(password).trim(), rolIdNum, actNum, Number(id)]
+        );
+      } else {
+        await pool.query(
+          `UPDATE usuarios SET documento = ?, nombre = ?, email = ?, rol_id = ?, activo = ? WHERE id = ?`,
+          [docClean, nomClean, mailClean, rolIdNum, actNum, Number(id)]
+        );
+      }
+    } else {
+      if (!password || !String(password).trim()) {
+        return res.status(400).json({ ok: false, error: 'La contraseña es obligatoria para usuarios nuevos.' });
+      }
+      await pool.query(
+        `INSERT INTO usuarios (documento, nombre, email, password, rol_id, activo) VALUES (?, ?, ?, ?, ?, ?)`,
+        [docClean, nomClean, mailClean, String(password).trim(), rolIdNum, actNum]
+      );
+    }
+    return res.json({ ok: true });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// DELETE /api/admin/users/:id -> Eliminar usuario
+app.delete('/api/admin/users/:id', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    await pool.query(`DELETE FROM usuarios WHERE id = ?`, [Number(req.params.id)]);
+    return res.json({ ok: true });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // 1. Endpoint de catálogos para filtros desplegables
 app.get('/api/filters', async (_req, res) => {
   try {
@@ -285,10 +650,11 @@ app.get('/api/dashboard', async (req, res) => {
   const {
     startDate = todayDefault,
     endDate = todayDefault,
-    service = 'Todos los servicios',
+    service: rawService = 'Todos los servicios',
     zone = 'Todas las zonas',
     refresh = 'false',
   } = req.query as Record<string, string>;
+  const service = enforceRoleServiceScope(req, rawService);
 
   const cacheKey = `dash_${startDate}_${endDate}_${service}_${zone}`;
   if (refresh !== 'true') {
@@ -695,7 +1061,7 @@ app.get('/api/orders/search', async (req, res) => {
     const startDate = /^\d{4}-\d{2}-\d{2}$/.test(rawStart) ? rawStart : todayIso;
     const endDate = /^\d{4}-\d{2}-\d{2}$/.test(rawEnd) ? rawEnd : todayIso;
 
-    const service = String(req.query.service || 'Todos los servicios').trim();
+    const service = enforceRoleServiceScope(req, String(req.query.service || 'Todos los servicios').trim());
     const q = String(req.query.q || '').trim();
     const ignoreDates = req.query.ignoreDates === 'true';
 
@@ -923,7 +1289,10 @@ app.get('/api/tracking/search', async (req, res) => {
 
     const rawService = String(req.query.service || '').trim();
     const rawZone = String(req.query.zone || '').trim();
-    const service = !rawService || rawService === 'undefined' ? 'Todos los servicios' : rawService;
+    const service = enforceRoleServiceScope(
+      req,
+      !rawService || rawService === 'undefined' ? 'Todos los servicios' : rawService
+    );
     const zone = !rawZone || rawZone === 'undefined' ? 'Todas las zonas' : rawZone;
 
     const q = String(req.query.q || '').trim();
@@ -1250,11 +1619,12 @@ app.get('/api/operations', async (req, res) => {
   const {
     startDate = todayDefault,
     endDate = todayDefault,
-    service = 'Todos los servicios',
+    service: rawService = 'Todos los servicios',
     q = '',
     ignoreDates = 'false',
     refresh = 'false',
   } = req.query as Record<string, string>;
+  const service = enforceRoleServiceScope(req, rawService);
 
   const searchQ = String(q || '').trim();
   const cacheKey = `ops_raw_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;

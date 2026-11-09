@@ -67,11 +67,15 @@ export function Header({
   };
 
   const serviceSummaryLabel =
-    selectedServices.length === 0
-      ? 'Todos los servicios'
-      : selectedServices.length === 1
-        ? selectedServices[0]
-        : `${selectedServices.length} servicios seleccionados`;
+    serviceOptions.length === 1
+      ? serviceOptions[0]
+      : selectedServices.length === 0
+        ? serviceOptions.length < 5
+          ? `Mis servicios (${serviceOptions.length})`
+          : 'Todos los servicios'
+        : selectedServices.length === 1
+          ? selectedServices[0]
+          : `${selectedServices.length} servicios seleccionados`;
 
   const titleLabel =
     activeNav === 'Órdenes'
@@ -82,13 +86,15 @@ export function Header({
           ? 'Eficiencia'
           : activeNav === 'Experiencia (CSAT)'
             ? 'Experiencia (CSAT)'
-            : activeNav === 'Inicio'
-              ? 'Inicio'
-              : viewMode === 'ejecutiva'
-                ? 'Vista Ejecutiva'
-                : viewMode === 'operativa'
-                  ? 'Vista Operativa'
-                  : 'Operaciones de Campo';
+            : activeNav === 'Accesos'
+              ? 'Usuarios y Roles'
+              : activeNav === 'Inicio'
+                ? 'Inicio'
+                : viewMode === 'ejecutiva'
+                  ? 'Vista Ejecutiva'
+                  : viewMode === 'operativa'
+                    ? 'Vista Operativa'
+                    : 'Operaciones de Campo';
 
   return (
     <header className="flex flex-col sm:flex-row flex-wrap items-start sm:items-center justify-between gap-4 border-b border-slate-200/80 pb-4">
@@ -199,18 +205,22 @@ export function Header({
 
           {dropdownOpen && (
             <div className="absolute right-0 mt-2 w-64 bg-white border border-slate-200 rounded-2xl shadow-xl p-2 z-50 space-y-1 max-h-72 overflow-y-auto">
-              <div
-                onClick={() => setSelectedServices([])}
-                className={`px-3 py-2 rounded-xl cursor-pointer flex items-center justify-between text-xs font-semibold transition ${selectedServices.length === 0
-                  ? 'bg-[#FF5500] text-white'
-                  : 'text-slate-700 hover:bg-slate-50'
-                  }`}
-              >
-                <span>Todos los servicios</span>
-                {selectedServices.length === 0 && <Check size={14} />}
-              </div>
+              {serviceOptions.length > 1 && (
+                <>
+                  <div
+                    onClick={() => setSelectedServices([])}
+                    className={`px-3 py-2 rounded-xl cursor-pointer flex items-center justify-between text-xs font-semibold transition ${selectedServices.length === 0
+                      ? 'bg-[#FF5500] text-white'
+                      : 'text-slate-700 hover:bg-slate-50'
+                      }`}
+                  >
+                    <span>{serviceOptions.length < 5 ? `Todos mis servicios (${serviceOptions.length})` : 'Todos los servicios'}</span>
+                    {selectedServices.length === 0 && <Check size={14} />}
+                  </div>
 
-              <div className="border-t border-slate-100 my-1" />
+                  <div className="border-t border-slate-100 my-1" />
+                </>
+              )}
 
               {serviceOptions.map((srv) => {
                 const checked = selectedServices.includes(srv);
