@@ -47,7 +47,7 @@ export function Sidebar({
 
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-50 w-60 bg-white border-r border-slate-200/80 flex flex-col justify-between shrink-0 select-none transform transition-transform duration-200 ease-in-out md:static md:translate-x-0 ${isOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'
+      className={`fixed inset-y-0 left-0 z-50 w-60 h-screen overflow-y-auto bg-white border-r border-slate-200/80 flex flex-col justify-between shrink-0 select-none transform transition-transform duration-200 ease-in-out md:sticky md:top-0 md:translate-x-0 ${isOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'
         }`}
     >
       <div className="p-5">
@@ -91,8 +91,8 @@ export function Sidebar({
                   setDashExpanded(!dashExpanded);
                 }}
                 className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition font-semibold ${activeNav === 'Dashboard'
-                    ? 'bg-[#FFF0E5] text-[#FF5500]'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  ? 'bg-[#FFF0E5] text-[#FF5500]'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                   }`}
               >
                 <div className="flex items-center gap-3">
@@ -111,8 +111,8 @@ export function Sidebar({
                     <button
                       onClick={() => handleSelectSubView('ejecutiva')}
                       className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left transition ${activeNav === 'Dashboard' && viewMode === 'ejecutiva'
-                          ? 'bg-[#FF5500] text-white font-semibold shadow-xs'
-                          : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                        ? 'bg-[#FF5500] text-white font-semibold shadow-xs'
+                        : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
                         }`}
                     >
                       <Activity size={13} />
@@ -123,8 +123,8 @@ export function Sidebar({
                     <button
                       onClick={() => handleSelectSubView('operativa')}
                       className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left transition ${activeNav === 'Dashboard' && viewMode === 'operativa'
-                          ? 'bg-[#FF5500] text-white font-semibold shadow-xs'
-                          : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                        ? 'bg-[#FF5500] text-white font-semibold shadow-xs'
+                        : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
                         }`}
                     >
                       <ClipboardList size={13} />
@@ -135,8 +135,8 @@ export function Sidebar({
                     <button
                       onClick={() => handleSelectSubView('operaciones')}
                       className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left transition ${activeNav === 'Dashboard' && viewMode === 'operaciones'
-                          ? 'bg-[#FF5500] text-white font-semibold shadow-xs'
-                          : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                        ? 'bg-[#FF5500] text-white font-semibold shadow-xs'
+                        : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
                         }`}
                     >
                       <Wrench size={13} />
@@ -209,8 +209,8 @@ function NavItem({
     <button
       onClick={onClick}
       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition font-medium ${active
-          ? 'bg-[#FF5500] text-white font-semibold shadow-xs shadow-orange-500/20'
-          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+        ? 'bg-[#FF5500] text-white font-semibold shadow-xs shadow-orange-500/20'
+        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
         }`}
     >
       {icon}

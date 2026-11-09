@@ -14,19 +14,38 @@ const pool = mysql.createPool({
 
 async function run() {
   try {
-    const [rows] = await pool.query(`
+    // 1. Simular query de /api/orders/search con service = 'AVER - LIMA'
+    const [ordersLima] = await pool.query(`
       SELECT 
-        DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
-        DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m') AS fecha,
+        v.orden_id,
+        v.ticket,
+        v.producto,
+        v.tipo_operacion,
+        v.sector_operativo,
+        v.ambito
+      FROM vw_reporte_funnel_casos_360 v
+      WHERE UPPER(TRIM(v.tipo_operacion)) IN ('AVER - LIMA')
+      LIMIT 20
+    `);
+
+    console.log('Total órdenes devueltas para AVER - LIMA:', ordersLima.length);
+    const noLima = ordersLima.filter(o => !o.sector_operativo.startsWith('LIMA'));
+    console.log('¿Hay alguna orden que NO sea Lima?:', noLima.length);
+
+    // 2. Simular desglose por tipo_operacion en /api/dashboard
+    const [breakdown] = await pool.query(`
+      SELECT 
+        UPPER(TRIM(COALESCE(v.tipo_operacion, 'OTROS'))) AS tipo,
         COUNT(*) AS total
       FROM vw_reporte_funnel_casos_360 v
-      WHERE v.fecha_solicitud_dia >= '2026-10-28' AND v.fecha_solicitud_dia <= '2026-11-03'
-      GROUP BY v.fecha_solicitud_dia
-      ORDER BY v.fecha_solicitud_dia ASC
+      WHERE v.fecha_solicitud_dia >= CURDATE() - INTERVAL 7 DAY
+      GROUP BY UPPER(TRIM(COALESCE(v.tipo_operacion, 'OTROS')))
+      ORDER BY total DESC
     `);
-    console.log('Result rows:', rows);
+    console.log('Desglose dashboard:');
+    console.table(breakdown);
   } catch (e) {
-    console.error('Error:', e);
+    console.error(e);
   } finally {
     await pool.end();
   }

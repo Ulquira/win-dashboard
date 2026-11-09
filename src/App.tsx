@@ -366,7 +366,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex min-h-screen bg-[#F8F9FA] text-slate-800 font-sans relative">
+    <div className="flex h-screen overflow-hidden bg-[#F8F9FA] text-slate-800 font-sans relative">
       {mobileMenuOpen && (
         <div
           className="fixed inset-0 bg-slate-900/30 backdrop-blur-xs z-40 md:hidden transition-opacity"

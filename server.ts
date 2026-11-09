@@ -99,21 +99,35 @@ const HOMOLOGACION_INVERSA_DB: Record<string, string[]> = {
  * Cualquier otro valor ('NO', 'OTROS', etc.) devuelve null y queda bloqueado.
  */
 function homologarTipoServicio(rawTipo: string): string | null {
-  const upper = String(rawTipo || '').trim().toUpperCase();
-  if (!upper) return null;
+  const upper = String(rawTipo || '')
+    .trim()
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  if (!upper || upper === 'NO' || upper === 'OTROS' || upper === 'NULL') return null;
+
+  // 1. POSTVENTA primero para que nunca sea absorbido por Instalaciones
+  if (upper.includes('POSTVENTA') || upper.includes('POST VENTA') || upper.includes('TRASLADO') || upper.includes('MIGRACION') || upper.includes('CAMBIO DE PLAN') || upper.includes('MESH')) {
+    if (upper === 'INSTA - LIMA' || upper === 'INSTA - PROV' || upper === 'AVER - LIMA' || upper === 'AVER - PROV') {
+      // Respetar si ya viene con el nombre canónico exacto
+    } else if (upper === 'POSTVENTA' || upper === 'POST VENTA') {
+      return 'POSTVENTA';
+    }
+  }
 
   if (
     upper === 'INSTALACION' ||
-    upper === 'INSTALACIÓN' ||
     upper === 'INSTALACIONES' ||
     upper === 'INSTA - LIMA' ||
-    upper === 'INSTA-LIMA'
+    upper === 'INSTA-LIMA' ||
+    upper === 'INSTALACION LIMA'
   ) {
     return 'INSTA - LIMA';
   }
   if (
     upper === 'PROVINCIA' ||
     upper === 'INSTALACION PROVINCIA' ||
+    upper === 'INSTALACIONES PROVINCIA' ||
     upper === 'INSTA - PROV' ||
     upper === 'INSTA-PROV'
   ) {
@@ -121,17 +135,17 @@ function homologarTipoServicio(rawTipo: string): string | null {
   }
   if (
     upper === 'AVERIAS' ||
-    upper === 'AVERÍAS' ||
     upper === 'AVERIA' ||
     upper === 'AVER - LIMA' ||
-    upper === 'AVER-LIMA'
+    upper === 'AVER-LIMA' ||
+    upper === 'AVERIAS LIMA'
   ) {
     return 'AVER - LIMA';
   }
   if (
     upper === 'AVERIAS PRV' ||
-    upper === 'AVERÍAS PRV' ||
     upper === 'AVERIAS PROV' ||
+    upper === 'AVERIAS PROVINCIA' ||
     upper === 'AVER - PROV' ||
     upper === 'AVER-PROV'
   ) {
@@ -144,21 +158,60 @@ function homologarTipoServicio(rawTipo: string): string | null {
   return null;
 }
 
+/**
+ * Clasifica cualquier nombre de producto/motivo de trabajo en uno de los 5 tipos oficiales.
+ * Usa primero el mapa cargado desde la tabla `tiposervicio` y, si no está, aplica reglas de negocio.
+ */
+function classifyOrderServiceType(productoRaw?: any, tipoOperacionRaw?: any): string {
+  const tipoOpKey = String(tipoOperacionRaw || '').trim().toUpperCase();
+  const prodKey = String(productoRaw || '').trim().toUpperCase();
+
+  // 1. Prioridad: Lo que calculó la vista limpia en tipo_operacion (INSTA - LIMA, AVER - LIMA, etc.)
+  const fromTipoOp = homologarTipoServicio(tipoOpKey);
+  if (fromTipoOp) return fromTipoOp;
+
+  // 2. Si no viene tipo_operacion o no es canónico, consultar mapa
+  if (prodKey && servicioToTipoMap.has(prodKey)) {
+    return servicioToTipoMap.get(prodKey)!;
+  }
+
+  const fromProd = homologarTipoServicio(prodKey);
+  if (fromProd) return fromProd;
+
+  return 'OTROS';
+}
+
 async function loadTipoServicioCache() {
   const map = new Map<string, string>();
-
   try {
     const [rows]: any = await pool.query(`SELECT * FROM tiposervicio`);
     for (const r of rows || []) {
-      const entries = Object.entries(r);
-      const srvVal =
-        r.Servicio ?? r.servicio ?? r.Producto ?? r.producto ?? entries[0]?.[1];
-      const rawTipoVal =
-        r.Tipo ?? r.tipo ?? r.Categoria ?? r.categoria ?? entries[1]?.[1] ?? srvVal;
+      const textValues = Object.entries(r)
+        .filter(
+          ([k, v]) =>
+            !['id', 'id_tipo', 'codigo_id', 'created_at'].includes(k.toLowerCase()) &&
+            v !== null &&
+            v !== undefined
+        )
+        .map(([, v]) => String(v).trim())
+        .filter((v) => v.length > 0 && !/^\d+$/.test(v));
 
-      const tipoHomologado = homologarTipoServicio(String(rawTipoVal || ''));
-      if (srvVal && tipoHomologado) {
-        map.set(String(srvVal).trim().toUpperCase(), tipoHomologado);
+      let detectedCategory: string | null = null;
+      let detectedOrderType: string | null = null;
+
+      for (const val of textValues) {
+        const cat = homologarTipoServicio(val);
+        if (cat && !detectedCategory) {
+          detectedCategory = cat;
+        } else if (!detectedOrderType) {
+          detectedOrderType = val;
+        }
+      }
+
+      if (detectedCategory && detectedOrderType) {
+        map.set(detectedOrderType.toUpperCase(), detectedCategory);
+      } else if (detectedCategory && textValues.length === 1) {
+        map.set(textValues[0].toUpperCase(), detectedCategory);
       }
     }
   } catch (err: any) {
@@ -168,35 +221,41 @@ async function loadTipoServicioCache() {
   servicioToTipoMap = map;
   tiposUnicosList = [...SERVICIOS_PERMITIDOS];
   queryCache.flushAll();
-  console.log(`✅ Catálogo bloqueado a 5 servicios oficiales:`, tiposUnicosList.join(' | '));
+  console.log(
+    `✅ Catálogo tiposervicio cargado (${map.size} tipos de orden mapeados):`,
+    Array.from(map.entries())
+      .map(([k, v]) => `${k} => ${v}`)
+      .join(' | ')
+  );
 }
-
 await loadTipoServicioCache();
 
 /**
- * Resuelve productos y tipos permitidos.
- * Si el usuario elige "Todos los servicios", aplica automáticamente el filtro de los 5 servicios
- * para bloquear cualquier registro ajeno ('NO', vacíos u otros).
+ * Resuelve estrictamente la lista de productos (de la tabla `tiposervicio`)
+ * que pertenecen al tipo de servicio seleccionado.
  */
 function resolveProductosFromServiceFilter(serviceParam: string): {
   srvList: string[];
   productosDelTipo: string[];
+  canonicalList: string[];
 } {
-  const rawSelected =
-    serviceParam &&
-      serviceParam !== 'Todos' &&
-      serviceParam !== 'Todos los servicios'
-      ? serviceParam
+  const isAll =
+    !serviceParam ||
+    serviceParam === 'Todos' ||
+    serviceParam === 'Todos los servicios';
+
+  const rawSelected = isAll
+    ? []
+    : serviceParam
         .split(',')
         .map((s) => s.trim())
-        .filter(Boolean)
-      : [...SERVICIOS_PERMITIDOS];
+        .filter(Boolean);
 
   const canonicalSet = new Set<string>();
   const dbSrvEquivalents = new Set<string>();
 
   for (const item of rawSelected) {
-    const canon = homologarTipoServicio(item);
+    const canon = homologarTipoServicio(item) || (servicioToTipoMap.get(item.toUpperCase()) ?? null);
     if (!canon) continue;
     canonicalSet.add(canon);
     dbSrvEquivalents.add(canon);
@@ -216,6 +275,45 @@ function resolveProductosFromServiceFilter(serviceParam: string): {
   return {
     srvList: Array.from(dbSrvEquivalents),
     productosDelTipo,
+    canonicalList: Array.from(canonicalSet),
+  };
+}
+
+/**
+ * Construye el filtro SQL exacto por Tipo de Orden homologado en `tiposervicio`
+ * (sin usar `w.TipoTraba` para que nunca se mezclen órdenes de Provincia en Lima)
+ */
+function buildStrictOrderTypeSql(
+  serviceParam: string,
+  colTipoOrden: string = 'v.tipo_operacion'
+): { sql: string; params: any[] } {
+  if (!serviceParam || serviceParam === 'Todos' || serviceParam === 'Todos los servicios') {
+    return { sql: '1=1', params: [] };
+  }
+
+  const { canonicalList, productosDelTipo, srvList } = resolveProductosFromServiceFilter(serviceParam);
+  if (canonicalList.length === 0) {
+    return { sql: '1=1', params: [] };
+  }
+
+  // Si filtramos sobre v.tipo_operacion (la vista ya calculó canonical: INSTA - LIMA, AVER - LIMA, etc.)
+  if (colTipoOrden.includes('tipo_operacion')) {
+    const placeholders = canonicalList.map(() => '?').join(',');
+    return {
+      sql: `UPPER(TRIM(${colTipoOrden})) IN (${placeholders})`,
+      params: canonicalList.map((x) => x.toUpperCase()),
+    };
+  }
+
+  // Para columnas de producto genérico (como en vw_winordetraba)
+  const targetList = productosDelTipo.length > 0 ? productosDelTipo : srvList;
+  if (targetList.length === 0) {
+    return { sql: '1=1', params: [] };
+  }
+  const placeholders = targetList.map(() => '?').join(',');
+  return {
+    sql: `UPPER(TRIM(${colTipoOrden})) IN (${placeholders})`,
+    params: targetList.map((x) => x.toUpperCase()),
   };
 }
 
@@ -455,7 +553,8 @@ app.get('/api/auth/me', async (req, res) => {
         servicios: parseJsonSafe(userRow.servicios_permitidos, ['*']),
       },
     };
-    return res.json({ ok: true, user: freshUser });
+    const freshToken = signAuthToken(freshUser);
+    return res.json({ ok: true, token: freshToken, user: freshUser });
   } catch {
     return res.json({ ok: true, user: decoded });
   }
@@ -583,6 +682,18 @@ app.delete('/api/admin/users/:id', async (req, res) => {
   }
 });
 
+function cleanPartnerName(raw: any): string {
+  const str = String(raw || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\b(SGI|SGA)\b/gi, '')
+    .replace(/[0-9]+/g, '')
+    .replace(/[-_]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return str || 'SIN PARTNER';
+}
+
 // 1. Endpoint de catálogos para filtros desplegables
 app.get('/api/filters', async (_req, res) => {
   try {
@@ -619,7 +730,9 @@ app.get('/api/filters', async (_req, res) => {
 
     const todayStr = new Date().toLocaleDateString('en-CA');
     const zList = (zonasRes?.[0] || []).map((z: any) => z.zona).filter(Boolean);
-    const pList = (partnersRes?.[0] || []).map((p: any) => p.partner).filter(Boolean);
+    const pList = Array.from(
+      new Set((partnersRes?.[0] || []).map((p: any) => cleanPartnerName(p.partner)).filter(Boolean))
+    ).sort();
 
     const payload = {
       ok: true,
@@ -683,40 +796,32 @@ app.get('/api/dashboard', async (req, res) => {
     const encFilters: string[] = [];
     const encParams: any[] = [];
 
-    const { srvList, productosDelTipo } = resolveProductosFromServiceFilter(service);
+    const dashSrvFilter = buildStrictOrderTypeSql(service, 'v.tipo_operacion');
+    if (dashSrvFilter.params.length > 0) {
+      extraFilters.push(`AND ${dashSrvFilter.sql}`);
+      extraParams.push(...dashSrvFilter.params);
 
-    if (srvList.length > 0) {
-      if (productosDelTipo.length > 0) {
-        const prodPh = productosDelTipo.map(() => '?').join(',');
-        const srvPh = srvList.map(() => '?').join(',');
+      const { canonicalList, productosDelTipo } = resolveProductosFromServiceFilter(service);
+      const prods = productosDelTipo.length > 0 ? productosDelTipo : dashSrvFilter.params;
+      const ph = prods.map(() => '?').join(',');
 
-        extraFilters.push(`AND v.producto IN (${prodPh})`);
-        extraParams.push(...productosDelTipo);
-
-        reprogFilters.push(
-          `AND (r.producto_servicio IN (${prodPh}) OR r.tipo_servicio IN (${srvPh}))`
-        );
-        reprogParams.push(...productosDelTipo, ...srvList);
-
-        encFilters.push(
-          `AND (e.producto IN (${prodPh}) OR e.tipo_servicio IN (${srvPh}))`
-        );
-        encParams.push(...productosDelTipo, ...srvList);
-      } else {
-        const srvPh = srvList.map(() => '?').join(',');
-        extraFilters.push(`AND v.producto IN (${srvPh})`);
-        extraParams.push(...srvList);
-
-        reprogFilters.push(
-          `AND (r.producto_servicio IN (${srvPh}) OR r.tipo_servicio IN (${srvPh}))`
-        );
-        reprogParams.push(...srvList, ...srvList);
-
-        encFilters.push(
-          `AND (e.producto IN (${srvPh}) OR e.tipo_servicio IN (${srvPh}))`
-        );
-        encParams.push(...srvList, ...srvList);
+      let geoClauseR = '';
+      let geoClauseE = '';
+      const onlyLima = canonicalList.length > 0 && canonicalList.every((c) => c.includes('LIMA'));
+      const onlyProv = canonicalList.length > 0 && canonicalList.every((c) => c.includes('PROV'));
+      if (onlyLima) {
+        geoClauseR = " AND (r.sector_operativo LIKE 'LIMA%' OR r.sector_operativo IS NULL)";
+        geoClauseE = " AND (e.sector_operativo LIKE 'LIMA%' OR e.region = 'LIMA' OR e.sector_operativo IS NULL)";
+      } else if (onlyProv) {
+        geoClauseR = " AND (r.sector_operativo NOT LIKE 'LIMA%' AND r.sector_operativo IS NOT NULL)";
+        geoClauseE = " AND (e.sector_operativo NOT LIKE 'LIMA%' AND (e.region != 'LIMA' OR e.region IS NULL) AND e.sector_operativo IS NOT NULL)";
       }
+
+      reprogFilters.push(`AND UPPER(TRIM(r.producto_servicio)) IN (${ph})${geoClauseR}`);
+      reprogParams.push(...prods.map((x) => x.toUpperCase()));
+
+      encFilters.push(`AND UPPER(TRIM(e.producto)) IN (${ph})${geoClauseE}`);
+      encParams.push(...prods.map((x) => x.toUpperCase()));
     }
 
     if (zone && zone !== 'Todas las zonas') {
@@ -845,13 +950,14 @@ app.get('/api/dashboard', async (req, res) => {
       pool.query(
         `
         SELECT 
-          UPPER(TRIM(COALESCE(v.producto, ''))) AS producto,
+          UPPER(TRIM(COALESCE(v.tipo_operacion, 'OTROS'))) AS tipo,
           COUNT(*) AS total,
           COALESCE(SUM(v.se_envio_wsp = 'SI'), 0) AS enviados
         FROM vw_reporte_funnel_casos_360 v
         WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
         ${filterSql}
-        GROUP BY UPPER(TRIM(COALESCE(v.producto, '')))
+        GROUP BY UPPER(TRIM(COALESCE(v.tipo_operacion, 'OTROS')))
+        ORDER BY total DESC
         `,
         [startDate, endDate, ...extraParams]
       ),
@@ -873,14 +979,14 @@ app.get('/api/dashboard', async (req, res) => {
         .query(
           `
           SELECT 
-            TRIM(e.partner) AS partner,
+            TRIM(REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(e.partner)), '\\\\b(SGI|SGA)\\\\b|[0-9]+', ''), '\\\\s+', ' ')) AS partner,
             COUNT(*) AS surveys,
             AVG(e.satisfaccion_general + 0) AS avg_score
           FROM vw_reporte_encuestas_enriquecido e
           WHERE e.fecha_registro_encuesta_dia >= ? AND e.fecha_registro_encuesta_dia <= ?
             AND e.partner IS NOT NULL AND TRIM(e.partner) != ''
           ${encFilters.join(' ')}
-          GROUP BY TRIM(e.partner)
+          GROUP BY partner
           ORDER BY avg_score DESC, surveys DESC
           `,
           [startDate, endDate, ...encParams]
@@ -1005,27 +1111,14 @@ app.get('/api/dashboard', async (req, res) => {
 
     const ordersWithTipo = (orderResult[0] || []).map((o: any) => ({
       ...o,
-      servicio_tipo:
-        servicioToTipoMap.get(String(o.producto || '').trim().toUpperCase()) || o.producto || '-',
+      servicio_tipo: classifyOrderServiceType(o.producto, o.tipo_operacion),
     }));
 
-    const tipoOpMap = new Map<string, { total: number; enviados: number }>();
-    for (const r of productoResult[0] || []) {
-      const prodKey = String(r.producto || '').trim().toUpperCase();
-      const tipoNombre = servicioToTipoMap.get(prodKey) || prodKey || 'OTROS';
-      const cur = tipoOpMap.get(tipoNombre) || { total: 0, enviados: 0 };
-      cur.total += Number(r.total || 0);
-      cur.enviados += Number(r.enviados || 0);
-      tipoOpMap.set(tipoNombre, cur);
-    }
-
-    const byTipoOperacion = Array.from(tipoOpMap.entries())
-      .map(([tipo, val]) => ({
-        tipo,
-        total: val.total,
-        enviados: val.enviados,
-      }))
-      .sort((a, b) => b.total - a.total);
+    const byTipoOperacion = (productoResult[0] || []).map((r: any) => ({
+      tipo: r.tipo,
+      total: Number(r.total || 0),
+      enviados: Number(r.enviados || 0),
+    }));
 
     const responsePayload = {
       ok: true,
@@ -1086,17 +1179,10 @@ app.get('/api/orders/search', async (req, res) => {
       params.push(startDate, endDate);
     }
 
-    const { srvList, productosDelTipo } = resolveProductosFromServiceFilter(service);
-    if (srvList.length > 0) {
-      if (productosDelTipo.length > 0) {
-        const ph = productosDelTipo.map(() => '?').join(',');
-        whereClauses.push(`v.producto IN (${ph})`);
-        params.push(...productosDelTipo);
-      } else {
-        const ph = srvList.map(() => '?').join(',');
-        whereClauses.push(`(v.tipo_operacion IN (${ph}) OR v.producto IN (${ph}))`);
-        params.push(...srvList, ...srvList);
-      }
+    const ordSrvFilter = buildStrictOrderTypeSql(service, 'v.tipo_operacion');
+    if (ordSrvFilter.params.length > 0) {
+      whereClauses.push(ordSrvFilter.sql);
+      params.push(...ordSrvFilter.params);
     }
 
     if (fOrden) {
@@ -1116,13 +1202,10 @@ app.get('/api/orders/search', async (req, res) => {
     }
 
     if (fOperacion && fOperacion !== 'Todos') {
-      const opItems = fOperacion.split(',').map((s) => s.trim()).filter(Boolean);
-      const { productosDelTipo: opProds } = resolveProductosFromServiceFilter(opItems.join(','));
-      const combined = Array.from(new Set([...opItems, ...opProds]));
-      if (combined.length > 0) {
-        const ph = combined.map(() => '?').join(',');
-        whereClauses.push(`(UPPER(TRIM(v.producto)) IN (${ph}) OR UPPER(TRIM(v.tipo_operacion)) IN (${ph}))`);
-        params.push(...combined.map((x) => x.toUpperCase()), ...combined.map((x) => x.toUpperCase()));
+      const opFilter = buildStrictOrderTypeSql(fOperacion, 'v.tipo_operacion');
+      if (opFilter.params.length > 0) {
+        whereClauses.push(opFilter.sql);
+        params.push(...opFilter.params);
       }
     }
 
@@ -1256,11 +1339,7 @@ app.get('/api/orders/search', async (req, res) => {
     const total = Number(countResult?.[0]?.[0]?.total || 0);
     const rows = (rowsResult?.[0] || []).map((o: any) => ({
       ...o,
-      servicio_tipo:
-        servicioToTipoMap.get(String(o.producto || '').trim().toUpperCase()) ||
-        o.tipo_operacion ||
-        o.producto ||
-        '-',
+      servicio_tipo: classifyOrderServiceType(o.producto, o.tipo_operacion),
     }));
 
     return res.json({
@@ -1323,12 +1402,10 @@ app.get('/api/tracking/search', async (req, res) => {
       params.push(startDate, endDate);
     }
 
-    const { srvList, productosDelTipo } = resolveProductosFromServiceFilter(service);
-    if (srvList.length > 0) {
-      const allSrvTokens = Array.from(new Set([...srvList, ...productosDelTipo]));
-      const ph = allSrvTokens.map(() => '?').join(',');
-      whereClauses.push(`(v.tipo_operacion IN (${ph}) OR v.producto IN (${ph}))`);
-      params.push(...allSrvTokens, ...allSrvTokens);
+    const trkSrvFilter = buildStrictOrderTypeSql(service, 'v.tipo_operacion');
+    if (trkSrvFilter.params.length > 0) {
+      whereClauses.push(trkSrvFilter.sql);
+      params.push(...trkSrvFilter.params);
     }
 
     if (zone !== 'Todas las zonas') {
@@ -1645,8 +1722,10 @@ app.get('/api/operations', async (req, res) => {
     )`;
 
     const colEstado = `COALESCE(NULLIF(TRIM(w.\`Estado OT\`), ''), NULLIF(TRIM(w.Estado), ''), 'SIN ESTADO')`;
-    const colPartner = `COALESCE(NULLIF(TRIM(w.Proveedeor), ''), NULLIF(TRIM(w.Empresa), ''), 'SIN PARTNER')`;
-    const colCuadrilla = `COALESCE(NULLIF(TRIM(w.Cuadrilla_nombre), ''), NULLIF(TRIM(w.Cuadrilla), ''))`;
+    const rawPartnerExpr = `UPPER(COALESCE(NULLIF(TRIM(w.Proveedeor), ''), NULLIF(TRIM(w.Empresa), ''), 'SIN PARTNER'))`;
+    const colPartner = `TRIM(REGEXP_REPLACE(REGEXP_REPLACE(${rawPartnerExpr}, '\\\\b(SGI|SGA)\\\\b|[0-9]+', ''), '\\\\s+', ' '))`;
+    // Priorizar w.Cuadrilla para obtener el nombre completo de la cuadrilla en lugar del nombre corto del técnico
+    const colCuadrilla = `COALESCE(NULLIF(TRIM(w.Cuadrilla), ''), NULLIF(TRIM(w.Cuadrilla_nombre), ''))`;
     const colZona = `COALESCE(NULLIF(TRIM(w.\`Sector Operativo\`), ''), NULLIF(TRIM(w.Localidad), ''), NULLIF(TRIM(w.Zona), ''), NULLIF(TRIM(w.Provincia), ''), 'SIN ZONA')`;
 
     const [ey, em, ed] = endDate.split('-').map(Number);
@@ -1669,16 +1748,22 @@ app.get('/api/operations', async (req, res) => {
       chartParams.push(chartStartDate, endDate);
     }
 
-    const { srvList, productosDelTipo } = resolveProductosFromServiceFilter(service);
-    if (srvList.length > 0) {
-      const allTokens = Array.from(new Set([...srvList, ...productosDelTipo])).map((t) => t.toUpperCase());
-      const ph = allTokens.map(() => '?').join(',');
-      const srvFilter = `(UPPER(TRIM(w.Producto)) IN (${ph}) OR UPPER(TRIM(w.\`Motivo Trabajo\`)) IN (${ph}) OR UPPER(TRIM(w.TipoTraba)) IN (${ph}))`;
-      whereClauses.push(srvFilter);
-      queryParams.push(...allTokens, ...allTokens, ...allTokens);
+    const colTipoOrdenOt = `COALESCE(NULLIF(TRIM(w.Producto), ''), NULLIF(TRIM(w.\`Motivo Trabajo\`), ''), '')`;
+    const opsSrvFilter = buildStrictOrderTypeSql(service, colTipoOrdenOt);
+    if (opsSrvFilter.params.length > 0) {
+      const { canonicalList } = resolveProductosFromServiceFilter(service);
+      let geoOt = '';
+      if (canonicalList.length > 0 && canonicalList.every((c) => c.includes('LIMA'))) {
+        geoOt = " AND (w.`Sector Operativo` LIKE 'LIMA%' OR w.Region = 'LIMA')";
+      } else if (canonicalList.length > 0 && canonicalList.every((c) => c.includes('PROV'))) {
+        geoOt = " AND (w.`Sector Operativo` NOT LIKE 'LIMA%' AND (w.Region != 'LIMA' OR w.Region IS NULL))";
+      }
 
-      chartWhereClauses.push(srvFilter);
-      chartParams.push(...allTokens, ...allTokens, ...allTokens);
+      whereClauses.push(`${opsSrvFilter.sql}${geoOt}`);
+      queryParams.push(...opsSrvFilter.params);
+
+      chartWhereClauses.push(`${opsSrvFilter.sql}${geoOt}`);
+      chartParams.push(...opsSrvFilter.params);
     }
 
     if (searchQ) {
@@ -1744,7 +1829,7 @@ app.get('/api/operations', async (req, res) => {
           COALESCE(SUM(${isAgend}), 0) AS agendadas,
           COALESCE(SUM(${isCancel}), 0) AS canceladas,
           COUNT(DISTINCT ${colCuadrilla}) AS cuadrillas_activas,
-          COUNT(DISTINCT NULLIF(TRIM(w.Proveedeor), '')) AS partners_activos,
+          COUNT(DISTINCT ${colPartner}) AS partners_activos,
           COUNT(DISTINCT ${colZona}) AS zonas_activas
         FROM vw_winordetraba w
         ${whereSql}

@@ -607,7 +607,7 @@ export function OperationsDashboardView({
                             <thead className="sticky top-0 bg-white">
                                 <tr className="text-slate-400 border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider">
                                     <th className="py-2 text-left">#</th>
-                                    <th className="py-2 text-left">Cuadrilla / Técnico</th>
+                                    <th className="py-2 text-left">Cuadrilla</th>
                                     <th className="py-2 text-left">Partner</th>
                                     <th className="py-2 text-right">Asignadas</th>
                                     <th className="py-2 text-right">Finalizadas</th>
@@ -626,10 +626,10 @@ export function OperationsDashboardView({
                                                 {idx + 1}
                                             </span>
                                         </td>
-                                        <td className="py-2 font-bold text-slate-900 max-w-[210px] truncate" title={c.cuadrilla}>
+                                        <td className="py-2 pr-2 font-bold text-slate-900 leading-snug" title={c.cuadrilla}>
                                             {c.cuadrilla}
                                         </td>
-                                        <td className="py-2 text-slate-500 font-semibold truncate max-w-[120px]">{c.partner}</td>
+                                        <td className="py-2 text-slate-500 font-semibold whitespace-nowrap">{c.partner}</td>
                                         <td className="py-2 text-right font-bold text-slate-800">{fmt(c.total)}</td>
                                         <td className="py-2 text-right font-extrabold text-emerald-700">{fmt(c.finalizadas)}</td>
                                         <td className="py-2 text-right text-rose-600">{fmt(c.canceladas)}</td>
