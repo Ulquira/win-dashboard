@@ -266,6 +266,9 @@ export default function App() {
       return (apiFetch as any)(`/api/dashboard?${params.toString()}`, { signal });
     },
     placeholderData: (prev: any) => prev,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
+    refetchOnWindowFocus: false,
   });
 
   const dbOnline = Boolean(dashData?.ok && !isError);

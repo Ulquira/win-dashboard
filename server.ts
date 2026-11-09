@@ -839,11 +839,8 @@ app.get('/api/dashboard', async (req, res) => {
     const avListSql = DISTRITOS_ALTO_VALOR.map((d) => `'${d.trim().toUpperCase()}'`).join(',');
 
     const [
-      dailyResult,
+      aggregatedResult,
       orderResult,
-      estadoOtResult,
-      sectorResult,
-      productoResult,
       reprogResult,
       encResult,
     ]: any = await Promise.all([
@@ -853,6 +850,9 @@ app.get('/api/dashboard', async (req, res) => {
           DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
           DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m') AS fecha,
           DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_full,
+          COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'Sin estado') AS estado_ot,
+          COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR') AS sector_operativo,
+          UPPER(TRIM(COALESCE(v.tipo_operacion, 'OTROS'))) AS tipo_operacion,
           COUNT(*) AS total,
           COALESCE(SUM(v.se_envio_wsp = 'SI'), 0) AS enviados,
           COALESCE(SUM(v.estado_wsp = 'read'), 0) AS leidos,
@@ -877,8 +877,11 @@ app.get('/api/dashboard', async (req, res) => {
         FROM vw_reporte_funnel_casos_360 v
         WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
         ${filterSql}
-        GROUP BY v.fecha_solicitud_dia
-        ORDER BY v.fecha_solicitud_dia ASC
+        GROUP BY 
+          v.fecha_solicitud_dia,
+          COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'Sin estado'),
+          COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR'),
+          UPPER(TRIM(COALESCE(v.tipo_operacion, 'OTROS')))
         `,
         [chartStartDate, endDate, ...extraParams]
       ),
@@ -911,53 +914,6 @@ app.get('/api/dashboard', async (req, res) => {
         ${filterSql}
         ORDER BY v.orden_id DESC
         LIMIT 300
-        `,
-        [startDate, endDate, ...extraParams]
-      ),
-      pool.query(
-        `
-        SELECT 
-          COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'Sin estado') AS estado_ot,
-          COUNT(*) AS total,
-          COALESCE(SUM(v.se_envio_wsp = 'SI'), 0) AS enviados,
-          COALESCE(SUM(v.estado_wsp = 'read'), 0) AS leidos,
-          COALESCE(SUM(v.ingreso_tracking = 'SI'), 0) AS tracking
-        FROM vw_reporte_funnel_casos_360 v
-        WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
-        ${filterSql}
-        GROUP BY COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'Sin estado')
-        ORDER BY total DESC
-        `,
-        [startDate, endDate, ...extraParams]
-      ),
-      pool.query(
-        `
-        SELECT 
-          COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR') AS sector_operativo,
-          COUNT(*) AS total,
-          COALESCE(SUM(v.se_envio_wsp = 'SI'), 0) AS enviados,
-          COALESCE(SUM(v.se_envio_wsp = 'NO' OR v.estado_wsp = 'NO ENVIADO' OR v.estado_wsp IS NULL), 0) AS no_enviados,
-          COALESCE(SUM(v.ingreso_tracking = 'SI'), 0) AS tracking,
-          COALESCE(SUM(v.estado_wsp = 'read'), 0) AS leidos
-        FROM vw_reporte_funnel_casos_360 v
-        WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
-        ${filterSql}
-        GROUP BY COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR')
-        ORDER BY total DESC
-        `,
-        [startDate, endDate, ...extraParams]
-      ),
-      pool.query(
-        `
-        SELECT 
-          UPPER(TRIM(COALESCE(v.tipo_operacion, 'OTROS'))) AS tipo,
-          COUNT(*) AS total,
-          COALESCE(SUM(v.se_envio_wsp = 'SI'), 0) AS enviados
-        FROM vw_reporte_funnel_casos_360 v
-        WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
-        ${filterSql}
-        GROUP BY UPPER(TRIM(COALESCE(v.tipo_operacion, 'OTROS')))
-        ORDER BY total DESC
         `,
         [startDate, endDate, ...extraParams]
       ),
@@ -1046,10 +1002,99 @@ app.get('/api/dashboard', async (req, res) => {
       };
     });
 
-    const dailyRows: any[] = dailyResult[0] || [];
+    const rawAggregated: any[] = aggregatedResult[0] || [];
+
+    const dailyMap = new Map<string, any>();
+    const estadoOtMap = new Map<string, any>();
+    const sectorMap = new Map<string, any>();
+    const tipoOpMap = new Map<string, any>();
+
+    for (const r of rawAggregated) {
+      const tot = Number(r.total || 0);
+      const env = Number(r.enviados || 0);
+      const lei = Number(r.leidos || 0);
+      const trk = Number(r.tracking || 0);
+
+      // 1. Agrupación Diaria (para gráfica evolutiva)
+      const day = dailyMap.get(r.raw_date) || {
+        raw_date: r.raw_date,
+        fecha: r.fecha,
+        fecha_full: r.fecha_full,
+        total: 0,
+        enviados: 0,
+        leidos: 0,
+        sent: 0,
+        delivered: 0,
+        failed: 0,
+        no_enviado: 0,
+        tracking: 0,
+        sos_soporte: 0,
+        autogestionados: 0,
+        leidos_sin_ingreso: 0,
+        av_total: 0,
+        av_enviados: 0,
+        av_leidos: 0,
+        av_tracking: 0,
+        pref_total: 0,
+        pref_enviados: 0,
+        pref_leidos: 0,
+        pref_tracking: 0,
+      };
+      day.total += tot;
+      day.enviados += env;
+      day.leidos += lei;
+      day.sent += Number(r.sent || 0);
+      day.delivered += Number(r.delivered || 0);
+      day.failed += Number(r.failed || 0);
+      day.no_enviado += Number(r.no_enviado || 0);
+      day.tracking += trk;
+      day.sos_soporte += Number(r.sos_soporte || 0);
+      day.autogestionados += Number(r.autogestionados || 0);
+      day.leidos_sin_ingreso += Number(r.leidos_sin_ingreso || 0);
+      day.av_total += Number(r.av_total || 0);
+      day.av_enviados += Number(r.av_enviados || 0);
+      day.av_leidos += Number(r.av_leidos || 0);
+      day.av_tracking += Number(r.av_tracking || 0);
+      day.pref_total += Number(r.pref_total || 0);
+      day.pref_enviados += Number(r.pref_enviados || 0);
+      day.pref_leidos += Number(r.pref_leidos || 0);
+      day.pref_tracking += Number(r.pref_tracking || 0);
+      dailyMap.set(r.raw_date, day);
+
+      // Para Estado OT, Sector y Tipo Op solo sumamos las filas que caen en el rango seleccionado (startDate..endDate)
+      if (r.raw_date >= startDate && r.raw_date <= endDate) {
+        // 2. Por Estado OT
+        const st = estadoOtMap.get(r.estado_ot) || { estado_ot: r.estado_ot, total: 0, enviados: 0, leidos: 0, tracking: 0 };
+        st.total += tot;
+        st.enviados += env;
+        st.leidos += lei;
+        st.tracking += trk;
+        estadoOtMap.set(r.estado_ot, st);
+
+        // 3. Por Sector Operativo
+        const sec = sectorMap.get(r.sector_operativo) || { sector_operativo: r.sector_operativo, total: 0, enviados: 0, no_enviados: 0, tracking: 0, leidos: 0 };
+        sec.total += tot;
+        sec.enviados += env;
+        sec.no_enviados += Number(r.no_enviado || 0);
+        sec.tracking += trk;
+        sec.leidos += lei;
+        sectorMap.set(r.sector_operativo, sec);
+
+        // 4. Por Tipo de Operación
+        const top = tipoOpMap.get(r.tipo_operacion) || { tipo: r.tipo_operacion, total: 0, enviados: 0 };
+        top.total += tot;
+        top.enviados += env;
+        tipoOpMap.set(r.tipo_operacion, top);
+      }
+    }
+
+    const dailyRows = Array.from(dailyMap.values()).sort((a, b) => a.raw_date.localeCompare(b.raw_date));
     const kpiRowsInRange = dailyRows.filter(
       (r) => r.raw_date >= startDate && r.raw_date <= endDate
     );
+    const byEstadoOt = Array.from(estadoOtMap.values()).sort((a, b) => b.total - a.total);
+    const bySector = Array.from(sectorMap.values()).sort((a, b) => b.total - a.total);
+    const byTipoOperacion = Array.from(tipoOpMap.values()).sort((a, b) => b.total - a.total);
 
     const kpis = kpiRowsInRange.reduce(
       (acc, row) => ({
@@ -1114,19 +1159,13 @@ app.get('/api/dashboard', async (req, res) => {
       servicio_tipo: classifyOrderServiceType(o.producto, o.tipo_operacion),
     }));
 
-    const byTipoOperacion = (productoResult[0] || []).map((r: any) => ({
-      tipo: r.tipo,
-      total: Number(r.total || 0),
-      enviados: Number(r.enviados || 0),
-    }));
-
     const responsePayload = {
       ok: true,
       kpis,
       evolution: dailyRows,
       dailyInRange: kpiRowsInRange,
-      byEstadoOt: estadoOtResult[0] || [],
-      bySector: sectorResult[0] || [],
+      byEstadoOt,
+      bySector,
       byTipoOperacion,
       orders: ordersWithTipo,
       partners: partnersRanking,

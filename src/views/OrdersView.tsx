@@ -151,6 +151,9 @@ export function OrdersView({
       return (apiFetch as any)(`/api/orders/search?${params.toString()}`, { signal });
     },
     placeholderData: (prev: any) => prev,
+    staleTime: 1000 * 60 * 3,
+    gcTime: 1000 * 60 * 15,
+    refetchOnWindowFocus: false,
   });
 
   const serverOrders: RealOrder[] = ordersData?.orders || initialOrders.slice(0, 50);
