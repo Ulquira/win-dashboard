@@ -2,3 +2,5 @@
 dist/
 dist-server/
 *.log
+.env
+.env.*

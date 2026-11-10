@@ -12,43 +12,47 @@ const pool = mysql.createPool({
   ssl: { rejectUnauthorized: false },
 });
 
-async function run() {
+async function inspectIndexes() {
   try {
-    // 1. Simular query de /api/orders/search con service = 'AVER - LIMA'
-    const [ordersLima] = await pool.query(`
+    // 1. Listar todos los índices existentes en BD_Phoenix
+    const [indexes] = await pool.query(`
       SELECT 
-        v.orden_id,
-        v.ticket,
-        v.producto,
-        v.tipo_operacion,
-        v.sector_operativo,
-        v.ambito
-      FROM vw_reporte_funnel_casos_360 v
-      WHERE UPPER(TRIM(v.tipo_operacion)) IN ('AVER - LIMA')
-      LIMIT 20
+        TABLE_NAME AS tabla,
+        INDEX_NAME AS indice,
+        GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ', ') AS columnas,
+        NON_UNIQUE AS no_unico,
+        INDEX_TYPE AS tipo
+      FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE()
+      GROUP BY TABLE_NAME, INDEX_NAME, NON_UNIQUE, INDEX_TYPE
+      ORDER BY TABLE_NAME, INDEX_NAME
     `);
+    console.log('\n=== 1. ÍNDICES ACTUALES EN BD_Phoenix ===');
+    console.table(indexes);
 
-    console.log('Total órdenes devueltas para AVER - LIMA:', ordersLima.length);
-    const noLima = ordersLima.filter(o => !o.sector_operativo.startsWith('LIMA'));
-    console.log('¿Hay alguna orden que NO sea Lima?:', noLima.length);
+    // 2. Ver qué tablas físicas alimentan las vistas principales
+    const views = [
+      'vw_reporte_funnel_casos_360',
+      'vw_winordetraba',
+      'vw_reprogramaciones_detalle',
+      'vw_reporte_encuestas_enriquecido',
+    ];
 
-    // 2. Simular desglose por tipo_operacion en /api/dashboard
-    const [breakdown] = await pool.query(`
-      SELECT 
-        UPPER(TRIM(COALESCE(v.tipo_operacion, 'OTROS'))) AS tipo,
-        COUNT(*) AS total
-      FROM vw_reporte_funnel_casos_360 v
-      WHERE v.fecha_solicitud_dia >= CURDATE() - INTERVAL 7 DAY
-      GROUP BY UPPER(TRIM(COALESCE(v.tipo_operacion, 'OTROS')))
-      ORDER BY total DESC
-    `);
-    console.log('Desglose dashboard:');
-    console.table(breakdown);
+    console.log('\n=== 2. DEFINICIÓN DE VISTAS PRINCIPALES ===');
+    for (const v of views) {
+      try {
+        const [res] = await pool.query(`SHOW CREATE VIEW \`${v}\``);
+        console.log(`\n--- ${v} ---`);
+        console.log(res[0]['Create View']);
+      } catch (err) {
+        console.log(`No es vista o error en ${v}:`, err.message);
+      }
+    }
   } catch (e) {
-    console.error(e);
+    console.error('Error:', e);
   } finally {
     await pool.end();
   }
 }
 
-run();
+inspectIndexes();

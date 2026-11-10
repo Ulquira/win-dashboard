@@ -3,9 +3,14 @@ import mysql from 'mysql2/promise';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import NodeCache from 'node-cache';
+import { Redis } from 'ioredis';
 import compression from 'compression';
 import path from 'path';
 import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import { z } from 'zod';
+import rateLimit from 'express-rate-limit';
 import { fileURLToPath } from 'url';
 
 dotenv.config();
@@ -14,13 +19,80 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+// Requerido en Azure App Service (detrás de Load Balancer / Auto-Scaling) para leer la IP real del cliente
+app.set('trust proxy', 1);
+
 app.use(cors());
 app.use(compression());
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
-// Caché en RAM por 5 minutos (300 segundos)
+// Rate Limiters (Plan 1.4)
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 10, // Máx 10 intentos fallidos por IP cada 15 min
+  skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    ok: false,
+    error: 'Demasiados intentos de inicio de sesión. Intenta nuevamente en 15 minutos.',
+  },
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minuto
+  max: 180, // 180 peticiones por minuto por IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    ok: false,
+    error: 'Límite de peticiones excedido. Por favor espera unos segundos.',
+  },
+});
+
+app.use('/api', apiLimiter);
+
+// ============================================================================
+// FASE 2: CACHÉ DISTRIBUIDO REDIS (AUTO-SCALING) + FALLBACK RAM (NodeCache)
+// ============================================================================
 const queryCache = new NodeCache({ stdTTL: 300 });
+const REDIS_URL = (process.env.REDIS_URL || '').trim();
+let redisClient: Redis | null = null;
 
+if (REDIS_URL) {
+  redisClient = new Redis(REDIS_URL, {
+    maxRetriesPerRequest: 2,
+    enableReadyCheck: true,
+    tls: REDIS_URL.startsWith('rediss://') ? { rejectUnauthorized: false } : undefined,
+  });
+  redisClient.on('connect', () => console.log('🚀 Conectado a Azure Cache for Redis (Auto-Scaling activo)'));
+  redisClient.on('error', (err) => console.warn('⚠️ Aviso Redis (usando fallback RAM):', err.message));
+}
+
+async function cacheGet<T = any>(key: string): Promise<T | null> {
+  if (redisClient && redisClient.status === 'ready') {
+    try {
+      const raw = await redisClient.get(key);
+      if (raw) return JSON.parse(raw) as T;
+    } catch {
+      // Fallback silencioso a RAM
+    }
+  }
+  return (queryCache.get(key) as T) || null;
+}
+
+async function cacheSet(key: string, val: any, ttlSeconds = 300): Promise<void> {
+  queryCache.set(key, val, ttlSeconds);
+  if (redisClient && redisClient.status === 'ready') {
+    try {
+      await redisClient.set(key, JSON.stringify(val), 'EX', ttlSeconds);
+    } catch {
+      // Ignorar fallo de escritura en Redis
+    }
+  }
+}
+
+// Pool MySQL optimizado para Auto-Scaling (configurable vía DB_POOL_LIMIT)
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -29,7 +101,8 @@ const pool = mysql.createPool({
   port: Number(process.env.DB_PORT) || 3306,
   ssl: { rejectUnauthorized: false },
   waitForConnections: true,
-  connectionLimit: 15,
+  connectionLimit: Number(process.env.DB_POOL_LIMIT) || 20,
+  queueLimit: 0,
   enableKeepAlive: true,
   keepAliveInitialDelay: 10000,
   maxIdle: 10,
@@ -247,9 +320,9 @@ function resolveProductosFromServiceFilter(serviceParam: string): {
   const rawSelected = isAll
     ? []
     : serviceParam
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
 
   const canonicalSet = new Set<string>();
   const dbSrvEquivalents = new Set<string>();
@@ -318,34 +391,66 @@ function buildStrictOrderTypeSql(
 }
 
 // ============================================================================
-// MÓDULO DE AUTENTICACIÓN INTERNA (DOCUMENTO + CONTRASEÑA) Y RBAC POR ROLES
+// MÓDULO DE AUTENTICACIÓN (JWT ESTÁNDAR + BCRYPT + ZOD + RBAC)
 // ============================================================================
 const AUTH_SECRET = process.env.JWT_SECRET || SECRET_API_KEY || 'WIN_ENRUTA_SECRET_2026';
+const BCRYPT_ROUNDS = 10;
 
+// Esquemas de validación estricta con Zod (Plan 1.3)
+const LoginSchema = z.object({
+  documento: z.string().trim().min(3, 'El documento debe tener al menos 3 caracteres.').max(25),
+  password: z.string().trim().min(3, 'Ingresa una contraseña válida.').max(128),
+});
+
+const RoleUpsertSchema = z.object({
+  id: z.number().int().positive().nullable().optional(),
+  codigo: z.string().trim().min(2, 'Código obligatorio').max(50),
+  nombre: z.string().trim().min(2, 'Nombre obligatorio').max(100),
+  vistas: z.array(z.string()).default(['Dashboard']),
+  subvistas: z.array(z.string()).default(['ejecutiva']),
+  servicios: z.array(z.string()).default(['*']),
+});
+
+const UserUpsertSchema = z.object({
+  id: z.number().int().positive().nullable().optional(),
+  documento: z.string().trim().min(3, 'Documento obligatorio').max(20),
+  nombre: z.string().trim().min(2, 'Nombre obligatorio').max(120),
+  email: z.string().trim().max(120).optional().or(z.literal('')),
+  password: z.string().trim().max(128).optional(),
+  rol_id: z.coerce.number().int().positive().default(1),
+  activo: z.union([z.boolean(), z.number()]).default(true),
+});
+
+// JWT Estándar con retrocompatibilidad HMAC por si hay sesiones previas abiertas (Plan 1.2)
 function signAuthToken(payload: Record<string, any>): string {
-  const data = { ...payload, exp: Date.now() + 1000 * 60 * 60 * 12 }; // 12 horas
-  const base64Payload = Buffer.from(JSON.stringify(data)).toString('base64url');
-  const signature = crypto
-    .createHmac('sha256', AUTH_SECRET)
-    .update(base64Payload)
-    .digest('base64url');
-  return `${base64Payload}.${signature}`;
+  const { exp, iat, ...cleanPayload } = payload;
+  return jwt.sign(cleanPayload, AUTH_SECRET, {
+    algorithm: 'HS256',
+    expiresIn: '12h',
+  });
 }
 
 function verifyAuthToken(token?: string): Record<string, any> | null {
-  if (!token || !token.includes('.')) return null;
-  const [base64Payload, signature] = token.split('.');
-  const expectedSig = crypto
-    .createHmac('sha256', AUTH_SECRET)
-    .update(base64Payload)
-    .digest('base64url');
-  if (signature !== expectedSig) return null;
+  if (!token) return null;
   try {
-    const decoded = JSON.parse(Buffer.from(base64Payload, 'base64url').toString('utf8'));
-    if (decoded.exp && Date.now() > decoded.exp) return null;
-    return decoded;
+    return jwt.verify(token, AUTH_SECRET) as Record<string, any>;
   } catch {
-    return null;
+    // Fallback temporal para tokens de 2 segmentos emitidos antes de esta actualización
+    const parts = token.split('.');
+    if (parts.length !== 2) return null;
+    const [base64Payload, signature] = parts;
+    const expectedSig = crypto
+      .createHmac('sha256', AUTH_SECRET)
+      .update(base64Payload)
+      .digest('base64url');
+    if (signature !== expectedSig) return null;
+    try {
+      const decoded = JSON.parse(Buffer.from(base64Payload, 'base64url').toString('utf8'));
+      if (decoded.exp && Date.now() > decoded.exp) return null;
+      return decoded;
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -361,6 +466,29 @@ function parseJsonSafe(raw: any, fallback: string[] = ['*']): string[] {
       .map((s) => s.trim())
       .filter(Boolean);
   }
+}
+
+function requireAuth(req: express.Request, res: express.Response): Record<string, any> | null {
+  const authHeader = String(req.headers.authorization || '');
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  const decoded = verifyAuthToken(token);
+  if (!decoded) {
+    res.status(401).json({ ok: false, error: 'Sesión expirada o inválida' });
+    return null;
+  }
+  return decoded;
+}
+
+function requireAdmin(req: express.Request, res: express.Response): Record<string, any> | null {
+  const decoded = requireAuth(req, res);
+  if (!decoded) return null;
+  const rolCodigo = String(decoded?.permisos?.rolCodigo || '').toUpperCase();
+  const vistas: string[] = decoded?.permisos?.vistas || [];
+  if (rolCodigo !== 'ADMIN' && !vistas.includes('*') && !vistas.includes('Accesos')) {
+    res.status(403).json({ ok: false, error: 'Acceso restringido a Administradores.' });
+    return null;
+  }
+  return decoded;
 }
 
 // Helper que restringe cualquier filtro de servicio del frontend a los servicios permitidos por el Rol en el JWT
@@ -390,15 +518,18 @@ function enforceRoleServiceScope(req: express.Request, requestedService: string)
   return reqList.length > 0 ? reqList.join(',') : allowed.join(',');
 }
 
-// POST /api/auth/login -> Valida Documento + Contraseña y devuelve Rol + Permisos reales desde MySQL
-app.post('/api/auth/login', async (req, res) => {
+// POST /api/auth/login -> Valida con Zod + Rate Limit + Bcrypt (con auto-migración a Bcrypt)
+app.post('/api/auth/login', loginLimiter, async (req, res) => {
   try {
-    const documento = String(req.body?.documento || '').trim();
-    const password = String(req.body?.password || '').trim();
-
-    if (!documento || !password) {
-      return res.status(400).json({ ok: false, error: 'Ingresa tu documento y contraseña.' });
+    const parsedBody = LoginSchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      return res.status(400).json({
+        ok: false,
+        error: parsedBody.error.issues[0]?.message || 'Credenciales inválidas.',
+      });
     }
+
+    const { documento, password } = parsedBody.data;
 
     const [rows]: any = await pool.query(
       `
@@ -423,15 +554,30 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     if (userRow.activo !== undefined && Number(userRow.activo) === 0) {
-      return res.status(403).json({ ok: false, error: 'Tu usuario se encuentra inactivo. Contacta al administrador.' });
+      return res.status(403).json({
+        ok: false,
+        error: 'Tu usuario se encuentra inactivo. Contacta al administrador.',
+      });
     }
 
     const dbPass = String(userRow.password ?? userRow.clave ?? userRow.password_hash ?? '');
-    const sha256Input = crypto.createHash('sha256').update(password).digest('hex');
+    const isBcryptHash = /^\$2[aby]\$\d{2}\$/.test(dbPass);
+    let isPasswordValid = false;
 
-    const isPasswordValid =
-      dbPass === password ||
-      dbPass === sha256Input;
+    if (isBcryptHash) {
+      isPasswordValid = await bcrypt.compare(password, dbPass);
+    } else {
+      const sha256Input = crypto.createHash('sha256').update(password).digest('hex');
+      isPasswordValid = dbPass === password || dbPass === sha256Input;
+
+      // Auto-migración transparente: si la contraseña estaba en texto plano, la encripta con Bcrypt en BD
+      if (isPasswordValid && userRow.id) {
+        const newHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+        pool
+          .query(`UPDATE usuarios SET password = ? WHERE id = ?`, [newHash, Number(userRow.id)])
+          .catch(() => { });
+      }
+    }
 
     if (!isPasswordValid) {
       return res.status(401).json({ ok: false, error: 'Documento o contraseña incorrectos.' });
@@ -447,9 +593,9 @@ app.post('/api/auth/login', async (req, res) => {
 
     const userPayload = {
       id: Number(userRow.id || 1),
-      documento: String(userRow.documento || userRow.dni || documento),
-      nombre: String(userRow.nombre || userRow.nombres || `Usuario ${documento}`),
-      email: String(userRow.email || userRow.correo || ''),
+      documento: String(userRow.documento || documento),
+      nombre: String(userRow.nombre || `Usuario ${documento}`),
+      email: String(userRow.email || ''),
       permisos,
     };
 
@@ -457,11 +603,11 @@ app.post('/api/auth/login', async (req, res) => {
     return res.json({ ok: true, token, user: userPayload });
   } catch (err: any) {
     console.error('❌ Error en /api/auth/login:', err.message);
-    return res.status(500).json({ ok: false, error: 'Error interno al validar credenciales: ' + err.message });
+    return res.status(500).json({ ok: false, error: 'Error interno al validar credenciales.' });
   }
 });
 
-// Inicializar tablas RBAC automáticamente si no existen
+// Inicializar tablas RBAC automáticamente y hashear contraseña inicial
 async function ensureRbacTables() {
   try {
     await pool.query(`
@@ -494,30 +640,28 @@ async function ensureRbacTables() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    await pool.query(`
-      INSERT IGNORE INTO usuarios (documento, nombre, email, password, rol_id, activo) VALUES
-      ('99999999', 'Admin General WIN', 'admin@win.pe', 'win2026', 1, 1)
-    `);
+    const defaultHash = await bcrypt.hash('win2026', BCRYPT_ROUNDS);
+    await pool.query(
+      `INSERT IGNORE INTO usuarios (documento, nombre, email, password, rol_id, activo) VALUES ('99999999', 'Admin General WIN', 'admin@win.pe', ?, 1, 1)`,
+      [defaultHash]
+    );
   } catch (err: any) {
     console.warn('⚠️ Aviso verificando tablas RBAC:', err.message);
   }
 }
 await ensureRbacTables();
 
-function requireAdmin(req: express.Request, res: express.Response): Record<string, any> | null {
-  const authHeader = String(req.headers.authorization || '');
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-  const decoded = verifyAuthToken(token);
-  if (!decoded) {
-    res.status(401).json({ ok: false, error: 'Sesión expirada o inválida' });
-    return null;
-  }
-  return decoded;
-}
+// Middleware global: exige sesión JWT válida en cualquier ruta /api/* (excepto /api/auth/login)
+app.use('/api', (req, res, next) => {
+  if (req.path === '/auth/login') return next();
+  const decoded = requireAuth(req, res);
+  if (!decoded) return;
+  next();
+});
 
 // GET /api/auth/me -> Verifica sesión activa y devuelve permisos actualizados desde BD
 app.get('/api/auth/me', async (req, res) => {
-  const decoded = requireAdmin(req, res);
+  const decoded = requireAuth(req, res);
   if (!decoded) return;
   try {
     const [rows]: any = await pool.query(
@@ -596,31 +740,34 @@ app.get('/api/admin/rbac', async (req, res) => {
   }
 });
 
-// POST /api/admin/roles -> Crear o actualizar un Rol y sus permisos
+// POST /api/admin/roles -> Crear o actualizar un Rol validado con Zod
 app.post('/api/admin/roles', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   try {
-    const { id, codigo, nombre, vistas, subvistas, servicios } = req.body;
-    const cleanCodigo = String(codigo || '').trim().toUpperCase().replace(/\s+/g, '_');
-    const cleanNombre = String(nombre || '').trim();
-
-    if (!cleanCodigo || !cleanNombre) {
-      return res.status(400).json({ ok: false, error: 'Código y nombre del rol son obligatorios.' });
+    const parsed = RoleUpsertSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        ok: false,
+        error: parsed.error.issues[0]?.message || 'Datos de rol inválidos.',
+      });
     }
 
-    const vJson = JSON.stringify(Array.isArray(vistas) && vistas.length > 0 ? vistas : ['Dashboard']);
-    const svJson = JSON.stringify(Array.isArray(subvistas) && subvistas.length > 0 ? subvistas : ['ejecutiva']);
-    const sJson = JSON.stringify(Array.isArray(servicios) && servicios.length > 0 ? servicios : ['*']);
+    const { id, codigo, nombre, vistas, subvistas, servicios } = parsed.data;
+    const cleanCodigo = codigo.toUpperCase().replace(/\s+/g, '_');
+
+    const vJson = JSON.stringify(vistas.length > 0 ? vistas : ['Dashboard']);
+    const svJson = JSON.stringify(subvistas.length > 0 ? subvistas : ['ejecutiva']);
+    const sJson = JSON.stringify(servicios.length > 0 ? servicios : ['*']);
 
     if (id) {
       await pool.query(
         `UPDATE roles SET codigo = ?, nombre = ?, vistas_permitidas = ?, subvistas_permitidas = ?, servicios_permitidos = ? WHERE id = ?`,
-        [cleanCodigo, cleanNombre, vJson, svJson, sJson, Number(id)]
+        [cleanCodigo, nombre, vJson, svJson, sJson, id]
       );
     } else {
       await pool.query(
         `INSERT INTO roles (codigo, nombre, vistas_permitidas, subvistas_permitidas, servicios_permitidos) VALUES (?, ?, ?, ?, ?)`,
-        [cleanCodigo, cleanNombre, vJson, svJson, sJson]
+        [cleanCodigo, nombre, vJson, svJson, sJson]
       );
     }
     return res.json({ ok: true });
@@ -629,40 +776,45 @@ app.post('/api/admin/roles', async (req, res) => {
   }
 });
 
-// POST /api/admin/users -> Crear o actualizar un Usuario
+// POST /api/admin/users -> Crear o actualizar un Usuario con hash Bcrypt y Zod
 app.post('/api/admin/users', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   try {
-    const { id, documento, nombre, email, password, rol_id, activo } = req.body;
-    const docClean = String(documento || '').trim();
-    const nomClean = String(nombre || '').trim();
-    const mailClean = String(email || '').trim();
-    const rolIdNum = Number(rol_id) || 1;
-    const actNum = activo === false || Number(activo) === 0 ? 0 : 1;
-
-    if (!docClean || !nomClean) {
-      return res.status(400).json({ ok: false, error: 'Documento y nombre son obligatorios.' });
+    const parsed = UserUpsertSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        ok: false,
+        error: parsed.error.issues[0]?.message || 'Datos de usuario inválidos.',
+      });
     }
 
+    const { id, documento, nombre, email, password, rol_id, activo } = parsed.data;
+    const actNum = activo === false || Number(activo) === 0 ? 0 : 1;
+
     if (id) {
-      if (password && String(password).trim() !== '') {
+      if (password && password.length > 0) {
+        const passHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
         await pool.query(
           `UPDATE usuarios SET documento = ?, nombre = ?, email = ?, password = ?, rol_id = ?, activo = ? WHERE id = ?`,
-          [docClean, nomClean, mailClean, String(password).trim(), rolIdNum, actNum, Number(id)]
+          [documento, nombre, email || '', passHash, rol_id, actNum, id]
         );
       } else {
         await pool.query(
           `UPDATE usuarios SET documento = ?, nombre = ?, email = ?, rol_id = ?, activo = ? WHERE id = ?`,
-          [docClean, nomClean, mailClean, rolIdNum, actNum, Number(id)]
+          [documento, nombre, email || '', rol_id, actNum, id]
         );
       }
     } else {
-      if (!password || !String(password).trim()) {
-        return res.status(400).json({ ok: false, error: 'La contraseña es obligatoria para usuarios nuevos.' });
+      if (!password || password.length < 4) {
+        return res.status(400).json({
+          ok: false,
+          error: 'La contraseña es obligatoria (mínimo 4 caracteres) para usuarios nuevos.',
+        });
       }
+      const passHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
       await pool.query(
         `INSERT INTO usuarios (documento, nombre, email, password, rol_id, activo) VALUES (?, ?, ?, ?, ?, ?)`,
-        [docClean, nomClean, mailClean, String(password).trim(), rolIdNum, actNum]
+        [documento, nombre, email || '', passHash, rol_id, actNum]
       );
     }
     return res.json({ ok: true });
@@ -675,7 +827,11 @@ app.post('/api/admin/users', async (req, res) => {
 app.delete('/api/admin/users/:id', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   try {
-    await pool.query(`DELETE FROM usuarios WHERE id = ?`, [Number(req.params.id)]);
+    const userId = Number(req.params.id);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({ ok: false, error: 'ID de usuario inválido.' });
+    }
+    await pool.query(`DELETE FROM usuarios WHERE id = ?`, [userId]);
     return res.json({ ok: true });
   } catch (err: any) {
     return res.status(500).json({ ok: false, error: err.message });
@@ -771,9 +927,9 @@ app.get('/api/dashboard', async (req, res) => {
 
   const cacheKey = `dash_${startDate}_${endDate}_${service}_${zone}`;
   if (refresh !== 'true') {
-    const cachedData = queryCache.get(cacheKey);
+    const cachedData = await cacheGet(cacheKey);
     if (cachedData) {
-      console.log(`🚀 Respuesta instantánea desde RAM (${Date.now() - startTime}ms)`);
+      console.log(`🚀 Respuesta instantánea desde Caché (${Date.now() - startTime}ms)`);
       return res.json(cachedData);
     }
   }
@@ -885,38 +1041,8 @@ app.get('/api/dashboard', async (req, res) => {
         `,
         [chartStartDate, endDate, ...extraParams]
       ),
-      pool.query(
-        `
-        SELECT 
-          v.*,
-          DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_solicitud_fmt,
-          w.\`Número Documento\` AS numero_documento,
-          w.\`Tipo Documento\` AS tipo_documento,
-          w.CodiSeguiClien AS codi_segui_clien,
-          w.CodiClien AS codi_clien,
-          w.CodiSegui AS codi_segui_ot,
-          w.Cuadrilla AS cuadrilla_completa,
-          w.Proveedeor AS proveedor_ot,
-          w.Direccion AS direccion_cliente,
-          w.IdenServi AS plan_contratado,
-          w.Email AS email_cliente,
-          w.\`Diagnóstico Técnico\` AS diagnostico_tecnico,
-          w.\`Observaciones Tareas\` AS observaciones_tareas,
-          w.\`Historial Estados\` AS historial_estados,
-          w.\`Datos Técnicos\` AS datos_tecnicos,
-          w.Georeferencia AS georeferencia_cliente,
-          w.Georeferencia_tecnico AS georeferencia_tecnico,
-          w.\`Motivo Finalización\` AS motivo_finalizacion,
-          w.\`Usuario Asignó\` AS usuario_asigno
-        FROM vw_reporte_funnel_casos_360 v
-        LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
-        WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
-        ${filterSql}
-        ORDER BY v.orden_id DESC
-        LIMIT 300
-        `,
-        [startDate, endDate, ...extraParams]
-      ),
+      // Las vistas de Órdenes y Seguimiento usan sus propios endpoints paginados (/api/orders/search y /api/tracking/search)
+      Promise.resolve([[]]),
       pool
         .query(
           `
@@ -1749,20 +1875,15 @@ app.get('/api/operations', async (req, res) => {
   const searchQ = String(q || '').trim();
   const cacheKey = `ops_raw_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
   if (refresh !== 'true') {
-    const cached = queryCache.get(cacheKey);
+    const cached = await cacheGet(cacheKey);
     if (cached) return res.json(cached);
   }
 
   try {
     if (tiposUnicosList.length === 0) await loadTipoServicioCache();
 
-    // Expresión de fecha sobre w.`F.Soli` (con fallback a w.`F.Visita`) compatible con YYYY-MM-DD y DD/MM/YYYY
-    const rawDateCol = `COALESCE(NULLIF(TRIM(CAST(w.\`F.Soli\` AS CHAR)), ''), NULLIF(TRIM(CAST(w.\`F.Visita\` AS CHAR)), ''))`;
-    const dateExpr = `COALESCE(
-      STR_TO_DATE(SUBSTRING_INDEX(${rawDateCol}, ' ', 1), '%Y-%m-%d'),
-      STR_TO_DATE(SUBSTRING_INDEX(${rawDateCol}, ' ', 1), '%d/%m/%Y'),
-      DATE(w.\`F.Soli\`)
-    )`;
+    // Uso directo de w.`F.Soli` para aprovechar el índice B-Tree `idx_f_soli` en vw_winordetraba
+    const dateExpr = `DATE(w.\`F.Soli\`)`;
 
     const colEstado = `COALESCE(NULLIF(TRIM(w.\`Estado OT\`), ''), NULLIF(TRIM(w.Estado), ''), 'SIN ESTADO')`;
     const rawPartnerExpr = `UPPER(COALESCE(NULLIF(TRIM(w.Proveedeor), ''), NULLIF(TRIM(w.Empresa), ''), 'SIN PARTNER'))`;
@@ -1784,11 +1905,11 @@ app.get('/api/operations', async (req, res) => {
     const chartParams: any[] = [];
 
     if (ignoreDates !== 'true') {
-      whereClauses.push(`w.\`F.Soli\` >= ? AND w.\`F.Soli\` <= ?`);
-      queryParams.push(`${startDate} 00:00:00`, `${endDate} 23:59:59`);
+      whereClauses.push(`w.\`F.Soli\` >= ? AND w.\`F.Soli\` < DATE_ADD(?, INTERVAL 1 DAY)`);
+      queryParams.push(startDate, endDate);
 
-      chartWhereClauses.push(`w.\`F.Soli\` >= ? AND w.\`F.Soli\` <= ?`);
-      chartParams.push(`${chartStartDate} 00:00:00`, `${endDate} 23:59:59`);
+      chartWhereClauses.push(`w.\`F.Soli\` >= ? AND w.\`F.Soli\` < DATE_ADD(?, INTERVAL 1 DAY)`);
+      chartParams.push(chartStartDate, endDate);
     }
 
     const colTipoOrdenOt = `COALESCE(NULLIF(TRIM(w.Producto), ''), NULLIF(TRIM(w.\`Motivo Trabajo\`), ''), '')`;
@@ -2169,7 +2290,22 @@ async function warmupCache() {
 }
 
 const PORT = Number(process.env.PORT || process.env.WEBSITES_PORT || 8080);
-app.listen(PORT, () => {
+const serverInstance = app.listen(PORT, () => {
   console.log(`✅ Servidor WIN en RUTA activo en puerto ${PORT} (Capa Intermedia: ${CAPA_INTERMEDIA_URL})`);
   warmupCache().catch(() => { });
 });
+
+async function gracefulShutdown(signal: string) {
+  console.log(`🛑 Recibida señal ${signal}. Cerrando conexiones de forma segura...`);
+  serverInstance.close();
+  try {
+    if (redisClient) await redisClient.quit();
+    await pool.end();
+  } catch {
+    // Ignorar errores al cerrar
+  }
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
