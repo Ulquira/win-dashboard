@@ -303,6 +303,38 @@ async function loadTipoServicioCache() {
 }
 await loadTipoServicioCache();
 
+// ============================================================================
+// FASE 1: SINCRONIZACIÓN AUTOMÁTICA DE TABLA MATERIALIZADA (mat_funnel_casos_360)
+// ============================================================================
+let isSyncingMatFunnel = false;
+
+async function syncMatFunnelIncremental(customStart?: string, customEnd?: string): Promise<void> {
+  if (isSyncingMatFunnel && !customStart) return;
+  isSyncingMatFunnel = true;
+  try {
+    if (customStart && customEnd) {
+      await pool.query(`CALL sp_sync_mat_funnel_range(?, CONCAT(?, ' 23:59:59'))`, [
+        `${customStart} 00:00:00`,
+        customEnd,
+      ]);
+    } else {
+      await pool.query(
+        `CALL sp_sync_mat_funnel_range(DATE_SUB(NOW(), INTERVAL 4 HOUR), DATE_ADD(NOW(), INTERVAL 1 DAY))`
+      );
+    }
+  } catch (err: any) {
+    console.warn('⚠️ Aviso en syncMatFunnelIncremental:', err.message);
+  } finally {
+    isSyncingMatFunnel = false;
+  }
+}
+
+// Alimentar y actualizar automáticamente mat_funnel_casos_360 cada 60 segundos en segundo plano
+const matSyncInterval = setInterval(() => {
+  syncMatFunnelIncremental().catch(() => {});
+}, 60 * 1000);
+matSyncInterval.unref();
+
 /**
  * Resuelve estrictamente la lista de productos (de la tabla `tiposervicio`)
  * que pertenecen al tipo de servicio seleccionado.
@@ -893,7 +925,7 @@ app.get('/api/home/status', async (_req, res) => {
 // 1. Endpoint de catálogos para filtros desplegables
 app.get('/api/filters', async (_req, res) => {
   try {
-    const cachedFilters: any = queryCache.get('catalog_filters');
+    const cachedFilters: any = await cacheGet('catalog_filters');
     if (
       cachedFilters &&
       cachedFilters.ok &&
@@ -909,7 +941,7 @@ app.get('/api/filters', async (_req, res) => {
       pool
         .query(`
           SELECT DISTINCT sector_operativo AS zona
-          FROM vw_reporte_funnel_casos_360
+          FROM mat_funnel_casos_360
           WHERE sector_operativo IS NOT NULL AND TRIM(sector_operativo) != ''
           ORDER BY sector_operativo
         `)
@@ -917,7 +949,7 @@ app.get('/api/filters', async (_req, res) => {
       pool
         .query(`
           SELECT DISTINCT COALESCE(NULLIF(TRIM(partner), ''), 'SIN PARTNER') AS partner
-          FROM vw_reporte_funnel_casos_360
+          FROM mat_funnel_casos_360
           WHERE partner IS NOT NULL AND TRIM(partner) != ''
           ORDER BY partner
         `)
@@ -938,9 +970,9 @@ app.get('/api/filters', async (_req, res) => {
       partners: pList,
       dateRange: { minDate: todayStr, maxDate: todayStr },
     };
-
-    queryCache.set('catalog_filters', payload, 3600);
+    await cacheSet('catalog_filters', payload, 3600);
     return res.json(payload);
+
   } catch (error: any) {
     return res.json({
       ok: true,
@@ -976,6 +1008,9 @@ app.get('/api/dashboard', async (req, res) => {
 
   try {
     if (tiposUnicosList.length === 0) await loadTipoServicioCache();
+    if (refresh === 'true') {
+      await syncMatFunnelIncremental(startDate, endDate);
+    }
 
     // Garantizar siempre mínimo 7 días hacia atrás desde endDate para la gráfica evolutiva
     const [ey, em, ed] = endDate.split('-').map(Number);
@@ -1075,7 +1110,7 @@ app.get('/api/dashboard', async (req, res) => {
           COALESCE(SUM((UPPER(TRIM(v.distrito)) NOT IN (${avListSql}) OR v.distrito IS NULL) AND v.se_envio_wsp = 'SI'), 0) AS pref_enviados,
           COALESCE(SUM((UPPER(TRIM(v.distrito)) NOT IN (${avListSql}) OR v.distrito IS NULL) AND v.estado_wsp = 'read'), 0) AS pref_leidos,
           COALESCE(SUM((UPPER(TRIM(v.distrito)) NOT IN (${avListSql}) OR v.distrito IS NULL) AND v.ingreso_tracking = 'SI'), 0) AS pref_tracking
-        FROM vw_reporte_funnel_casos_360 v
+        FROM mat_funnel_casos_360 v
         WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
         ${filterSql}
         GROUP BY 
@@ -1117,14 +1152,10 @@ app.get('/api/dashboard', async (req, res) => {
             COUNT(DISTINCT ea.id) AS surveys,
             AVG(COALESCE(ea.satisfaccion_atencion, ea.satisfaccion_experiencia) + 0) AS avg_score
           FROM encuesta_app ea
-          LEFT JOIN vw_winordetraba w ON w.OrdenId = COALESCE(
-            CAST(NULLIF(TRIM(ea.orden_id), '') AS UNSIGNED),
-            (SELECT w2.OrdenId FROM vw_winordetraba w2 WHERE w2.token = ea.token LIMIT 1),
-            (SELECT w3.OrdenId FROM vw_winordetraba w3 WHERE w3.CodiSegui = ea.codisegui LIMIT 1)
-          )
+          LEFT JOIN vw_winordetraba w ON w.OrdenId = ea.orden_id_num
           LEFT JOIN tiposervicio ts ON w.Producto = ts.Servicio
-          WHERE CAST(ea.fecha_registro AS CHAR) >= CONCAT(?, ' 00:00:00')
-            AND CAST(ea.fecha_registro AS CHAR) <= CONCAT(?, ' 23:59:59')
+          WHERE ea.fecha_registro >= CONCAT(?, ' 00:00:00')
+            AND ea.fecha_registro <= CONCAT(?, ' 23:59:59')
           ${encFilters.join(' ')}
           GROUP BY partner_raw, tipo_operacion, sector_operativo
           ORDER BY avg_score DESC, surveys DESC
@@ -1140,11 +1171,19 @@ app.get('/api/dashboard', async (req, res) => {
     const totalReprogReal = Number(reprogResult?.[0]?.[0]?.total_reprog || 0);
 
     let encRowsRaw: any[] = encResult?.[0] || [];
+    const encuestasByService = encRowsRaw.map((r: any) => ({
+      partner: cleanPartnerName(r.partner_raw),
+      tipo_operacion: classifyOrderServiceType(r.tipo_operacion, r.tipo_operacion),
+      sector_operativo: String(r.sector_operativo || 'SIN SECTOR').trim(),
+      surveys: Number(r.surveys || 0),
+      avg_score: Number(r.avg_score || 0),
+    }));
+
     const partnerAggMap = new Map<string, { partner: string; surveys: number; sumPoints: number }>();
-    for (const r of encRowsRaw) {
-      const pName = cleanPartnerName(r.partner_raw);
-      const sv = Number(r.surveys || 0);
-      const avg = Number(r.avg_score || 0);
+    for (const r of encuestasByService) {
+      const pName = r.partner;
+      const sv = r.surveys;
+      const avg = r.avg_score;
       const cur = partnerAggMap.get(pName) || { partner: pName, surveys: 0, sumPoints: 0 };
       cur.surveys += sv;
       cur.sumPoints += avg * sv;
@@ -1339,6 +1378,7 @@ app.get('/api/dashboard', async (req, res) => {
     const responsePayload = {
       ok: true,
       rawAggregated,
+      encuestasByService,
       kpis,
       evolution: dailyRows,
       dailyInRange: kpiRowsInRange,
@@ -1349,9 +1389,8 @@ app.get('/api/dashboard', async (req, res) => {
       partners: partnersRanking,
     };
 
-    queryCache.set(cacheKey, responsePayload);
-    console.log(`⚡ Consulta Azure completada y guardada en caché en ${Date.now() - startTime}ms`);
-
+    await cacheSet(cacheKey, responsePayload, 300);
+    console.log(`✅ Consulta Azure completada y guardada en caché en ${Date.now() - startTime}ms`);
     res.json(responsePayload);
   } catch (error: any) {
     console.error('❌ Error SQL en /api/dashboard:', error.message);
@@ -1514,7 +1553,7 @@ app.get('/api/orders/search', async (req, res) => {
       pool.query(
         `
         SELECT COUNT(*) AS total
-        FROM vw_reporte_funnel_casos_360 v
+        FROM mat_funnel_casos_360 v
         LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
         ${whereSql}
         `,
@@ -1543,7 +1582,7 @@ app.get('/api/orders/search', async (req, res) => {
           w.Georeferencia_tecnico AS georeferencia_tecnico,
           w.\`Motivo Finalización\` AS motivo_finalizacion,
           w.\`Usuario Asignó\` AS usuario_asigno
-        FROM vw_reporte_funnel_casos_360 v
+        FROM mat_funnel_casos_360 v
         LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
         ${whereSql}
         ORDER BY v.orden_id DESC
@@ -1607,8 +1646,10 @@ app.get('/api/tracking/search', async (req, res) => {
 
     const cacheKey = `trk_${startDate}_${endDate}_${service}_${zone}_${q}_${ignoreDates}_${fEstadoChat}_${fSla}_${fTurno}_${fSoloConChat}_${fSoloSos}_${fSoloLogChat}_${page}_${pageSize}`;
     if (!refresh) {
-      const cached = queryCache.get(cacheKey);
+      const cached = await cacheGet(cacheKey);
       if (cached) return res.json(cached);
+    } else {
+      await syncMatFunnelIncremental(startDate, endDate);
     }
 
     const whereClauses: string[] = [];
@@ -1675,37 +1716,56 @@ app.get('/api/tracking/search', async (req, res) => {
 
     const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-    const logsChatSubquery = `
+    // Subconsulta ligera solo de IDs (sin leer LONGTEXT mensajes_json en el escaneo inicial)
+    const logsChatLightJoin = `
       LEFT JOIN (
-        SELECT l1.id, l1.orden_id, l1.token, l1.grupo_servicio, l1.motivo, l1.estado_chat, l1.mensajes_json, l1.updated_at
-        FROM logs_chat l1
-        INNER JOIN (
-          SELECT orden_id, MAX(id) AS max_id
-          FROM logs_chat
-          GROUP BY orden_id
-        ) l2 ON l1.id = l2.max_id
+        SELECT orden_id, MAX(id) AS max_id
+        FROM logs_chat
+        GROUP BY orden_id
       ) lc ON lc.orden_id = v.orden_id
     `;
 
-    // En COUNT(*) solo unimos vw_winordetraba si el usuario escribió en el buscador 'q'
-    const countWinJoin = q ? `LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id` : '';
-
+    const needsWinJoinInFilter = Boolean(q);
+    const filterWinJoin = needsWinJoinInFilter ? `LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id` : '';
     const needsLogsChatInCount = fSoloLogChat || fSoloSos || fSoloConChat || fTurno.toUpperCase() === 'BOT';
-    const countLogsChatJoin = needsLogsChatInCount ? logsChatSubquery : '';
+    const countLogsChatJoin = needsLogsChatInCount ? logsChatLightJoin : '';
 
-    const [countResult, rowsResult]: any = await Promise.all([
+    // Fase 1: Obtener COUNT y solo las 50 llaves ordenadas sin arrastrar JSONs pesados ni vw_winordetraba completo
+    const [countResult, pageIdsResult]: any = await Promise.all([
       pool.query(
         `
         SELECT COUNT(*) AS total
-        FROM vw_reporte_funnel_casos_360 v
+        FROM mat_funnel_casos_360 v
         LEFT JOIN historial_chats_mantra h ON h.orden_id = v.orden_id
-        ${countWinJoin}
+        ${filterWinJoin}
         ${countLogsChatJoin}
         ${whereSql}
         `,
         params
       ),
       pool.query(
+        `
+        SELECT v.orden_id, lc.max_id AS log_chat_id
+        FROM mat_funnel_casos_360 v
+        LEFT JOIN historial_chats_mantra h ON h.orden_id = v.orden_id
+        ${filterWinJoin}
+        ${logsChatLightJoin}
+        ${whereSql}
+        ORDER BY (lc.max_id IS NOT NULL) DESC, (h.orden_id IS NOT NULL) DESC, v.orden_id DESC
+        LIMIT ? OFFSET ?
+        `,
+        [...params, pageSize, offset]
+      ),
+    ]);
+
+    const pageItems: { orden_id: number; log_chat_id: number | null }[] = pageIdsResult?.[0] || [];
+    let rowsResult: any = [[]];
+
+    // Fase 2 (Late Row Lookup): Hidratar datos pesados y JSONs únicamente para las 50 órdenes visibles
+    if (pageItems.length > 0) {
+      const idList = pageItems.map((x) => x.orden_id);
+      const idPlaceholders = idList.map(() => '?').join(',');
+      rowsResult = await pool.query(
         `
         SELECT 
           v.*,
@@ -1735,17 +1795,25 @@ app.get('/api/tracking/search', async (req, res) => {
           lc.estado_chat AS log_estado_chat,
           lc.mensajes_json AS log_mensajes_json,
           lc.updated_at AS log_updated_at
-        FROM vw_reporte_funnel_casos_360 v
+        FROM mat_funnel_casos_360 v
         LEFT JOIN historial_chats_mantra h ON h.orden_id = v.orden_id
         LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
-        ${logsChatSubquery}
-        ${whereSql}
-        ORDER BY (lc.id IS NOT NULL) DESC, (h.ultimos_mensajes_json IS NOT NULL) DESC, v.orden_id DESC
-        LIMIT ? OFFSET ?
+        LEFT JOIN (
+          SELECT l1.id, l1.orden_id, l1.token, l1.grupo_servicio, l1.motivo, l1.estado_chat, l1.mensajes_json, l1.updated_at
+          FROM logs_chat l1
+          INNER JOIN (
+            SELECT orden_id, MAX(id) AS max_id
+            FROM logs_chat
+            WHERE orden_id IN (${idPlaceholders})
+            GROUP BY orden_id
+          ) l2 ON l1.id = l2.max_id
+        ) lc ON lc.orden_id = v.orden_id
+        WHERE v.orden_id IN (${idPlaceholders})
+        ORDER BY FIELD(v.orden_id, ${idPlaceholders})
         `,
-        [...params, pageSize, offset]
-      ),
-    ]);
+        [...idList, ...idList, ...idList]
+      );
+    }
 
     const total = Number(countResult?.[0]?.[0]?.total || 0);
     const rows = (rowsResult?.[0] || []).map((r: any) => ({
@@ -1766,7 +1834,7 @@ app.get('/api/tracking/search', async (req, res) => {
       orders: rows,
     };
 
-    queryCache.set(cacheKey, payload, 45);
+    await cacheSet(cacheKey, payload, 45);
     return res.json(payload);
   } catch (error: any) {
     console.error('❌ Error en /api/tracking/search:', error.message);
@@ -1774,101 +1842,35 @@ app.get('/api/tracking/search', async (req, res) => {
   }
 });
 
-// 5. Endpoint Live contra CAPA_INTERMEDIA_URL + Fallback BD usando config_plantillas_mantra e historial_chats_mantra
+// 5. Endpoint ultrarrápido directo desde tabla local historial_chats_mantra
 app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
   try {
     const rawPhone = String(req.query.phone || '').replace(/\D/g, '');
     const phone9 = rawPhone.slice(-9);
     const ordenId = req.query.ordenId ? Number(req.query.ordenId) : null;
-    const grupoServicio = String(req.query.grupoServicio || 'GENERAL').trim();
     const limit = Number(req.query.limit) || 1000;
 
     if (!phone9 && !ordenId) {
       return res.status(400).json({ ok: false, error: 'Parámetro phone u ordenId requerido' });
     }
 
-    let apiKey: string = SECRET_API_KEY;
-    let groupId: string | null = null;
-    try {
-      const [cfgRows]: any = await pool.query(
-        `
-        SELECT group_id, api_key, tipo_servicio
-        FROM config_plantillas_mantra
-        WHERE UPPER(tipo_servicio) LIKE ? OR ? LIKE CONCAT('%', UPPER(tipo_servicio), '%')
-        LIMIT 1
-        `,
-        [`%${grupoServicio.toUpperCase()}%`, grupoServicio.toUpperCase()]
+    // Búsqueda indexada prioritaria por orden_id (instantánea) y fallback por teléfono
+    let chatRows: any[] = [];
+    if (ordenId) {
+      const [byOrder]: any = await pool.query(
+        `SELECT * FROM historial_chats_mantra WHERE orden_id = ? LIMIT 1`,
+        [ordenId]
       );
-      if (cfgRows?.[0]) {
-        apiKey = cfgRows[0].api_key || apiKey;
-        groupId = cfgRows[0].group_id || null;
-      } else {
-        const [fallbackCfg]: any = await pool.query(
-          `SELECT group_id, api_key FROM config_plantillas_mantra WHERE api_key IS NOT NULL LIMIT 1`
-        );
-        if (fallbackCfg?.[0]) {
-          apiKey = fallbackCfg[0].api_key || apiKey;
-          groupId = fallbackCfg[0].group_id || null;
-        }
-      }
-    } catch (cfgErr: any) {
-      console.warn('⚠️ No se pudieron consultar credenciales dinámicas en config_plantillas_mantra:', cfgErr.message);
+      chatRows = byOrder || [];
     }
 
-    if (CAPA_INTERMEDIA_URL && apiKey) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      try {
-        const baseEndpoint = CAPA_INTERMEDIA_URL.includes('/api/')
-          ? CAPA_INTERMEDIA_URL
-          : `${CAPA_INTERMEDIA_URL}/api/4dm1n_/mantra-chat`;
-
-        const liveUrl = `${baseEndpoint}?phone=${encodeURIComponent(
-          rawPhone
-        )}&ordenId=${encodeURIComponent(String(ordenId || ''))}&group_id=${encodeURIComponent(
-          groupId || grupoServicio
-        )}&grupoServicio=${encodeURIComponent(grupoServicio)}&limit=${limit}`;
-
-        const liveRes = await fetch(liveUrl, {
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            'x-api-key': apiKey,
-            'x-secret-api-key': SECRET_API_KEY,
-          },
-          signal: controller.signal,
-        });
-        clearTimeout(timeout);
-        if (liveRes.ok) {
-          const liveData: any = await liveRes.json();
-          const msgs = Array.isArray(liveData)
-            ? liveData
-            : liveData.messages || liveData.data || liveData.ultimos_mensajes_json || [];
-          if (Array.isArray(msgs) && msgs.length > 0) {
-            return res.json({
-              ok: true,
-              source: 'live_api',
-              groupId,
-              chatMeta: liveData.chatMeta || null,
-              messages: msgs.slice(-limit),
-            });
-          }
-        }
-      } catch (liveErr: any) {
-        clearTimeout(timeout);
-        console.warn('⚠️ Falló llamada a API Mantra en vivo:', liveErr.message);
-      }
+    if (chatRows.length === 0 && phone9) {
+      const [byPhone]: any = await pool.query(
+        `SELECT * FROM historial_chats_mantra WHERE phone LIKE ? ORDER BY orden_id DESC LIMIT 1`,
+        [`%${phone9}`]
+      );
+      chatRows = byPhone || [];
     }
-
-    const [chatRows]: any = await pool.query(
-      `
-      SELECT *
-      FROM historial_chats_mantra
-      WHERE (${ordenId ? 'orden_id = ? OR ' : ''} phone LIKE ?)
-      ORDER BY orden_id DESC
-      LIMIT 1
-      `,
-      ordenId ? [ordenId, `%${phone9}%`] : [`%${phone9}%`]
-    );
 
     const chatRecord = chatRows?.[0] || null;
     let messages: any[] = [];
@@ -2281,8 +2283,8 @@ app.get('/api/operations', async (req, res) => {
       byMotivoFin: cierreRes?.[0] || [],
     };
 
-    queryCache.set(cacheKey, payload);
-    console.log(`⚡ /api/operations (vw_winordetraba) completado en ${Date.now() - startTime}ms`);
+    await cacheSet(cacheKey, payload, 300);
+    console.log(`✅ /api/operations (vw_winordetraba) completado en ${Date.now() - startTime}ms`);
     return res.json(payload);
   } catch (error: any) {
     console.error('❌ Error en /api/operations:', error.message);
@@ -2318,9 +2320,8 @@ app.get('/api/csat', async (req, res) => {
     const params: any[] = [];
 
     if (ignoreDates !== 'true') {
-      // Comparación directa sobre el string de fecha de MySQL para no desplazar horas por timezone
       whereClauses.push(
-        `CAST(ea.fecha_registro AS CHAR) >= CONCAT(?, ' 00:00:00') AND CAST(ea.fecha_registro AS CHAR) <= CONCAT(?, ' 23:59:59')`
+        `ea.fecha_registro >= CONCAT(?, ' 00:00:00') AND ea.fecha_registro <= CONCAT(?, ' 23:59:59')`
       );
       params.push(startDate, endDate);
     }
@@ -2379,11 +2380,7 @@ app.get('/api/csat', async (req, res) => {
         w.Proveedeor AS partner_raw,
         w.Estado AS estado_ot
       FROM encuesta_app ea
-      LEFT JOIN vw_winordetraba w ON w.OrdenId = COALESCE(
-        CAST(NULLIF(TRIM(ea.orden_id), '') AS UNSIGNED),
-        (SELECT w2.OrdenId FROM vw_winordetraba w2 WHERE w2.token = ea.token LIMIT 1),
-        (SELECT w3.OrdenId FROM vw_winordetraba w3 WHERE w3.CodiSegui = ea.codisegui LIMIT 1)
-      )
+      LEFT JOIN vw_winordetraba w ON w.OrdenId = ea.orden_id_num
       LEFT JOIN tiposervicio ts ON w.Producto = ts.Servicio
       ${whereSql}
       ORDER BY ea.fecha_registro DESC
@@ -2583,7 +2580,14 @@ app.get('/api/csat', async (req, res) => {
 
 // Servir archivos estáticos del Frontend compilado (dist) en producción (Azure App Service)
 const distPath = path.join(__dirname, 'dist');
-app.use(express.static(distPath));
+app.use(
+  '/assets',
+  express.static(path.join(distPath, 'assets'), {
+    maxAge: '1y',
+    immutable: true,
+  })
+);
+app.use(express.static(distPath, { maxAge: 0 }));
 
 app.get(/(.*)/, (req, res, next) => {
   if (req.path.startsWith('/api/')) return next();
@@ -2597,17 +2601,18 @@ async function warmupCache() {
     const today = new Date().toLocaleDateString('en-CA');
     console.log(`🔥 Precalentando catálogo y caché para: ${today}`);
     if (tiposUnicosList.length === 0) await loadTipoServicioCache();
+    await syncMatFunnelIncremental();
     if (!queryCache.get('catalog_filters')) {
       const [zonas, partners]: any = await Promise.all([
         pool.query(`
           SELECT DISTINCT sector_operativo AS zona
-          FROM vw_reporte_funnel_casos_360
+          FROM mat_funnel_casos_360
           WHERE sector_operativo IS NOT NULL AND TRIM(sector_operativo) != ''
           ORDER BY sector_operativo
         `),
         pool.query(`
-          SELECT DISTINCT TRIM(partner) AS partner
-          FROM vw_reporte_encuestas_enriquecido
+          SELECT DISTINCT COALESCE(NULLIF(TRIM(partner), ''), 'SIN PARTNER') AS partner
+          FROM mat_funnel_casos_360
           WHERE partner IS NOT NULL AND TRIM(partner) != ''
           ORDER BY partner
         `),
