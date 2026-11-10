@@ -1161,6 +1161,7 @@ app.get('/api/dashboard', async (req, res) => {
 
     const responsePayload = {
       ok: true,
+      rawAggregated,
       kpis,
       evolution: dailyRows,
       dailyInRange: kpiRowsInRange,

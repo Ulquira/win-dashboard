@@ -242,6 +242,11 @@ export default function App() {
         ? 'Todos los servicios'
         : serviceOptions.join(',');
 
+  // Base scope permitido para la consulta inicial según el rol (permite filtrado en memoria a 0 ms)
+  const baseServiceScope = isAllServicesAllowed
+    ? 'Todos los servicios'
+    : serviceOptions.join(',');
+
   const zone = 'Todas las zonas';
   const sectorOptions: string[] = filtersData?.sectores || filtersData?.zonas || EMPTY_ARRAY;
   const partnerOptions: string[] = filtersData?.partners || EMPTY_ARRAY;
@@ -253,13 +258,13 @@ export default function App() {
     error: queryError,
     refetch: refetchDashboard,
   } = useQuery<any>({
-    queryKey: ['dashboardMain', startDate, endDate, service, zone, consultTrigger, authUser?.documento],
+    queryKey: ['dashboardMain', startDate, endDate, baseServiceScope, zone, consultTrigger, authUser?.documento],
     enabled: Boolean(authUser),
     queryFn: async ({ signal }): Promise<any> => {
       const params = new URLSearchParams({
         startDate,
         endDate,
-        service,
+        service: baseServiceScope,
         zone,
         refresh: consultTrigger > 0 ? 'true' : 'false',
       });
@@ -278,14 +283,228 @@ export default function App() {
       ? dashData.error || 'Error desconocido en la respuesta de la API'
       : null;
 
-  const kpis: KpiData | null = dashData?.kpis || null;
-  const evolution: EvolutionPoint[] = dashData?.evolution || EMPTY_ARRAY;
-  const dailyInRange: any[] = dashData?.dailyInRange || EMPTY_ARRAY;
-  const byEstadoOt: any[] = dashData?.byEstadoOt || EMPTY_ARRAY;
-  const bySector: any[] = dashData?.bySector || EMPTY_ARRAY;
-  const byTipoOperacion: any[] = dashData?.byTipoOperacion || EMPTY_ARRAY;
-  const orders: RealOrder[] = dashData?.orders || EMPTY_ARRAY;
-  const partners: PartnerRankItem[] = dashData?.partners || EMPTY_ARRAY;
+  // Nivel 1: Filtrado y Rollup reactivo en memoria para respuesta instantánea (0 ms)
+  const filteredDashboard = useMemo(() => {
+    if (!dashData?.ok) {
+      return {
+        kpis: null,
+        evolution: EMPTY_ARRAY,
+        dailyInRange: EMPTY_ARRAY,
+        byEstadoOt: EMPTY_ARRAY,
+        bySector: EMPTY_ARRAY,
+        byTipoOperacion: EMPTY_ARRAY,
+        orders: EMPTY_ARRAY,
+        partners: EMPTY_ARRAY,
+      };
+    }
+
+    const rawAggregated: any[] = dashData.rawAggregated || [];
+    const allOrders: RealOrder[] = dashData.orders || [];
+    const allPartners: PartnerRankItem[] = dashData.partners || [];
+
+    // Fallback si no viniera rawAggregated
+    if (rawAggregated.length === 0) {
+      return {
+        kpis: dashData.kpis || null,
+        evolution: dashData.evolution || EMPTY_ARRAY,
+        dailyInRange: dashData.dailyInRange || EMPTY_ARRAY,
+        byEstadoOt: dashData.byEstadoOt || EMPTY_ARRAY,
+        bySector: dashData.bySector || EMPTY_ARRAY,
+        byTipoOperacion: dashData.byTipoOperacion || EMPTY_ARRAY,
+        orders: allOrders,
+        partners: allPartners,
+      };
+    }
+
+    const isFiltering = validSelectedServices.length > 0;
+    const filterSet = new Set(validSelectedServices.map((s) => s.toUpperCase()));
+
+    // 1. Filtrar filas agregadas si hay selección específica de tipos de servicio
+    const activeRows = isFiltering
+      ? rawAggregated.filter((r) => filterSet.has(String(r.tipo_operacion || '').toUpperCase()))
+      : rawAggregated;
+
+    const dailyMap = new Map<string, any>();
+    const estadoOtMap = new Map<string, any>();
+    const sectorMap = new Map<string, any>();
+    const tipoOpMap = new Map<string, any>();
+
+    for (const r of activeRows) {
+      const tot = Number(r.total || 0);
+      const env = Number(r.enviados || 0);
+      const lei = Number(r.leidos || 0);
+      const trk = Number(r.tracking || 0);
+
+      // Agrupación Diaria (evolutiva)
+      const day = dailyMap.get(r.raw_date) || {
+        raw_date: r.raw_date,
+        fecha: r.fecha,
+        fecha_full: r.fecha_full,
+        total: 0,
+        enviados: 0,
+        leidos: 0,
+        sent: 0,
+        delivered: 0,
+        failed: 0,
+        no_enviado: 0,
+        tracking: 0,
+        sos_soporte: 0,
+        autogestionados: 0,
+        reprogramaciones: 0,
+        encuestas: 0,
+        leidos_sin_ingreso: 0,
+        av_total: 0,
+        av_enviados: 0,
+        av_leidos: 0,
+        av_tracking: 0,
+        pref_total: 0,
+        pref_enviados: 0,
+        pref_leidos: 0,
+        pref_tracking: 0,
+      };
+      day.total += tot;
+      day.enviados += env;
+      day.leidos += lei;
+      day.sent += Number(r.sent || 0);
+      day.delivered += Number(r.delivered || 0);
+      day.failed += Number(r.failed || 0);
+      day.no_enviado += Number(r.no_enviado || 0);
+      day.tracking += trk;
+      day.sos_soporte += Number(r.sos_soporte || 0);
+      day.autogestionados += Number(r.autogestionados || 0);
+      day.reprogramaciones += Number(r.reprogramaciones || 0);
+      day.encuestas += Number(r.encuestas || 0);
+      day.leidos_sin_ingreso += Number(r.leidos_sin_ingreso || 0);
+      day.av_total += Number(r.av_total || 0);
+      day.av_enviados += Number(r.av_enviados || 0);
+      day.av_leidos += Number(r.av_leidos || 0);
+      day.av_tracking += Number(r.av_tracking || 0);
+      day.pref_total += Number(r.pref_total || 0);
+      day.pref_enviados += Number(r.pref_enviados || 0);
+      day.pref_leidos += Number(r.pref_leidos || 0);
+      day.pref_tracking += Number(r.pref_tracking || 0);
+      dailyMap.set(r.raw_date, day);
+
+      // Desglose para el rango seleccionado (startDate..endDate)
+      if (r.raw_date >= startDate && r.raw_date <= endDate) {
+        // Estado OT
+        const stKey = r.estado_ot || 'Sin estado';
+        const st = estadoOtMap.get(stKey) || { estado_ot: stKey, total: 0, enviados: 0, leidos: 0, tracking: 0 };
+        st.total += tot;
+        st.enviados += env;
+        st.leidos += lei;
+        st.tracking += trk;
+        estadoOtMap.set(stKey, st);
+
+        // Sector Operativo
+        const secKey = r.sector_operativo || 'SIN SECTOR';
+        const sec = sectorMap.get(secKey) || { sector_operativo: secKey, total: 0, enviados: 0, no_enviados: 0, tracking: 0, leidos: 0 };
+        sec.total += tot;
+        sec.enviados += env;
+        sec.no_enviados += Number(r.no_enviado || 0);
+        sec.tracking += trk;
+        sec.leidos += lei;
+        sectorMap.set(secKey, sec);
+
+        // Tipo de Operación
+        const topKey = r.tipo_operacion || 'OTROS';
+        const top = tipoOpMap.get(topKey) || { tipo: topKey, total: 0, enviados: 0 };
+        top.total += tot;
+        top.enviados += env;
+        tipoOpMap.set(topKey, top);
+      }
+    }
+
+    const dailyRows = Array.from(dailyMap.values()).sort((a, b) => a.raw_date.localeCompare(b.raw_date));
+    const kpiRowsInRange = dailyRows.filter((r) => r.raw_date >= startDate && r.raw_date <= endDate);
+    const byEstadoOt = Array.from(estadoOtMap.values()).sort((a, b) => b.total - a.total);
+    const bySector = Array.from(sectorMap.values()).sort((a, b) => b.total - a.total);
+    const byTipoOperacion = Array.from(tipoOpMap.values()).sort((a, b) => b.total - a.total);
+
+    const computedKpis: KpiData = kpiRowsInRange.reduce(
+      (acc, row) => ({
+        total_ordenes: acc.total_ordenes + Number(row.total || 0),
+        whs_enviados: acc.whs_enviados + Number(row.enviados || 0),
+        whs_leidos: acc.whs_leidos + Number(row.leidos || 0),
+        whs_sent: acc.whs_sent + Number(row.sent || 0),
+        whs_delivered: acc.whs_delivered + Number(row.delivered || 0),
+        whs_failed: acc.whs_failed + Number(row.failed || 0),
+        whs_no_enviado: acc.whs_no_enviado + Number(row.no_enviado || 0),
+        ingreso_tracking: acc.ingreso_tracking + Number(row.tracking || 0),
+        sos_soporte: acc.sos_soporte + Number(row.sos_soporte || 0),
+        autogestionados: acc.autogestionados + Number(row.autogestionados || 0),
+        reprogramaciones: acc.reprogramaciones + Number(row.reprogramaciones || 0),
+        encuestas_respondidas: acc.encuestas_respondidas + Number(row.encuestas || 0),
+        csat_avg: dashData.kpis?.csat_avg || '0.0',
+        leidos_sin_ingreso: acc.leidos_sin_ingreso + Number(row.leidos_sin_ingreso || 0),
+        av_total: acc.av_total + Number(row.av_total || 0),
+        av_enviados: acc.av_enviados + Number(row.av_enviados || 0),
+        av_leidos: acc.av_leidos + Number(row.av_leidos || 0),
+        av_tracking: acc.av_tracking + Number(row.av_tracking || 0),
+        pref_total: acc.pref_total + Number(row.pref_total || 0),
+        pref_enviados: acc.pref_enviados + Number(row.pref_enviados || 0),
+        pref_leidos: acc.pref_leidos + Number(row.pref_leidos || 0),
+        pref_tracking: acc.pref_tracking + Number(row.pref_tracking || 0),
+      }),
+      {
+        total_ordenes: 0,
+        whs_enviados: 0,
+        whs_leidos: 0,
+        whs_sent: 0,
+        whs_delivered: 0,
+        whs_failed: 0,
+        whs_no_enviado: 0,
+        ingreso_tracking: 0,
+        sos_soporte: 0,
+        autogestionados: 0,
+        reprogramaciones: 0,
+        encuestas_respondidas: 0,
+        csat_avg: dashData.kpis?.csat_avg || '0.0',
+        leidos_sin_ingreso: 0,
+        av_total: 0,
+        av_enviados: 0,
+        av_leidos: 0,
+        av_tracking: 0,
+        pref_total: 0,
+        pref_enviados: 0,
+        pref_leidos: 0,
+        pref_tracking: 0,
+      }
+    );
+
+    if (!isFiltering && dashData.kpis) {
+      if (dashData.kpis.reprogramaciones) computedKpis.reprogramaciones = dashData.kpis.reprogramaciones;
+      if (dashData.kpis.encuestas_respondidas) computedKpis.encuestas_respondidas = dashData.kpis.encuestas_respondidas;
+    }
+
+    const filteredOrders = isFiltering
+      ? allOrders.filter((o: any) =>
+          filterSet.has(String(o.servicio_tipo || o.tipo_operacion || '').toUpperCase())
+        )
+      : allOrders;
+
+    return {
+      kpis: computedKpis,
+      evolution: dailyRows,
+      dailyInRange: kpiRowsInRange,
+      byEstadoOt,
+      bySector,
+      byTipoOperacion,
+      orders: filteredOrders,
+      partners: allPartners,
+    };
+  }, [dashData, validSelectedServices, startDate, endDate]);
+
+  const {
+    kpis,
+    evolution,
+    dailyInRange,
+    byEstadoOt,
+    bySector,
+    byTipoOperacion,
+    orders,
+    partners,
+  } = filteredDashboard;
 
   const calc: CalculatedMetrics = useMemo(() => {
     const total = Number(kpis?.total_ordenes || 0);
