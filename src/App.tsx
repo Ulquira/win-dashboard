@@ -1,5 +1,5 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import React, { useState, useMemo, useEffect, lazy, Suspense } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Activity, ClipboardList, Wrench, LogOut, Shield } from 'lucide-react';
 import {
   ViewMode, NavSection, KpiData, EvolutionPoint,
@@ -9,16 +9,17 @@ import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { KpiCards } from './components/KpiCards';
 import { OrderDetailDrawer } from './components/OrderDetailDrawer';
-import { HomeView } from './views/HomeView';
-import { ExecutiveView } from './views/ExecutiveView';
-import { OperationalView } from './views/OperationalView';
-import { OperationsDashboardView } from './views/OperationsDashboardView';
-import { TrackingView } from './views/TrackingView';
-import { OrdersView } from './views/OrdersView';
 import { LoginView } from './views/LoginView';
-import { UsersRolesView } from './views/UsersRolesView';
-import { CsatView } from './views/CsatView.tsx';
 import { apiFetch, API_BASE_URL, AUTH_TOKEN_KEY, AUTH_USER_KEY } from './config/api';
+
+const HomeView = lazy(() => import('./views/HomeView').then((m) => ({ default: m.HomeView })));
+const ExecutiveView = lazy(() => import('./views/ExecutiveView').then((m) => ({ default: m.ExecutiveView })));
+const OperationalView = lazy(() => import('./views/OperationalView').then((m) => ({ default: m.OperationalView })));
+const OperationsDashboardView = lazy(() => import('./views/OperationsDashboardView').then((m) => ({ default: m.OperationsDashboardView })));
+const TrackingView = lazy(() => import('./views/TrackingView').then((m) => ({ default: m.TrackingView })));
+const OrdersView = lazy(() => import('./views/OrdersView').then((m) => ({ default: m.OrdersView })));
+const UsersRolesView = lazy(() => import('./views/UsersRolesView').then((m) => ({ default: m.UsersRolesView })));
+const CsatView = lazy(() => import('./views/CsatView').then((m) => ({ default: m.CsatView })));
 
 const VALID_NAVS: NavSection[] = [
   'Inicio',
@@ -253,6 +254,9 @@ export default function App() {
   const sectorOptions: string[] = filtersData?.sectores || filtersData?.zonas || EMPTY_ARRAY;
   const partnerOptions: string[] = filtersData?.partners || EMPTY_ARRAY;
 
+  const needsMainDashboard =
+    activeNav === 'Inicio' || (activeNav === 'Dashboard' && viewMode !== 'operaciones');
+
   const {
     data: dashData,
     isFetching: loading,
@@ -261,7 +265,7 @@ export default function App() {
     refetch: refetchDashboard,
   } = useQuery<any>({
     queryKey: ['dashboardMain', startDate, endDate, baseServiceScope, zone, consultTrigger, authUser?.documento],
-    enabled: Boolean(authUser),
+    enabled: Boolean(authUser) && needsMainDashboard,
     queryFn: async ({ signal }): Promise<any> => {
       const params = new URLSearchParams({
         startDate,
@@ -277,6 +281,53 @@ export default function App() {
     gcTime: 1000 * 60 * 30,
     refetchOnWindowFocus: false,
   });
+
+  const queryClient = useQueryClient();
+
+  // Pre-cargar Operaciones de Campo y Seguimiento en segundo plano cuando el Dashboard termina de cargar
+  useEffect(() => {
+    if (!authUser || !dashData?.ok) return;
+    const timer = setTimeout(() => {
+      const opsParams = new URLSearchParams({
+        startDate,
+        endDate,
+        service,
+        q: globalSearch,
+        ignoreDates: ignoreDates ? 'true' : 'false',
+        refresh: 'false',
+      });
+      queryClient.prefetchQuery({
+        queryKey: ['operationsDashboard', startDate, endDate, service, globalSearch, ignoreDates, 0],
+        queryFn: () => apiFetch(`/api/operations?${opsParams.toString()}`),
+        staleTime: 1000 * 60 * 5,
+      });
+
+      for (const soloConChat of ['true', 'false']) {
+        const params = new URLSearchParams({
+          startDate,
+          endDate,
+          service,
+          zone: 'Todas las zonas',
+          q: globalSearch,
+          ignoreDates: ignoreDates ? 'true' : 'false',
+          estadoChat: 'Todos',
+          sla: 'Todos',
+          turno: 'Todos',
+          soloConChat,
+          soloSos: 'false',
+          soloLogChat: 'false',
+          page: '1',
+          pageSize: '50',
+        });
+        queryClient.prefetchQuery({
+          queryKey: ['trackingSearch', startDate, endDate, service, globalSearch, ignoreDates, 'Todos', 'Todos', 'Todos', soloConChat === 'true', false, false, 1],
+          queryFn: () => apiFetch(`/api/tracking/search?${params.toString()}`),
+          staleTime: 1000 * 45,
+        });
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [authUser, dashData?.ok, startDate, endDate, service, globalSearch, ignoreDates, queryClient]);
 
   const dbOnline = Boolean(dashData?.ok && !isError);
   const errorMsg = isError
@@ -474,9 +525,61 @@ export default function App() {
       }
     );
 
+    const encuestasByService: any[] = dashData.encuestasByService || [];
+    let filteredPartners: PartnerRankItem[] = allPartners;
+
     if (!isFiltering && dashData.kpis) {
-      if (dashData.kpis.reprogramaciones) computedKpis.reprogramaciones = dashData.kpis.reprogramaciones;
-      if (dashData.kpis.encuestas_respondidas) computedKpis.encuestas_respondidas = dashData.kpis.encuestas_respondidas;
+      if (dashData.kpis.reprogramaciones !== undefined) {
+        computedKpis.reprogramaciones = dashData.kpis.reprogramaciones;
+      }
+      if (dashData.kpis.encuestas_respondidas !== undefined) {
+        computedKpis.encuestas_respondidas = dashData.kpis.encuestas_respondidas;
+      }
+      if (dashData.kpis.csat_avg !== undefined) {
+        computedKpis.csat_avg = dashData.kpis.csat_avg;
+      }
+    } else if (isFiltering && encuestasByService.length > 0) {
+      const activeEnc = encuestasByService.filter((e) =>
+        filterSet.has(String(e.tipo_operacion || '').toUpperCase())
+      );
+
+      const pMap = new Map<string, { partner: string; surveys: number; sumPoints: number }>();
+      let totalSv = 0;
+      let totalPts = 0;
+
+      for (const e of activeEnc) {
+        const sv = Number(e.surveys || 0);
+        const avg = Number(e.avg_score || 0);
+        totalSv += sv;
+        totalPts += avg * sv;
+
+        const cur = pMap.get(e.partner) || { partner: e.partner, surveys: 0, sumPoints: 0 };
+        cur.surveys += sv;
+        cur.sumPoints += avg * sv;
+        pMap.set(e.partner, cur);
+      }
+
+      computedKpis.encuestas_respondidas = totalSv;
+      computedKpis.csat_avg = totalSv > 0 ? Number((totalPts / totalSv).toFixed(2)) : 0;
+
+      filteredPartners = Array.from(pMap.values())
+        .map((p) => ({
+          partner: p.partner,
+          surveys: p.surveys,
+          avg_score: p.surveys > 0 ? p.sumPoints / p.surveys : 0,
+        }))
+        .sort((a, b) => b.avg_score - a.avg_score || b.surveys - a.surveys)
+        .slice(0, 6)
+        .map((r, idx) => {
+          const csatPct = (r.avg_score / 5) * 100;
+          return {
+            rank: idx + 1,
+            name: r.partner,
+            surveys: r.surveys,
+            score: r.avg_score.toFixed(1).replace('.', ','),
+            csat: `${csatPct.toFixed(1).replace('.', ',')}%`,
+          };
+        });
     }
 
     const filteredOrders = isFiltering
@@ -493,7 +596,7 @@ export default function App() {
       bySector,
       byTipoOperacion,
       orders: filteredOrders,
-      partners: allPartners,
+      partners: filteredPartners,
     };
   }, [dashData, validSelectedServices, startDate, endDate]);
 
@@ -676,136 +779,140 @@ export default function App() {
           onToggleDarkMode={() => setDarkMode((prev) => !prev)}
         />
 
-        {activeNav === 'Inicio' && (
-          <HomeView
-            authUser={authUser}
-            calc={calc}
-            kpis={kpis}
-            startDate={startDate}
-            endDate={endDate}
-            service={service}
-            serviceOptions={serviceOptions}
-            canSeeView={canSeeView}
-            canSeeSubview={canSeeSubview}
-            onNavigate={(nav, subview) => {
-              setActiveNav(nav);
-              if (subview) setViewMode(subview);
-            }}
-            onSelectOrder={setSelectedOrder}
-          />
-        )}
+        <Suspense fallback={<div className="h-64 rounded-2xl bg-white/60 animate-pulse border border-slate-100" />}>
+          {activeNav === 'Inicio' && (
+            <HomeView
+              authUser={authUser}
+              calc={calc}
+              kpis={kpis}
+              startDate={startDate}
+              endDate={endDate}
+              service={service}
+              serviceOptions={serviceOptions}
+              canSeeView={canSeeView}
+              canSeeSubview={canSeeSubview}
+              onNavigate={(nav, subview) => {
+                setActiveNav(nav);
+                if (subview) setViewMode(subview);
+              }}
+              onSelectOrder={setSelectedOrder}
+            />
+          )}
 
-        {activeNav === 'Dashboard' && (
-          <>
-            <div className="flex items-center justify-between">
-              <div className="flex flex-wrap items-center gap-2 bg-slate-200/60 p-1 rounded-2xl border border-slate-200/60">
-                {canSeeSubview('ejecutiva') && (
-                  <button
-                    onClick={() => setViewMode('ejecutiva')}
-                    className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'ejecutiva'
-                      ? 'bg-white text-[#FF5500] shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                  >
-                    <Activity size={14} className={viewMode === 'ejecutiva' ? 'text-[#FF5500]' : 'text-slate-400'} />
-                    <span>Vista Ejecutiva</span>
-                  </button>
-                )}
-                {canSeeSubview('operativa') && (
-                  <button
-                    onClick={() => setViewMode('operativa')}
-                    className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'operativa'
-                      ? 'bg-white text-[#FF5500] shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                  >
-                    <ClipboardList size={14} className={viewMode === 'operativa' ? 'text-[#FF5500]' : 'text-slate-400'} />
-                    <span>Vista Operativa</span>
-                  </button>
-                )}
-                {canSeeSubview('operaciones') && (
-                  <button
-                    onClick={() => setViewMode('operaciones')}
-                    className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'operaciones'
-                      ? 'bg-white text-[#FF5500] shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                  >
-                    <Wrench size={14} className={viewMode === 'operaciones' ? 'text-[#FF5500]' : 'text-slate-400'} />
-                    <span>Operaciones Campo</span>
-                  </button>
-                )}
+          {activeNav === 'Dashboard' && (
+            <>
+              <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center gap-2 bg-slate-200/60 p-1 rounded-2xl border border-slate-200/60">
+                  {canSeeSubview('ejecutiva') && (
+                    <button
+                      onClick={() => setViewMode('ejecutiva')}
+                      className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'ejecutiva'
+                        ? 'bg-white text-[#FF5500] shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                    >
+                      <Activity size={14} className={viewMode === 'ejecutiva' ? 'text-[#FF5500]' : 'text-slate-400'} />
+                      <span>Vista Ejecutiva</span>
+                    </button>
+                  )}
+                  {canSeeSubview('operativa') && (
+                    <button
+                      onClick={() => setViewMode('operativa')}
+                      className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'operativa'
+                        ? 'bg-white text-[#FF5500] shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                    >
+                      <ClipboardList size={14} className={viewMode === 'operativa' ? 'text-[#FF5500]' : 'text-slate-400'} />
+                      <span>Vista Operativa</span>
+                    </button>
+                  )}
+                  {canSeeSubview('operaciones') && (
+                    <button
+                      onClick={() => setViewMode('operaciones')}
+                      className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'operaciones'
+                        ? 'bg-white text-[#FF5500] shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                    >
+                      <Wrench size={14} className={viewMode === 'operaciones' ? 'text-[#FF5500]' : 'text-slate-400'} />
+                      <span>Operaciones Campo</span>
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
 
-            {viewMode === 'operaciones' ? (
-              <OperationsDashboardView
-                startDate={startDate}
-                endDate={endDate}
-                service={service}
-                globalSearch={globalSearch}
-                ignoreDates={ignoreDates}
-                consultTrigger={consultTrigger}
-              />
-            ) : (
-              <>
-                <KpiCards calc={calc} kpis={kpis} />
-                {viewMode === 'ejecutiva' ? (
-                  <ExecutiveView calc={calc} evolution={evolution} partners={partners} />
-                ) : (
-                  <OperationalView
-                    calc={calc}
-                    kpis={kpis}
-                    dailyInRange={dailyInRange}
-                    byEstadoOt={byEstadoOt}
-                    bySector={bySector}
-                    byTipoOperacion={byTipoOperacion}
-                  />
-                )}
-              </>
-            )}
-          </>
-        )}
+              {viewMode === 'operaciones' ? (
+                <OperationsDashboardView
+                  startDate={startDate}
+                  endDate={endDate}
+                  service={service}
+                  globalSearch={globalSearch}
+                  ignoreDates={ignoreDates}
+                  consultTrigger={consultTrigger}
+                />
+              ) : (
+                <>
+                  <KpiCards calc={calc} kpis={kpis} />
+                  {viewMode === 'ejecutiva' ? (
+                    <ExecutiveView calc={calc} evolution={evolution} partners={partners} />
+                  ) : (
+                    <OperationalView
+                      calc={calc}
+                      kpis={kpis}
+                      dailyInRange={dailyInRange}
+                      byEstadoOt={byEstadoOt}
+                      bySector={bySector}
+                      byTipoOperacion={byTipoOperacion}
+                    />
+                  )}
+                </>
+              )}
+            </>
+          )}
 
-        {activeNav === 'Órdenes' && (
-          <OrdersView
-            orders={orders}
-            startDate={startDate}
-            endDate={endDate}
-            service={service}
-            globalSearch={globalSearch}
-            ignoreDates={ignoreDates}
-            serviceOptions={serviceOptions}
-            sectorOptions={sectorOptions}
-            partnerOptions={partnerOptions}
-            onSelectOrder={setSelectedOrder}
-          />
-        )}
-        {activeNav === 'Seguimiento' && (
-          <TrackingView
-            orders={orders}
-            startDate={startDate}
-            endDate={endDate}
-            service={service}
-            globalSearch={globalSearch}
-            ignoreDates={ignoreDates}
-            consultTrigger={consultTrigger}
-            onSelectOrder={setSelectedOrder}
-          />
-        )}
-        {activeNav === 'Experiencia (CSAT)' && (
-          <CsatView
-            startDate={startDate}
-            endDate={endDate}
-            service={service}
-            globalSearch={globalSearch}
-            ignoreDates={ignoreDates}
-            consultTrigger={consultTrigger}
-            onSelectOrder={setSelectedOrder}
-          />
-        )}
+          {activeNav === 'Órdenes' && (
+            <OrdersView
+              orders={orders}
+              startDate={startDate}
+              endDate={endDate}
+              service={service}
+              globalSearch={globalSearch}
+              ignoreDates={ignoreDates}
+              serviceOptions={serviceOptions}
+              sectorOptions={sectorOptions}
+              partnerOptions={partnerOptions}
+              onSelectOrder={setSelectedOrder}
+            />
+          )}
 
-        {activeNav === 'Accesos' && canSeeView('Accesos') && <UsersRolesView />}
+          {activeNav === 'Seguimiento' && (
+            <TrackingView
+              orders={orders}
+              startDate={startDate}
+              endDate={endDate}
+              service={service}
+              globalSearch={globalSearch}
+              ignoreDates={ignoreDates}
+              consultTrigger={consultTrigger}
+              onSelectOrder={setSelectedOrder}
+            />
+          )}
+
+          {activeNav === 'Experiencia (CSAT)' && (
+            <CsatView
+              startDate={startDate}
+              endDate={endDate}
+              service={service}
+              globalSearch={globalSearch}
+              ignoreDates={ignoreDates}
+              consultTrigger={consultTrigger}
+              onSelectOrder={setSelectedOrder}
+            />
+          )}
+
+          {activeNav === 'Accesos' && canSeeView('Accesos') && <UsersRolesView />}
+        </Suspense>
 
         <OrderDetailDrawer
           selectedOrder={selectedOrder}

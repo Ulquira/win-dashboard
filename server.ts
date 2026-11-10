@@ -1934,13 +1934,14 @@ app.get('/api/operations', async (req, res) => {
 
   try {
     if (tiposUnicosList.length === 0) await loadTipoServicioCache();
+    if (refresh === 'true') {
+      await syncMatFunnelIncremental(startDate, endDate);
+    }
 
-    const colEstado = `COALESCE(NULLIF(TRIM(w.\`Estado OT\`), ''), NULLIF(TRIM(w.Estado), ''), 'SIN ESTADO')`;
-    const rawPartnerExpr = `UPPER(COALESCE(NULLIF(TRIM(w.Proveedeor), ''), NULLIF(TRIM(w.Empresa), ''), 'SIN PARTNER'))`;
-    const colPartner = `TRIM(REGEXP_REPLACE(REGEXP_REPLACE(${rawPartnerExpr}, '\\\\b(SGI|SGA)\\\\b|[0-9]+', ''), '\\\\s+', ' '))`;
-    // Priorizar w.Cuadrilla para obtener el nombre completo de la cuadrilla en lugar del nombre corto del técnico
-    const colCuadrilla = `COALESCE(NULLIF(TRIM(w.Cuadrilla), ''), NULLIF(TRIM(w.Cuadrilla_nombre), ''))`;
-    const colZona = `COALESCE(NULLIF(TRIM(w.\`Sector Operativo\`), ''), NULLIF(TRIM(w.Localidad), ''), NULLIF(TRIM(w.Zona), ''), NULLIF(TRIM(w.Provincia), ''), 'SIN ZONA')`;
+    const colEstado = `v.ops_estado`;
+    const colPartner = `v.ops_partner`;
+    const colCuadrilla = `v.ops_cuadrilla`;
+    const colZona = `v.ops_zona`;
 
     const [ey, em, ed] = endDate.split('-').map(Number);
     const endTarget = new Date(ey, em - 1, ed);
@@ -1955,44 +1956,35 @@ app.get('/api/operations', async (req, res) => {
     const chartParams: any[] = [];
 
     if (ignoreDates !== 'true') {
-      whereClauses.push(`w.\`F.Soli\` >= ? AND w.\`F.Soli\` < DATE_ADD(?, INTERVAL 1 DAY)`);
+      whereClauses.push(`v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?`);
       queryParams.push(startDate, endDate);
 
-      chartWhereClauses.push(`w.\`F.Soli\` >= ? AND w.\`F.Soli\` < DATE_ADD(?, INTERVAL 1 DAY)`);
+      chartWhereClauses.push(`v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?`);
       chartParams.push(chartStartDate, endDate);
     }
 
-    const colTipoOrdenOt = `COALESCE(NULLIF(TRIM(w.Producto), ''), NULLIF(TRIM(w.\`Motivo Trabajo\`), ''), '')`;
-    const opsSrvFilter = buildStrictOrderTypeSql(service, colTipoOrdenOt);
+    const opsSrvFilter = buildStrictOrderTypeSql(service, 'v.tipo_operacion');
     if (opsSrvFilter.params.length > 0) {
-      const { canonicalList } = resolveProductosFromServiceFilter(service);
-      let geoOt = '';
-      if (canonicalList.length > 0 && canonicalList.every((c) => c.includes('LIMA'))) {
-        geoOt = " AND (w.`Sector Operativo` LIKE 'LIMA%' OR w.Region = 'LIMA')";
-      } else if (canonicalList.length > 0 && canonicalList.every((c) => c.includes('PROV'))) {
-        geoOt = " AND (w.`Sector Operativo` NOT LIKE 'LIMA%' AND (w.Region != 'LIMA' OR w.Region IS NULL))";
-      }
-
-      whereClauses.push(`${opsSrvFilter.sql}${geoOt}`);
+      whereClauses.push(opsSrvFilter.sql);
       queryParams.push(...opsSrvFilter.params);
 
-      chartWhereClauses.push(`${opsSrvFilter.sql}${geoOt}`);
+      chartWhereClauses.push(opsSrvFilter.sql);
       chartParams.push(...opsSrvFilter.params);
     }
 
     if (searchQ) {
       const likeQ = `%${searchQ}%`;
       const qClause = `(
-        CAST(w.OrdenId AS CHAR) LIKE ? OR
-        w.CodiSegui LIKE ? OR
-        w.CodiSeguiClien LIKE ? OR
-        w.CodiClien LIKE ? OR
-        w.Cliente LIKE ? OR
-        w.\`Número Documento\` LIKE ? OR
-        w.TeleMovilNume LIKE ? OR
-        w.Cuadrilla LIKE ? OR
-        w.Cuadrilla_nombre LIKE ? OR
-        w.Proveedeor LIKE ?
+        CAST(v.orden_id AS CHAR) LIKE ? OR
+        v.ticket LIKE ? OR
+        v.ops_codi_segui_clien LIKE ? OR
+        v.ops_codi_clien LIKE ? OR
+        v.cliente LIKE ? OR
+        v.ops_num_doc LIKE ? OR
+        v.telefono LIKE ? OR
+        v.ops_cuadrilla LIKE ? OR
+        v.cuadrilla LIKE ? OR
+        v.partner LIKE ?
       )`;
       const qArgs = [likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ];
       whereClauses.push(qClause);
@@ -2005,196 +1997,310 @@ app.get('/api/operations', async (req, res) => {
     const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
     const chartWhereSql = chartWhereClauses.length > 0 ? `WHERE ${chartWhereClauses.join(' AND ')}` : '';
 
-    // Clasificación de estados reales de vw_winordetraba
+    // Clasificación de estados reales sobre columna pre-limpiada e indexada v.ops_estado
     const isFin = `(LOWER(${colEstado}) LIKE '%finaliz%' OR LOWER(${colEstado}) LIKE '%atendid%' OR LOWER(${colEstado}) LIKE '%complet%' OR LOWER(${colEstado}) LIKE '%cerrad%' OR LOWER(${colEstado}) LIKE '%ok%')`;
     const isCurso = `(LOWER(${colEstado}) LIKE '%iniciad%' OR LOWER(${colEstado}) LIKE '%camino%' OR LOWER(${colEstado}) LIKE '%ruta%' OR LOWER(${colEstado}) LIKE '%ejecuc%' OR LOWER(${colEstado}) LIKE '%proceso%')`;
     const isCancel = `(LOWER(${colEstado}) LIKE '%cancel%' OR LOWER(${colEstado}) LIKE '%anul%' OR LOWER(${colEstado}) LIKE '%rechaz%' OR LOWER(${colEstado}) LIKE '%quiebre%' OR LOWER(${colEstado}) LIKE '%suspens%')`;
     const isAgend = `(NOT ${isFin} AND NOT ${isCurso} AND NOT ${isCancel})`;
 
-    // Expresiones explícitas para GROUP BY estricto (sql_mode=only_full_group_by)
-    const rawDateGroupExpr = `DATE_FORMAT(w.\`F.Soli\`, '%Y-%m-%d')`;
-    const cuadrillaGroupExpr = `COALESCE(${colCuadrilla}, 'SIN ASIGNAR')`;
-    const motivoTrabajoGroupExpr = `UPPER(COALESCE(NULLIF(TRIM(w.Producto), ''), NULLIF(TRIM(w.\`Motivo Trabajo\`), ''), 'OTROS'))`;
-    const motivoFinGroupExpr = `COALESCE(
-      NULLIF(TRIM(w.\`Motivo Finalización\`), ''),
-      NULLIF(TRIM(w.\`Motivo Cancelación\`), ''),
-      NULLIF(TRIM(w.\`Motivo Regestión\`), ''),
-      NULLIF(TRIM(w.\`Diagnóstico Técnico\`), ''),
-      'Sin especificar'
-    )`;
+    const indexHint = !searchQ ? 'USE INDEX (idx_mat_ops_full_cov)' : '';
+    const [sy, sm, sd] = startDate.split('-').map(Number);
+    const startTarget = new Date(sy, sm - 1, sd);
+    const rangeDays = Math.max(1, Math.round((endTarget.getTime() - startTarget.getTime()) / 86400000) + 1);
+    const useDirectIndexStream = ignoreDates !== 'true' && rangeDays <= 7 && !searchQ;
 
-    const [
-      summaryRes,
-      estadosRes,
-      dailyRes,
-      partnerRes,
-      zonaRes,
-      cuadrillasRes,
-      motivosRes,
-      cierreRes,
-    ]: any = await Promise.all([
-      // 1. KPIs Globales
+    const [rangeRes, dailyRes]: any = await Promise.all([
+      // 1. Cubo dimensional consolidado (streaming directo sobre covering index para <= 7 días sin tabla temporal SQL)
       pool.query(
-        `
+        useDirectIndexStream
+          ? `
         SELECT
-          COUNT(*) AS total_ordenes,
-          COALESCE(SUM(${isFin}), 0) AS finalizadas,
-          COALESCE(SUM(${isCurso}), 0) AS en_curso,
-          COALESCE(SUM(${isAgend}), 0) AS agendadas,
-          COALESCE(SUM(${isCancel}), 0) AS canceladas,
-          COUNT(DISTINCT ${colCuadrilla}) AS cuadrillas_activas,
-          COUNT(DISTINCT ${colPartner}) AS partners_activos,
-          COUNT(DISTINCT ${colZona}) AS zonas_activas
-        FROM vw_winordetraba w
+          v.ops_estado AS estado,
+          v.ops_partner AS partner,
+          v.ops_cuadrilla AS cuadrilla,
+          v.ops_zona AS zona,
+          v.ops_motivo_trabajo AS motivo_trabajo,
+          v.ops_segmento AS segmento,
+          v.ops_motivo_fin AS motivo_fin,
+          1 AS total
+        FROM mat_funnel_casos_360 v ${indexHint}
         ${whereSql}
+        `
+          : `
+        SELECT
+          v.ops_estado AS estado,
+          v.ops_partner AS partner,
+          v.ops_cuadrilla AS cuadrilla,
+          v.ops_zona AS zona,
+          v.ops_motivo_trabajo AS motivo_trabajo,
+          v.ops_segmento AS segmento,
+          v.ops_motivo_fin AS motivo_fin,
+          COUNT(*) AS total
+        FROM mat_funnel_casos_360 v ${indexHint}
+        ${whereSql}
+        GROUP BY
+          v.ops_estado,
+          v.ops_partner,
+          v.ops_cuadrilla,
+          v.ops_zona,
+          v.ops_motivo_trabajo,
+          v.ops_segmento,
+          v.ops_motivo_fin
         `,
         queryParams
       ),
 
-      // 2. Desglose por Estado OT
+      // 2. Avance Diario cubierto por índice
       pool.query(
         `
         SELECT
-          ${colEstado} AS estado,
-          COUNT(*) AS total,
-          COUNT(DISTINCT ${colCuadrilla}) AS cuadrillas
-        FROM vw_winordetraba w
-        ${whereSql}
-        GROUP BY ${colEstado}
-        ORDER BY total DESC
-        `,
-        queryParams
-      ),
-
-      // 3. Avance Diario (100% compatible con ONLY_FULL_GROUP_BY)
-      pool.query(
-        `
-        SELECT
-          ${rawDateGroupExpr} AS raw_date,
-          MAX(DATE_FORMAT(w.\`F.Soli\`, '%d/%m')) AS fecha,
-          MAX(DATE_FORMAT(w.\`F.Soli\`, '%d/%m/%Y')) AS fecha_full,
+          DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
+          MAX(DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m')) AS fecha,
+          MAX(DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y')) AS fecha_full,
           COUNT(*) AS total,
           COALESCE(SUM(${isFin}), 0) AS finalizadas,
           COALESCE(SUM(${isCurso}), 0) AS en_curso,
           COALESCE(SUM(${isAgend}), 0) AS agendadas,
           COALESCE(SUM(${isCancel}), 0) AS canceladas,
           COUNT(DISTINCT ${colCuadrilla}) AS cuadrillas
-        FROM vw_winordetraba w
+        FROM mat_funnel_casos_360 v ${indexHint}
         ${chartWhereSql}
-        GROUP BY ${rawDateGroupExpr}
+        GROUP BY v.fecha_solicitud_dia
         HAVING raw_date IS NOT NULL
         ORDER BY raw_date ASC
         `,
         chartParams
       ),
-
-      // 4. Productividad y Efectividad por Partner (Proveedeor)
-      pool.query(
-        `
-        SELECT
-          ${colPartner} AS partner,
-          COUNT(*) AS total,
-          COALESCE(SUM(${isFin}), 0) AS finalizadas,
-          COALESCE(SUM(${isCurso}), 0) AS en_curso,
-          COALESCE(SUM(${isAgend}), 0) AS agendadas,
-          COALESCE(SUM(${isCancel}), 0) AS canceladas,
-          COUNT(DISTINCT ${colCuadrilla}) AS cuadrillas
-        FROM vw_winordetraba w
-        ${whereSql}
-        GROUP BY ${colPartner}
-        ORDER BY total DESC
-        `,
-        queryParams
-      ),
-
-      // 5. Rendimiento por Zona / Sector Operativo / Localidad
-      pool.query(
-        `
-        SELECT
-          ${colZona} AS zona,
-          COUNT(*) AS total,
-          COALESCE(SUM(${isFin}), 0) AS finalizadas,
-          COALESCE(SUM(${isCurso}), 0) AS en_curso,
-          COALESCE(SUM(${isAgend}), 0) AS agendadas,
-          COALESCE(SUM(${isCancel}), 0) AS canceladas,
-          COUNT(DISTINCT ${colCuadrilla}) AS cuadrillas
-        FROM vw_winordetraba w
-        ${whereSql}
-        GROUP BY ${colZona}
-        ORDER BY total DESC
-        LIMIT 30
-        `,
-        queryParams
-      ),
-
-      // 6. Top 15 Cuadrillas más productivas
-      pool.query(
-        `
-        SELECT
-          ${cuadrillaGroupExpr} AS cuadrilla,
-          MAX(${colPartner}) AS partner,
-          COUNT(*) AS total,
-          COALESCE(SUM(${isFin}), 0) AS finalizadas,
-          COALESCE(SUM(${isCurso}), 0) AS en_curso,
-          COALESCE(SUM(${isCancel}), 0) AS canceladas
-        FROM vw_winordetraba w
-        ${whereSql}
-        GROUP BY ${cuadrillaGroupExpr}
-        HAVING cuadrilla != 'SIN ASIGNAR'
-        ORDER BY finalizadas DESC, total DESC
-        LIMIT 15
-        `,
-        queryParams
-      ),
-
-      // 7. Distribución por Producto / Motivo Trabajo
-      pool.query(
-        `
-        SELECT
-          ${motivoTrabajoGroupExpr} AS motivo_trabajo,
-          MAX(COALESCE(NULLIF(TRIM(w.Tipo), ''), 'RESIDENCIAL')) AS segmento,
-          COUNT(*) AS total,
-          COALESCE(SUM(${isFin}), 0) AS finalizadas,
-          COALESCE(SUM(${isCancel}), 0) AS canceladas,
-          COUNT(DISTINCT ${colCuadrilla}) AS cuadrillas
-        FROM vw_winordetraba w
-        ${whereSql}
-        GROUP BY ${motivoTrabajoGroupExpr}
-        ORDER BY total DESC
-        LIMIT 15
-        `,
-        queryParams
-      ),
-
-      // 8. Top Motivos de Finalización / Cancelación / Regestión
-      pool.query(
-        `
-        SELECT
-          ${motivoFinGroupExpr} AS motivo_fin,
-          COUNT(*) AS total,
-          COALESCE(SUM(${isFin}), 0) AS finalizadas,
-          COALESCE(SUM(${isCancel}), 0) AS canceladas
-        FROM vw_winordetraba w
-        ${whereSql}
-        GROUP BY ${motivoFinGroupExpr}
-        ORDER BY total DESC
-        LIMIT 10
-        `,
-        queryParams
-      ),
     ]);
 
-    const kpisRaw = summaryRes?.[0]?.[0] || {};
-    const totalOrdenes = Number(kpisRaw.total_ordenes || 0);
-    const finalizadas = Number(kpisRaw.finalizadas || 0);
-    const enCurso = Number(kpisRaw.en_curso || 0);
-    const agendadas = Number(kpisRaw.agendadas || 0);
-    const canceladas = Number(kpisRaw.canceladas || 0);
-    const cuadrillasActivas = Number(kpisRaw.cuadrillas_activas || 0);
+    const classifyEstado = (est: string) => {
+      const lower = est.toLowerCase();
+      const fin =
+        lower.includes('finaliz') ||
+        lower.includes('atendid') ||
+        lower.includes('complet') ||
+        lower.includes('cerrad') ||
+        lower.includes('ok');
+      const cur =
+        lower.includes('iniciad') ||
+        lower.includes('camino') ||
+        lower.includes('ruta') ||
+        lower.includes('ejecuc') ||
+        lower.includes('proceso');
+      const can =
+        lower.includes('cancel') ||
+        lower.includes('anul') ||
+        lower.includes('rechaz') ||
+        lower.includes('quiebre') ||
+        lower.includes('suspens');
+      const age = !fin && !cur && !can;
+      return { fin, cur, can, age };
+    };
+
+    let totalOrdenes = 0;
+    let finalizadas = 0;
+    let enCurso = 0;
+    let agendadas = 0;
+    let canceladas = 0;
+    const allCuadrillas = new Set<string>();
+    const allPartners = new Set<string>();
+    const allZonas = new Set<string>();
+
+    const estadoMap = new Map<string, { estado: string; total: number; cuadrillasSet: Set<string> }>();
+    const partnerMap = new Map<
+      string,
+      {
+        partner: string;
+        total: number;
+        finalizadas: number;
+        en_curso: number;
+        agendadas: number;
+        canceladas: number;
+        cuadrillasSet: Set<string>;
+      }
+    >();
+    const zonaMap = new Map<
+      string,
+      {
+        zona: string;
+        total: number;
+        finalizadas: number;
+        en_curso: number;
+        agendadas: number;
+        canceladas: number;
+        cuadrillasSet: Set<string>;
+      }
+    >();
+    const cuadrillaMap = new Map<
+      string,
+      {
+        cuadrilla: string;
+        partner: string;
+        total: number;
+        finalizadas: number;
+        en_curso: number;
+        canceladas: number;
+      }
+    >();
+    const motivoTrabajoMap = new Map<
+      string,
+      {
+        motivo_trabajo: string;
+        segmento: string;
+        total: number;
+        finalizadas: number;
+        canceladas: number;
+        cuadrillasSet: Set<string>;
+      }
+    >();
+    const motivoFinMap = new Map<
+      string,
+      {
+        motivo_fin: string;
+        total: number;
+        finalizadas: number;
+        canceladas: number;
+      }
+    >();
+
+    for (const r of rangeRes?.[0] || []) {
+      const cnt = Number(r.total || 0);
+      const est = String(r.estado || 'SIN ESTADO');
+      const par = String(r.partner || 'SIN PARTNER');
+      const cua = r.cuadrilla ? String(r.cuadrilla) : null;
+      const zon = String(r.zona || 'SIN ZONA');
+      const mtr = String(r.motivo_trabajo || 'NO ESPECIFICADO');
+      const seg = String(r.segmento || 'RESIDENCIAL');
+      const mfi = String(r.motivo_fin || 'SIN MOTIVO DE CIERRE');
+
+      const { fin, cur, can, age } = classifyEstado(est);
+      const cFin = fin ? cnt : 0;
+      const cCur = cur ? cnt : 0;
+      const cCan = can ? cnt : 0;
+      const cAge = age ? cnt : 0;
+
+      totalOrdenes += cnt;
+      finalizadas += cFin;
+      enCurso += cCur;
+      agendadas += cAge;
+      canceladas += cCan;
+
+      if (cua && cua !== 'SIN ASIGNAR') allCuadrillas.add(cua);
+      if (par) allPartners.add(par);
+      if (zon) allZonas.add(zon);
+
+      // 1. Por Estado
+      let stNode = estadoMap.get(est);
+      if (!stNode) {
+        stNode = { estado: est, total: 0, cuadrillasSet: new Set() };
+        estadoMap.set(est, stNode);
+      }
+      stNode.total += cnt;
+      if (cua && cua !== 'SIN ASIGNAR') stNode.cuadrillasSet.add(cua);
+
+      // 2. Por Partner
+      let pNode = partnerMap.get(par);
+      if (!pNode) {
+        pNode = {
+          partner: par,
+          total: 0,
+          finalizadas: 0,
+          en_curso: 0,
+          agendadas: 0,
+          canceladas: 0,
+          cuadrillasSet: new Set(),
+        };
+        partnerMap.set(par, pNode);
+      }
+      pNode.total += cnt;
+      pNode.finalizadas += cFin;
+      pNode.en_curso += cCur;
+      pNode.agendadas += cAge;
+      pNode.canceladas += cCan;
+      if (cua && cua !== 'SIN ASIGNAR') pNode.cuadrillasSet.add(cua);
+
+      // 3. Por Zona
+      let zNode = zonaMap.get(zon);
+      if (!zNode) {
+        zNode = {
+          zona: zon,
+          total: 0,
+          finalizadas: 0,
+          en_curso: 0,
+          agendadas: 0,
+          canceladas: 0,
+          cuadrillasSet: new Set(),
+        };
+        zonaMap.set(zon, zNode);
+      }
+      zNode.total += cnt;
+      zNode.finalizadas += cFin;
+      zNode.en_curso += cCur;
+      zNode.agendadas += cAge;
+      zNode.canceladas += cCan;
+      if (cua && cua !== 'SIN ASIGNAR') zNode.cuadrillasSet.add(cua);
+
+      // 4. Top Cuadrillas
+      if (cua && cua !== 'SIN ASIGNAR') {
+        let cNode = cuadrillaMap.get(cua);
+        if (!cNode) {
+          cNode = {
+            cuadrilla: cua,
+            partner: par,
+            total: 0,
+            finalizadas: 0,
+            en_curso: 0,
+            canceladas: 0,
+          };
+          cuadrillaMap.set(cua, cNode);
+        }
+        cNode.total += cnt;
+        cNode.finalizadas += cFin;
+        cNode.en_curso += cCur;
+        cNode.canceladas += cCan;
+        if (par > cNode.partner) cNode.partner = par;
+      }
+
+      // 5. Por Motivo Trabajo
+      let mtNode = motivoTrabajoMap.get(mtr);
+      if (!mtNode) {
+        mtNode = {
+          motivo_trabajo: mtr,
+          segmento: seg,
+          total: 0,
+          finalizadas: 0,
+          canceladas: 0,
+          cuadrillasSet: new Set(),
+        };
+        motivoTrabajoMap.set(mtr, mtNode);
+      }
+      mtNode.total += cnt;
+      mtNode.finalizadas += cFin;
+      mtNode.canceladas += cCan;
+      if (seg > mtNode.segmento) mtNode.segmento = seg;
+      if (cua && cua !== 'SIN ASIGNAR') mtNode.cuadrillasSet.add(cua);
+
+      // 6. Por Motivo Fin
+      let mfNode = motivoFinMap.get(mfi);
+      if (!mfNode) {
+        mfNode = {
+          motivo_fin: mfi,
+          total: 0,
+          finalizadas: 0,
+          canceladas: 0,
+        };
+        motivoFinMap.set(mfi, mfNode);
+      }
+      mfNode.total += cnt;
+      mfNode.finalizadas += cFin;
+      mfNode.canceladas += cCan;
+    }
+
+    const cuadrillasActivas = allCuadrillas.size;
 
     const payload = {
       ok: true,
-      source: 'vw_winordetraba',
+      source: 'mat_funnel_casos_360',
       kpis: {
         total_ordenes: totalOrdenes,
         finalizadas,
@@ -2202,14 +2308,20 @@ app.get('/api/operations', async (req, res) => {
         agendadas,
         canceladas,
         cuadrillas_activas: cuadrillasActivas,
-        partners_activos: Number(kpisRaw.partners_activos || 0),
-        zonas_activas: Number(kpisRaw.zonas_activas || 0),
+        partners_activos: allPartners.size,
+        zonas_activas: allZonas.size,
         efectividad_pct: totalOrdenes > 0 ? Number(((finalizadas / totalOrdenes) * 100).toFixed(1)) : 0,
         cancelacion_pct: totalOrdenes > 0 ? Number(((canceladas / totalOrdenes) * 100).toFixed(1)) : 0,
         prod_ot_por_cuadrilla: cuadrillasActivas > 0 ? Number((totalOrdenes / cuadrillasActivas).toFixed(1)) : 0,
         prod_fin_por_cuadrilla: cuadrillasActivas > 0 ? Number((finalizadas / cuadrillasActivas).toFixed(1)) : 0,
       },
-      byEstado: estadosRes?.[0] || [],
+      byEstado: Array.from(estadoMap.values())
+        .map((st) => ({
+          estado: st.estado,
+          total: st.total,
+          cuadrillas: st.cuadrillasSet.size,
+        }))
+        .sort((a, b) => b.total - a.total),
       daily: (dailyRes?.[0] || []).map((d: any) => {
         const tot = Number(d.total || 0);
         const fin = Number(d.finalizadas || 0);
@@ -2227,60 +2339,74 @@ app.get('/api/operations', async (req, res) => {
           prod_fin: crw > 0 ? Number((fin / crw).toFixed(1)) : 0,
         };
       }),
-      byPartner: (partnerRes?.[0] || []).map((p: any) => {
-        const tot = Number(p.total || 0);
-        const fin = Number(p.finalizadas || 0);
-        const crw = Number(p.cuadrillas || 0);
-        return {
-          ...p,
-          total: tot,
-          finalizadas: fin,
-          en_curso: Number(p.en_curso || 0),
-          agendadas: Number(p.agendadas || 0),
-          canceladas: Number(p.canceladas || 0),
-          cuadrillas: crw,
-          efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
-          prod_total: crw > 0 ? Number((tot / crw).toFixed(1)) : 0,
-          prod_fin: crw > 0 ? Number((fin / crw).toFixed(1)) : 0,
-        };
-      }),
-      byZona: (zonaRes?.[0] || []).map((z: any) => {
-        const tot = Number(z.total || 0);
-        const fin = Number(z.finalizadas || 0);
-        const crw = Number(z.cuadrillas || 0);
-        return {
-          ...z,
-          total: tot,
-          finalizadas: fin,
-          en_curso: Number(z.en_curso || 0),
-          agendadas: Number(z.agendadas || 0),
-          canceladas: Number(z.canceladas || 0),
-          cuadrillas: crw,
-          efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
-          prod_fin: crw > 0 ? Number((fin / crw).toFixed(1)) : 0,
-        };
-      }),
-      topCuadrillas: (cuadrillasRes?.[0] || []).map((c: any) => {
-        const tot = Number(c.total || 0);
-        const fin = Number(c.finalizadas || 0);
-        return {
-          ...c,
-          total: tot,
-          finalizadas: fin,
-          en_curso: Number(c.en_curso || 0),
-          canceladas: Number(c.canceladas || 0),
-          efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
-        };
-      }),
-      byMotivoTrabajo: (motivosRes?.[0] || []).map((m: any) => {
-        const prodKey = String(m.motivo_trabajo || '').trim().toUpperCase();
-        const tipoMapeado = servicioToTipoMap.get(prodKey) || prodKey || 'OTROS';
-        return {
-          ...m,
-          tipo_operacion: tipoMapeado,
-        };
-      }),
-      byMotivoFin: cierreRes?.[0] || [],
+      byPartner: Array.from(partnerMap.values())
+        .map((p) => {
+          const tot = p.total;
+          const fin = p.finalizadas;
+          const crw = p.cuadrillasSet.size;
+          return {
+            partner: p.partner,
+            total: tot,
+            finalizadas: fin,
+            en_curso: p.en_curso,
+            agendadas: p.agendadas,
+            canceladas: p.canceladas,
+            cuadrillas: crw,
+            efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
+            prod_total: crw > 0 ? Number((tot / crw).toFixed(1)) : 0,
+            prod_fin: crw > 0 ? Number((fin / crw).toFixed(1)) : 0,
+          };
+        })
+        .sort((a, b) => b.total - a.total),
+      byZona: Array.from(zonaMap.values())
+        .map((z) => {
+          const tot = z.total;
+          const fin = z.finalizadas;
+          const crw = z.cuadrillasSet.size;
+          return {
+            zona: z.zona,
+            total: tot,
+            finalizadas: fin,
+            en_curso: z.en_curso,
+            agendadas: z.agendadas,
+            canceladas: z.canceladas,
+            cuadrillas: crw,
+            efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
+            prod_fin: crw > 0 ? Number((fin / crw).toFixed(1)) : 0,
+          };
+        })
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 30),
+      topCuadrillas: Array.from(cuadrillaMap.values())
+        .map((c) => {
+          const tot = c.total;
+          const fin = c.finalizadas;
+          return {
+            ...c,
+            efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
+          };
+        })
+        .sort((a, b) => b.finalizadas - a.finalizadas || b.total - a.total)
+        .slice(0, 15),
+      byMotivoTrabajo: Array.from(motivoTrabajoMap.values())
+        .map((m) => {
+          const prodKey = String(m.motivo_trabajo || '').trim().toUpperCase();
+          const tipoMapeado = servicioToTipoMap.get(prodKey) || prodKey || 'OTROS';
+          return {
+            motivo_trabajo: m.motivo_trabajo,
+            segmento: m.segmento,
+            total: m.total,
+            finalizadas: m.finalizadas,
+            canceladas: m.canceladas,
+            cuadrillas: m.cuadrillasSet.size,
+            tipo_operacion: tipoMapeado,
+          };
+        })
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 15),
+      byMotivoFin: Array.from(motivoFinMap.values())
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 10),
     };
 
     await cacheSet(cacheKey, payload, 300);
