@@ -29,7 +29,7 @@ export function Sidebar({
   const [dashExpanded, setDashExpanded] = useState<boolean>(true);
 
   const canSeeView = (v: NavSection) =>
-    allowedViews.includes('*') || allowedViews.includes(v);
+    v === 'Inicio' || allowedViews.includes('*') || allowedViews.includes(v);
 
   const canSeeSubview = (sv: ViewMode) =>
     allowedSubviews.includes('*') || allowedSubviews.includes(sv);

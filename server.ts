@@ -850,6 +850,46 @@ function cleanPartnerName(raw: any): string {
   return str || 'SIN PARTNER';
 }
 
+// 0. Endpoint de telemetría rápida para la vista Inicio (sync_runs + chats SOS activos)
+app.get('/api/home/status', async (_req, res) => {
+  try {
+    const cached = await cacheGet('home_system_status');
+    if (cached) return res.json(cached);
+
+    const [syncRows, sosChatRows]: any = await Promise.all([
+      pool
+        .query(`SELECT run_id, status, started_at FROM sync_runs ORDER BY started_at DESC LIMIT 1`)
+        .catch(() => [[]]),
+      pool
+        .query(`
+          SELECT COUNT(*) AS active_sos
+          FROM historial_chats_mantra
+          WHERE UPPER(COALESCE(semaforo_sla, '')) LIKE '%ROJO%'
+             OR UPPER(COALESCE(estado_chat, '')) = 'ABIERTO'
+        `)
+        .catch(() => [[{ active_sos: 0 }]]),
+    ]);
+
+    const lastSync = syncRows?.[0]?.[0] || null;
+    const payload = {
+      ok: true,
+      sync: lastSync
+        ? {
+            id: lastSync.run_id,
+            status: String(lastSync.status || 'OK').toUpperCase(),
+            startedAt: lastSync.started_at,
+          }
+        : null,
+      activeChats: Number(sosChatRows?.[0]?.[0]?.active_sos || 0),
+    };
+
+    await cacheSet('home_system_status', payload, 60);
+    return res.json(payload);
+  } catch (err: any) {
+    return res.json({ ok: true, sync: null, activeChats: 0, error: err.message });
+  }
+});
+
 // 1. Endpoint de catálogos para filtros desplegables
 app.get('/api/filters', async (_req, res) => {
   try {
@@ -1639,7 +1679,7 @@ app.get('/api/tracking/search', async (req, res) => {
     // En COUNT(*) solo unimos vw_winordetraba si el usuario escribió en el buscador 'q'
     const countWinJoin = q ? `LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id` : '';
 
-    const needsLogsChatInCount = fSoloLogChat || fSoloSos || fTurno === 'BOT';
+    const needsLogsChatInCount = fSoloLogChat || fSoloSos || fSoloConChat || fTurno.toUpperCase() === 'BOT';
     const countLogsChatJoin = needsLogsChatInCount ? logsChatSubquery : '';
 
     const [countResult, rowsResult]: any = await Promise.all([
@@ -1788,7 +1828,7 @@ app.get('/api/4dm1n_/mantra-chat', async (req, res) => {
         });
         clearTimeout(timeout);
         if (liveRes.ok) {
-          const liveData = await liveRes.json();
+          const liveData: any = await liveRes.json();
           const msgs = Array.isArray(liveData)
             ? liveData
             : liveData.messages || liveData.data || liveData.ultimos_mensajes_json || [];
@@ -1881,9 +1921,6 @@ app.get('/api/operations', async (req, res) => {
 
   try {
     if (tiposUnicosList.length === 0) await loadTipoServicioCache();
-
-    // Uso directo de w.`F.Soli` para aprovechar el índice B-Tree `idx_f_soli` en vw_winordetraba
-    const dateExpr = `DATE(w.\`F.Soli\`)`;
 
     const colEstado = `COALESCE(NULLIF(TRIM(w.\`Estado OT\`), ''), NULLIF(TRIM(w.Estado), ''), 'SIN ESTADO')`;
     const rawPartnerExpr = `UPPER(COALESCE(NULLIF(TRIM(w.Proveedeor), ''), NULLIF(TRIM(w.Empresa), ''), 'SIN PARTNER'))`;

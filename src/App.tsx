@@ -9,6 +9,7 @@ import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { KpiCards } from './components/KpiCards';
 import { OrderDetailDrawer } from './components/OrderDetailDrawer';
+import { HomeView } from './views/HomeView';
 import { ExecutiveView } from './views/ExecutiveView';
 import { OperationalView } from './views/OperationalView';
 import { OperationsDashboardView } from './views/OperationsDashboardView';
@@ -184,7 +185,7 @@ export default function App() {
   // Subvistas del Dashboard permitidas por el Rol
   const allowedViews = authUser?.permisos?.vistas || ['*'];
   const canSeeView = (v: NavSection) =>
-    allowedViews.includes('*') || allowedViews.includes(v);
+    v === 'Inicio' || allowedViews.includes('*') || allowedViews.includes(v);
 
   const allowedSubviews = authUser?.permisos?.subvistas || ['*'];
   const canSeeSubview = (sv: ViewMode) =>
@@ -673,6 +674,25 @@ export default function App() {
           darkMode={darkMode}
           onToggleDarkMode={() => setDarkMode((prev) => !prev)}
         />
+
+        {activeNav === 'Inicio' && (
+          <HomeView
+            authUser={authUser}
+            calc={calc}
+            kpis={kpis}
+            startDate={startDate}
+            endDate={endDate}
+            service={service}
+            serviceOptions={serviceOptions}
+            canSeeView={canSeeView}
+            canSeeSubview={canSeeSubview}
+            onNavigate={(nav, subview) => {
+              setActiveNav(nav);
+              if (subview) setViewMode(subview);
+            }}
+            onSelectOrder={setSelectedOrder}
+          />
+        )}
 
         {activeNav === 'Dashboard' && (
           <>
