@@ -53,9 +53,11 @@ const apiLimiter = rateLimit({
 app.use('/api', apiLimiter);
 
 // ============================================================================
-// FASE 2: CACHÉ DISTRIBUIDO REDIS (AUTO-SCALING) + FALLBACK RAM (NodeCache)
+// FASE 2: CACHÉ DISTRIBUIDO REDIS + SWR (STALE-WHILE-REVALIDATE) + SINGLE-FLIGHT
 // ============================================================================
 const queryCache = new NodeCache({ stdTTL: 300 });
+const swrMemoryCache = new NodeCache({ stdTTL: 1800 });
+const inFlightRequests = new Map<string, Promise<any>>();
 const REDIS_URL = (process.env.REDIS_URL || '').trim();
 let redisClient: Redis | null = null;
 
@@ -70,6 +72,10 @@ if (REDIS_URL) {
 }
 
 async function cacheGet<T = any>(key: string): Promise<T | null> {
+  const swrEntry = swrMemoryCache.get<{ data: T; freshUntil: number }>(key);
+  if (swrEntry && Date.now() < swrEntry.freshUntil) {
+    return swrEntry.data;
+  }
   if (redisClient && redisClient.status === 'ready') {
     try {
       const raw = await redisClient.get(key);
@@ -83,6 +89,11 @@ async function cacheGet<T = any>(key: string): Promise<T | null> {
 
 async function cacheSet(key: string, val: any, ttlSeconds = 300): Promise<void> {
   queryCache.set(key, val, ttlSeconds);
+  swrMemoryCache.set(
+    key,
+    { data: val, freshUntil: Date.now() + ttlSeconds * 1000 },
+    Math.max(ttlSeconds * 6, 900)
+  );
   if (redisClient && redisClient.status === 'ready') {
     try {
       await redisClient.set(key, JSON.stringify(val), 'EX', ttlSeconds);
@@ -90,6 +101,50 @@ async function cacheSet(key: string, val: any, ttlSeconds = 300): Promise<void> 
       // Ignorar fallo de escritura en Redis
     }
   }
+}
+
+async function withSingleFlightSwr<T>(
+  key: string,
+  ttlSeconds: number,
+  forceRefresh: boolean,
+  computeFn: () => Promise<T>
+): Promise<T> {
+  const runCompute = (): Promise<T> => {
+    const existing = inFlightRequests.get(key);
+    if (existing) return existing as Promise<T>;
+    const p = computeFn()
+      .then(async (result) => {
+        await cacheSet(key, result, ttlSeconds);
+        return result;
+      })
+      .finally(() => {
+        inFlightRequests.delete(key);
+      });
+    inFlightRequests.set(key, p);
+    return p;
+  };
+
+  if (!forceRefresh) {
+    const swrEntry = swrMemoryCache.get<{ data: T; freshUntil: number }>(key);
+    if (swrEntry) {
+      if (Date.now() >= swrEntry.freshUntil && !inFlightRequests.has(key)) {
+        // Stale-While-Revalidate: sirve instantáneamente y refresca en segundo plano
+        runCompute().catch((err) => console.warn(`⚠️ Error en SWR background (${key}):`, err.message));
+      }
+      return swrEntry.data;
+    }
+    const cached = await cacheGet<T>(key);
+    if (cached) {
+      swrMemoryCache.set(
+        key,
+        { data: cached, freshUntil: Date.now() + ttlSeconds * 1000 },
+        Math.max(ttlSeconds * 6, 900)
+      );
+      return cached;
+    }
+  }
+
+  return runCompute();
 }
 
 // Pool MySQL optimizado para Auto-Scaling (configurable vía DB_POOL_LIMIT)
@@ -998,175 +1053,149 @@ app.get('/api/dashboard', async (req, res) => {
   const service = enforceRoleServiceScope(req, rawService);
 
   const cacheKey = `dash_${startDate}_${endDate}_${service}_${zone}`;
-  if (refresh !== 'true') {
-    const cachedData = await cacheGet(cacheKey);
-    if (cachedData) {
-      console.log(`🚀 Respuesta instantánea desde Caché (${Date.now() - startTime}ms)`);
-      return res.json(cachedData);
-    }
-  }
 
   try {
-    if (tiposUnicosList.length === 0) await loadTipoServicioCache();
-    if (refresh === 'true') {
-      await syncMatFunnelIncremental(startDate, endDate);
-    }
-
-    // Garantizar siempre mínimo 7 días hacia atrás desde endDate para la gráfica evolutiva
-    const [ey, em, ed] = endDate.split('-').map(Number);
-    const endTarget = new Date(ey, em - 1, ed);
-    const min7D = new Date(endTarget);
-    min7D.setDate(min7D.getDate() - 6);
-    const min7StartStr = `${min7D.getFullYear()}-${String(min7D.getMonth() + 1).padStart(2, '0')}-${String(min7D.getDate()).padStart(2, '0')}`;
-    const chartStartDate = startDate < min7StartStr ? startDate : min7StartStr;
-
-    const extraFilters: string[] = [];
-    const extraParams: any[] = [];
-    const reprogFilters: string[] = [];
-    const reprogParams: any[] = [];
-    const encFilters: string[] = [];
-    const encParams: any[] = [];
-
-    const dashSrvFilter = buildStrictOrderTypeSql(service, 'v.tipo_operacion');
-    if (dashSrvFilter.params.length > 0) {
-      extraFilters.push(`AND ${dashSrvFilter.sql}`);
-      extraParams.push(...dashSrvFilter.params);
-
-      const { canonicalList, productosDelTipo } = resolveProductosFromServiceFilter(service);
-      const prods = productosDelTipo.length > 0 ? productosDelTipo : dashSrvFilter.params;
-      const ph = prods.map(() => '?').join(',');
-
-      let geoClauseR = '';
-      const onlyLima = canonicalList.length > 0 && canonicalList.every((c) => c.includes('LIMA'));
-      const onlyProv = canonicalList.length > 0 && canonicalList.every((c) => c.includes('PROV'));
-      if (onlyLima) {
-        geoClauseR = " AND (r.sector_operativo LIKE 'LIMA%' OR r.sector_operativo IS NULL)";
-      } else if (onlyProv) {
-        geoClauseR = " AND (r.sector_operativo NOT LIKE 'LIMA%' AND r.sector_operativo IS NOT NULL)";
+    const responsePayload = await withSingleFlightSwr(cacheKey, 120, refresh === 'true', async () => {
+      if (tiposUnicosList.length === 0) await loadTipoServicioCache();
+      if (refresh === 'true') {
+        await syncMatFunnelIncremental(startDate, endDate);
       }
 
-      reprogFilters.push(`AND UPPER(TRIM(r.producto_servicio)) IN (${ph})${geoClauseR}`);
-      reprogParams.push(...prods.map((x) => x.toUpperCase()));
+      // Garantizar siempre mínimo 7 días hacia atrás desde endDate para la gráfica evolutiva
+      const [ey, em, ed] = endDate.split('-').map(Number);
+      const endTarget = new Date(ey, em - 1, ed);
+      const min7D = new Date(endTarget);
+      min7D.setDate(min7D.getDate() - 6);
+      const min7StartStr = `${min7D.getFullYear()}-${String(min7D.getMonth() + 1).padStart(2, '0')}-${String(min7D.getDate()).padStart(2, '0')}`;
+      const chartStartDate = startDate < min7StartStr ? startDate : min7StartStr;
 
-      // Misma regla canónica de vw_reporte_funnel_casos_360 sobre vw_winordetraba + tiposervicio
-      const canonPh = canonicalList.map(() => '?').join(',');
-      const tipoOpExprW = `(CASE
-        WHEN ts.Tipo = 'POSTVENTA' THEN 'POSTVENTA'
-        WHEN ts.Tipo IN ('AVERIAS', 'AVERIAS PRV') THEN IF(UPPER(TRIM(COALESCE(w.\`Sector Operativo\`, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(w.Region, ''))) = 'LIMA', 'AVER - LIMA', 'AVER - PROV')
-        WHEN ts.Tipo IN ('INSTALACION', 'PROVINCIA') THEN IF(UPPER(TRIM(COALESCE(w.\`Sector Operativo\`, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(w.Region, ''))) = 'LIMA', 'INSTA - LIMA', 'INSTA - PROV')
-        ELSE COALESCE(ts.Tipo, 'OTRO')
-      END)`;
-      encFilters.push(`AND ${tipoOpExprW} IN (${canonPh})`);
-      encParams.push(...canonicalList.map((x) => x.toUpperCase()));
-    }
+      const extraFilters: string[] = [];
+      const extraParams: any[] = [];
+      const reprogFilters: string[] = [];
+      const reprogParams: any[] = [];
+      const encFilters: string[] = [];
+      const encParams: any[] = [];
 
-    if (zone && zone !== 'Todas las zonas') {
-      extraFilters.push(`AND v.sector_operativo = ?`);
-      extraParams.push(zone);
+      const dashSrvFilter = buildStrictOrderTypeSql(service, 'v.tipo_operacion');
+      if (dashSrvFilter.params.length > 0) {
+        extraFilters.push(`AND ${dashSrvFilter.sql}`);
+        extraParams.push(...dashSrvFilter.params);
 
-      reprogFilters.push(`AND r.sector_operativo = ?`);
-      reprogParams.push(zone);
+        const { canonicalList, productosDelTipo } = resolveProductosFromServiceFilter(service);
+        const prods = productosDelTipo.length > 0 ? productosDelTipo : dashSrvFilter.params;
+        const ph = prods.map(() => '?').join(',');
 
-      encFilters.push(`AND w.\`Sector Operativo\` = ?`);
-      encParams.push(zone);
-    }
+        let geoClauseR = '';
+        const onlyLima = canonicalList.length > 0 && canonicalList.every((c) => c.includes('LIMA'));
+        const onlyProv = canonicalList.length > 0 && canonicalList.every((c) => c.includes('PROV'));
+        if (onlyLima) {
+          geoClauseR = " AND (r.sector_operativo LIKE 'LIMA%' OR r.sector_operativo IS NULL)";
+        } else if (onlyProv) {
+          geoClauseR = " AND (r.sector_operativo NOT LIKE 'LIMA%' AND r.sector_operativo IS NOT NULL)";
+        }
 
-    const filterSql = extraFilters.join(' ');
-    const avListSql = DISTRITOS_ALTO_VALOR.map((d) => `'${d.trim().toUpperCase()}'`).join(',');
+        reprogFilters.push(`AND UPPER(TRIM(r.producto_servicio)) IN (${ph})${geoClauseR}`);
+        reprogParams.push(...prods.map((x) => x.toUpperCase()));
 
-    const [
-      aggregatedResult,
-      orderResult,
-      reprogResult,
-      encResult,
-    ]: any = await Promise.all([
-      pool.query(
-        `
-        SELECT 
-          DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
-          DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m') AS fecha,
-          DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_full,
-          COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'Sin estado') AS estado_ot,
-          COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR') AS sector_operativo,
-          UPPER(TRIM(COALESCE(v.tipo_operacion, 'OTROS'))) AS tipo_operacion,
-          COUNT(*) AS total,
-          COALESCE(SUM(v.se_envio_wsp = 'SI'), 0) AS enviados,
-          COALESCE(SUM(v.estado_wsp = 'read'), 0) AS leidos,
-          COALESCE(SUM(v.estado_wsp = 'sent'), 0) AS sent,
-          COALESCE(SUM(v.estado_wsp = 'delivered'), 0) AS delivered,
-          COALESCE(SUM(v.estado_wsp = 'failed'), 0) AS failed,
-          COALESCE(SUM(v.se_envio_wsp = 'NO' OR v.estado_wsp = 'NO ENVIADO' OR v.estado_wsp IS NULL), 0) AS no_enviado,
-          COALESCE(SUM(v.ingreso_tracking = 'SI'), 0) AS tracking,
-          COALESCE(SUM(UPPER(TRIM(COALESCE(v.pulso_soporte, 'NO'))) IN ('SI', 'SÍ', '1', 'TRUE')), 0) AS sos_soporte,
-          COALESCE(SUM(v.ingreso_tracking = 'SI' AND UPPER(TRIM(COALESCE(v.pulso_soporte, 'NO'))) NOT IN ('SI', 'SÍ', '1', 'TRUE')), 0) AS autogestionados,
-          COALESCE(SUM(v.reprogramo = 'SI'), 0) AS reprogramaciones,
-          COALESCE(SUM(v.respondio_encuesta = 'SI'), 0) AS encuestas,
-          COALESCE(SUM(v.estado_wsp = 'read' AND v.ingreso_tracking = 'NO'), 0) AS leidos_sin_ingreso,
-          COALESCE(SUM(UPPER(TRIM(v.distrito)) IN (${avListSql})), 0) AS av_total,
-          COALESCE(SUM(UPPER(TRIM(v.distrito)) IN (${avListSql}) AND v.se_envio_wsp = 'SI'), 0) AS av_enviados,
-          COALESCE(SUM(UPPER(TRIM(v.distrito)) IN (${avListSql}) AND v.estado_wsp = 'read'), 0) AS av_leidos,
-          COALESCE(SUM(UPPER(TRIM(v.distrito)) IN (${avListSql}) AND v.ingreso_tracking = 'SI'), 0) AS av_tracking,
-          COALESCE(SUM(UPPER(TRIM(v.distrito)) NOT IN (${avListSql}) OR v.distrito IS NULL), 0) AS pref_total,
-          COALESCE(SUM((UPPER(TRIM(v.distrito)) NOT IN (${avListSql}) OR v.distrito IS NULL) AND v.se_envio_wsp = 'SI'), 0) AS pref_enviados,
-          COALESCE(SUM((UPPER(TRIM(v.distrito)) NOT IN (${avListSql}) OR v.distrito IS NULL) AND v.estado_wsp = 'read'), 0) AS pref_leidos,
-          COALESCE(SUM((UPPER(TRIM(v.distrito)) NOT IN (${avListSql}) OR v.distrito IS NULL) AND v.ingreso_tracking = 'SI'), 0) AS pref_tracking
-        FROM mat_funnel_casos_360 v
-        WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
-        ${filterSql}
-        GROUP BY 
-          v.fecha_solicitud_dia,
-          COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'Sin estado'),
-          COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR'),
-          UPPER(TRIM(COALESCE(v.tipo_operacion, 'OTROS')))
-        `,
-        [chartStartDate, endDate, ...extraParams]
-      ),
-      // Las vistas de Órdenes y Seguimiento usan sus propios endpoints paginados (/api/orders/search y /api/tracking/search)
-      Promise.resolve([[]]),
-      pool
-        .query(
-          `
-          SELECT COUNT(*) AS total_reprog
-          FROM vw_reprogramaciones_detalle r
-          WHERE r.fecha_registro >= ? AND r.fecha_registro < DATE_ADD(?, INTERVAL 1 DAY)
-          ${reprogFilters.join(' ')}
-          `,
-          [startDate, endDate, ...reprogParams]
-        )
-        .catch((err: any) => {
-          console.warn('⚠️ Error consultando vw_reprogramaciones_detalle:', err.message);
-          return [[{ total_reprog: 0 }]];
-        }),
-      pool
-        .query(
+        encFilters.push(`AND ${dashSrvFilter.sql}`);
+        encParams.push(...dashSrvFilter.params);
+      }
+
+      if (zone && zone !== 'Todas las zonas') {
+        extraFilters.push(`AND v.sector_operativo = ?`);
+        extraParams.push(zone);
+
+        reprogFilters.push(`AND r.sector_operativo = ?`);
+        reprogParams.push(zone);
+
+        encFilters.push(`AND v.sector_operativo = ?`);
+        encParams.push(zone);
+      }
+
+      const filterSql = extraFilters.join(' ');
+
+      const [
+        aggregatedResult,
+        orderResult,
+        reprogResult,
+        encResult,
+      ]: any = await Promise.all([
+        pool.query(
           `
           SELECT 
-            COALESCE(NULLIF(TRIM(w.Proveedeor), ''), NULLIF(TRIM(w.Empresa), ''), 'SIN PARTNER') AS partner_raw,
-            (CASE
-              WHEN ts.Tipo = 'POSTVENTA' THEN 'POSTVENTA'
-              WHEN ts.Tipo IN ('AVERIAS', 'AVERIAS PRV') THEN IF(UPPER(TRIM(COALESCE(w.\`Sector Operativo\`, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(w.Region, ''))) = 'LIMA', 'AVER - LIMA', 'AVER - PROV')
-              WHEN ts.Tipo IN ('INSTALACION', 'PROVINCIA') THEN IF(UPPER(TRIM(COALESCE(w.\`Sector Operativo\`, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(w.Region, ''))) = 'LIMA', 'INSTA - LIMA', 'INSTA - PROV')
-              ELSE COALESCE(ts.Tipo, 'OTROS')
-            END) AS tipo_operacion,
-            COALESCE(NULLIF(TRIM(w.\`Sector Operativo\`), ''), 'SIN SECTOR') AS sector_operativo,
-            COUNT(DISTINCT ea.id) AS surveys,
-            AVG(COALESCE(ea.satisfaccion_atencion, ea.satisfaccion_experiencia) + 0) AS avg_score
-          FROM encuesta_app ea
-          LEFT JOIN vw_winordetraba w ON w.OrdenId = ea.orden_id_num
-          LEFT JOIN tiposervicio ts ON w.Producto = ts.Servicio
-          WHERE ea.fecha_registro >= CONCAT(?, ' 00:00:00')
-            AND ea.fecha_registro <= CONCAT(?, ' 23:59:59')
-          ${encFilters.join(' ')}
-          GROUP BY partner_raw, tipo_operacion, sector_operativo
-          ORDER BY avg_score DESC, surveys DESC
+            DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
+            DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m') AS fecha,
+            DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_full,
+            v.estado_ot,
+            v.sector_operativo,
+            v.tipo_operacion,
+            v.total,
+            v.enviados,
+            v.leidos,
+            v.sent,
+            v.delivered,
+            v.failed,
+            v.no_enviado,
+            v.tracking,
+            v.sos_soporte,
+            v.autogestionados,
+            v.reprogramaciones,
+            v.encuestas,
+            v.leidos_sin_ingreso,
+            v.av_total,
+            v.av_enviados,
+            v.av_leidos,
+            v.av_tracking,
+            v.pref_total,
+            v.pref_enviados,
+            v.pref_leidos,
+            v.pref_tracking
+          FROM mat_daily_kpis_rollup v
+          WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
+          ${filterSql}
           `,
-          [startDate, endDate, ...encParams]
-        )
-        .catch((err: any) => {
-          console.warn('⚠️ Error consultando encuesta_app:', err.message);
-          return [[]];
-        }),
-    ]);
+          [chartStartDate, endDate, ...extraParams]
+        ),
+        // Las vistas de Órdenes y Seguimiento usan sus propios endpoints paginados (/api/orders/search y /api/tracking/search)
+        Promise.resolve([[]]),
+        pool
+          .query(
+            `
+            SELECT COUNT(*) AS total_reprog
+            FROM vw_reprogramaciones_detalle r
+            WHERE r.fecha_registro >= ? AND r.fecha_registro < DATE_ADD(?, INTERVAL 1 DAY)
+            ${reprogFilters.join(' ')}
+            `,
+            [startDate, endDate, ...reprogParams]
+          )
+          .catch((err: any) => {
+            console.warn('⚠️ Error consultando vw_reprogramaciones_detalle:', err.message);
+            return [[{ total_reprog: 0 }]];
+          }),
+        pool
+          .query(
+            `
+            SELECT 
+              COALESCE(NULLIF(TRIM(v.ops_partner), ''), NULLIF(TRIM(v.partner), ''), 'SIN PARTNER') AS partner_raw,
+              COALESCE(NULLIF(TRIM(v.tipo_operacion), ''), 'OTROS') AS tipo_operacion,
+              COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR') AS sector_operativo,
+              COUNT(DISTINCT ea.id) AS surveys,
+              AVG(COALESCE(ea.satisfaccion_atencion, ea.satisfaccion_experiencia) + 0) AS avg_score
+            FROM encuesta_app ea
+            LEFT JOIN mat_funnel_casos_360 v ON v.orden_id = ea.orden_id_num
+            WHERE ea.fecha_registro >= CONCAT(?, ' 00:00:00')
+              AND ea.fecha_registro <= CONCAT(?, ' 23:59:59')
+            ${encFilters.join(' ')}
+            GROUP BY partner_raw, tipo_operacion, sector_operativo
+            ORDER BY avg_score DESC, surveys DESC
+            `,
+            [startDate, endDate, ...encParams]
+          )
+          .catch((err: any) => {
+            console.warn('⚠️ Error consultando encuesta_app:', err.message);
+            return [[]];
+          }),
+      ]);
 
     const totalReprogReal = Number(reprogResult?.[0]?.[0]?.total_reprog || 0);
 
@@ -1375,23 +1404,23 @@ app.get('/api/dashboard', async (req, res) => {
       servicio_tipo: classifyOrderServiceType(o.producto, o.tipo_operacion),
     }));
 
-    const responsePayload = {
-      ok: true,
-      rawAggregated,
-      encuestasByService,
-      kpis,
-      evolution: dailyRows,
-      dailyInRange: kpiRowsInRange,
-      byEstadoOt,
-      bySector,
-      byTipoOperacion,
-      orders: ordersWithTipo,
-      partners: partnersRanking,
-    };
+      return {
+        ok: true,
+        rawAggregated,
+        encuestasByService,
+        kpis,
+        evolution: dailyRows,
+        dailyInRange: kpiRowsInRange,
+        byEstadoOt,
+        bySector,
+        byTipoOperacion,
+        orders: ordersWithTipo,
+        partners: partnersRanking,
+      };
+    });
 
-    await cacheSet(cacheKey, responsePayload, 300);
-    console.log(`✅ Consulta Azure completada y guardada en caché en ${Date.now() - startTime}ms`);
-    res.json(responsePayload);
+    console.log(`✅ /api/dashboard completado en ${Date.now() - startTime}ms`);
+    return res.json(responsePayload);
   } catch (error: any) {
     console.error('❌ Error SQL en /api/dashboard:', error.message);
     res.status(500).json({ ok: false, error: error.message });
@@ -1443,16 +1472,14 @@ app.get('/api/orders/search', async (req, res) => {
 
     if (fOrden) {
       const likeOrd = `%${fOrden}%`;
-      whereClauses.push(
-        `(CAST(v.orden_id AS CHAR) LIKE ? OR v.ticket LIKE ? OR w.CodiSegui LIKE ?)`
-      );
-      params.push(likeOrd, likeOrd, likeOrd);
+      whereClauses.push(`(CAST(v.orden_id AS CHAR) LIKE ? OR v.ticket LIKE ?)`);
+      params.push(likeOrd, likeOrd);
     }
 
     if (fCliente) {
       const likeCli = `%${fCliente}%`;
       whereClauses.push(
-        `(v.cliente LIKE ? OR v.telefono LIKE ? OR w.\`Número Documento\` LIKE ? OR w.CodiSeguiClien LIKE ? OR w.CodiClien LIKE ?)`
+        `(v.cliente LIKE ? OR v.telefono LIKE ? OR v.ops_num_doc LIKE ? OR v.ops_codi_segui_clien LIKE ? OR v.ops_codi_clien LIKE ?)`
       );
       params.push(likeCli, likeCli, likeCli, likeCli, likeCli);
     }
@@ -1478,7 +1505,7 @@ app.get('/api/orders/search', async (req, res) => {
       const partItems = fPartner.split(',').map((s) => s.trim()).filter(Boolean);
       if (partItems.length > 0) {
         const ph = partItems.map(() => '?').join(',');
-        whereClauses.push(`COALESCE(NULLIF(TRIM(v.partner), ''), NULLIF(TRIM(w.Proveedeor), ''), 'SIN PARTNER') IN (${ph})`);
+        whereClauses.push(`COALESCE(NULLIF(TRIM(v.partner), ''), NULLIF(TRIM(v.ops_partner), ''), 'SIN PARTNER') IN (${ph})`);
         params.push(...partItems);
       }
     }
@@ -1538,28 +1565,47 @@ app.get('/api/orders/search', async (req, res) => {
         v.ticket LIKE ? OR
         v.cliente LIKE ? OR
         v.telefono LIKE ? OR
-        w.\`Número Documento\` LIKE ? OR
-        w.CodiSeguiClien LIKE ? OR
-        w.CodiSegui LIKE ? OR
-        w.Cuadrilla LIKE ? OR
-        w.\`Datos Técnicos\` LIKE ?
+        v.ops_num_doc LIKE ? OR
+        v.ops_codi_segui_clien LIKE ? OR
+        v.ops_codi_clien LIKE ? OR
+        v.ops_cuadrilla LIKE ? OR
+        v.cuadrilla LIKE ?
       )`);
       params.push(likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ);
     }
 
     const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    const countCacheKey = `ord_cnt_${startDate}_${endDate}_${service}_${q}_${ignoreDates}_${fOrden}_${fCliente}_${fOperacion}_${fSector}_${fPartner}_${fEstadoOt}_${fWsp}_${fTracking}`;
+    const cachedTotal = queryCache.get<number>(countCacheKey);
 
-    const [countResult, rowsResult]: any = await Promise.all([
+    const [total, idRowsRes]: [number, any] = await Promise.all([
+      typeof cachedTotal === 'number'
+        ? Promise.resolve(cachedTotal)
+        : pool
+            .query(`SELECT COUNT(*) AS total FROM mat_funnel_casos_360 v ${whereSql}`, params)
+            .then(([r]: any) => {
+              const c = Number(r?.[0]?.total || 0);
+              queryCache.set(countCacheKey, c, 60);
+              return c;
+            }),
       pool.query(
         `
-        SELECT COUNT(*) AS total
+        SELECT v.orden_id
         FROM mat_funnel_casos_360 v
-        LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
         ${whereSql}
+        ORDER BY v.orden_id DESC
+        LIMIT ? OFFSET ?
         `,
-        params
+        [...params, pageSize, offset]
       ),
-      pool.query(
+    ]);
+
+    const pageIds: number[] = (idRowsRes?.[0] || []).map((x: any) => x.orden_id);
+    let rowsResult: any = [[]];
+
+    if (pageIds.length > 0) {
+      const idPh = pageIds.map(() => '?').join(',');
+      rowsResult = await pool.query(
         `
         SELECT 
           v.*,
@@ -1584,15 +1630,13 @@ app.get('/api/orders/search', async (req, res) => {
           w.\`Usuario Asignó\` AS usuario_asigno
         FROM mat_funnel_casos_360 v
         LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
-        ${whereSql}
-        ORDER BY v.orden_id DESC
-        LIMIT ? OFFSET ?
+        WHERE v.orden_id IN (${idPh})
+        ORDER BY FIELD(v.orden_id, ${idPh})
         `,
-        [...params, pageSize, offset]
-      ),
-    ]);
+        [...pageIds, ...pageIds]
+      );
+    }
 
-    const total = Number(countResult?.[0]?.[0]?.total || 0);
     const rows = (rowsResult?.[0] || []).map((o: any) => ({
       ...o,
       servicio_tipo: classifyOrderServiceType(o.producto, o.tipo_operacion),
@@ -1707,11 +1751,12 @@ app.get('/api/tracking/search', async (req, res) => {
         v.cliente LIKE ? OR
         v.telefono LIKE ? OR
         h.phone LIKE ? OR
-        w.\`Número Documento\` LIKE ? OR
-        w.CodiSeguiClien LIKE ? OR
-        w.Cuadrilla LIKE ?
+        v.ops_num_doc LIKE ? OR
+        v.ops_codi_segui_clien LIKE ? OR
+        v.ops_cuadrilla LIKE ? OR
+        v.cuadrilla LIKE ?
       )`);
-      params.push(likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ);
+      params.push(likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ);
     }
 
     const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
@@ -1725,30 +1770,36 @@ app.get('/api/tracking/search', async (req, res) => {
       ) lc ON lc.orden_id = v.orden_id
     `;
 
-    const needsWinJoinInFilter = Boolean(q);
-    const filterWinJoin = needsWinJoinInFilter ? `LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id` : '';
     const needsLogsChatInCount = fSoloLogChat || fSoloSos || fSoloConChat || fTurno.toUpperCase() === 'BOT';
     const countLogsChatJoin = needsLogsChatInCount ? logsChatLightJoin : '';
+    const countCacheKey = `trk_cnt_${startDate}_${endDate}_${service}_${zone}_${q}_${ignoreDates}_${fEstadoChat}_${fSla}_${fTurno}_${fSoloConChat}_${fSoloSos}_${fSoloLogChat}`;
+    const cachedTotal = !refresh ? queryCache.get<number>(countCacheKey) : undefined;
 
-    // Fase 1: Obtener COUNT y solo las 50 llaves ordenadas sin arrastrar JSONs pesados ni vw_winordetraba completo
-    const [countResult, pageIdsResult]: any = await Promise.all([
-      pool.query(
-        `
-        SELECT COUNT(*) AS total
-        FROM mat_funnel_casos_360 v
-        LEFT JOIN historial_chats_mantra h ON h.orden_id = v.orden_id
-        ${filterWinJoin}
-        ${countLogsChatJoin}
-        ${whereSql}
-        `,
-        params
-      ),
+    // Fase 1: Obtener COUNT (cacheado por filtro) y solo las 50 llaves ordenadas sin tocar vw_winordetraba
+    const [total, pageIdsResult]: [number, any] = await Promise.all([
+      typeof cachedTotal === 'number'
+        ? Promise.resolve(cachedTotal)
+        : pool
+            .query(
+              `
+              SELECT COUNT(*) AS total
+              FROM mat_funnel_casos_360 v
+              LEFT JOIN historial_chats_mantra h ON h.orden_id = v.orden_id
+              ${countLogsChatJoin}
+              ${whereSql}
+              `,
+              params
+            )
+            .then(([r]: any) => {
+              const c = Number(r?.[0]?.total || 0);
+              queryCache.set(countCacheKey, c, 60);
+              return c;
+            }),
       pool.query(
         `
         SELECT v.orden_id, lc.max_id AS log_chat_id
         FROM mat_funnel_casos_360 v
         LEFT JOIN historial_chats_mantra h ON h.orden_id = v.orden_id
-        ${filterWinJoin}
         ${logsChatLightJoin}
         ${whereSql}
         ORDER BY (lc.max_id IS NOT NULL) DESC, (h.orden_id IS NOT NULL) DESC, v.orden_id DESC
@@ -1815,7 +1866,6 @@ app.get('/api/tracking/search', async (req, res) => {
       );
     }
 
-    const total = Number(countResult?.[0]?.[0]?.total || 0);
     const rows = (rowsResult?.[0] || []).map((r: any) => ({
       ...r,
       servicio_tipo:
@@ -1927,16 +1977,13 @@ app.get('/api/operations', async (req, res) => {
 
   const searchQ = String(q || '').trim();
   const cacheKey = `ops_raw_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
-  if (refresh !== 'true') {
-    const cached = await cacheGet(cacheKey);
-    if (cached) return res.json(cached);
-  }
 
   try {
-    if (tiposUnicosList.length === 0) await loadTipoServicioCache();
-    if (refresh === 'true') {
-      await syncMatFunnelIncremental(startDate, endDate);
-    }
+    const payload = await withSingleFlightSwr(cacheKey, 120, refresh === 'true', async () => {
+      if (tiposUnicosList.length === 0) await loadTipoServicioCache();
+      if (refresh === 'true') {
+        await syncMatFunnelIncremental(startDate, endDate);
+      }
 
     const colEstado = `v.ops_estado`;
     const colPartner = `v.ops_partner`;
@@ -2408,9 +2455,9 @@ app.get('/api/operations', async (req, res) => {
         .sort((a, b) => b.total - a.total)
         .slice(0, 10),
     };
+    });
 
-    await cacheSet(cacheKey, payload, 300);
-    console.log(`✅ /api/operations (vw_winordetraba) completado en ${Date.now() - startTime}ms`);
+    console.log(`✅ /api/operations (mat_funnel_casos_360) completado en ${Date.now() - startTime}ms`);
     return res.json(payload);
   } catch (error: any) {
     console.error('❌ Error en /api/operations:', error.message);
@@ -2418,7 +2465,7 @@ app.get('/api/operations', async (req, res) => {
   }
 });
 
-// 7. Endpoint exclusivo de Experiencia (CSAT) basado 100% en la nueva tabla `encuesta_app`
+// 7. Endpoint exclusivo de Experiencia (CSAT) basado 100% en la nueva tabla `encuesta_app` + `mat_funnel_casos_360`
 app.get('/api/csat', async (req, res) => {
   try {
     if (tiposUnicosList.length === 0) await loadTipoServicioCache();
@@ -2435,85 +2482,77 @@ app.get('/api/csat', async (req, res) => {
 
     const service = enforceRoleServiceScope(req, rawService);
     const searchQ = String(q || '').trim();
-    const cacheKey = `csat_v2_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
+    const cacheKey = `csat_v3_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
 
-    if (refresh !== 'true') {
-      const cached = await cacheGet(cacheKey);
-      if (cached) return res.json(cached);
-    }
+    const payload = await withSingleFlightSwr(cacheKey, 120, refresh === 'true', async () => {
+      if (refresh === 'true') {
+        await syncMatFunnelIncremental(startDate, endDate);
+      }
 
-    const whereClauses: string[] = [];
-    const params: any[] = [];
+      const whereClauses: string[] = [];
+      const params: any[] = [];
 
-    if (ignoreDates !== 'true') {
-      whereClauses.push(
-        `ea.fecha_registro >= CONCAT(?, ' 00:00:00') AND ea.fecha_registro <= CONCAT(?, ' 23:59:59')`
+      if (ignoreDates !== 'true') {
+        whereClauses.push(
+          `ea.fecha_registro >= CONCAT(?, ' 00:00:00') AND ea.fecha_registro <= CONCAT(?, ' 23:59:59')`
+        );
+        params.push(startDate, endDate);
+      }
+
+      const csatSrvFilter = buildStrictOrderTypeSql(service, 'v.tipo_operacion');
+      if (csatSrvFilter.params.length > 0) {
+        whereClauses.push(csatSrvFilter.sql);
+        params.push(...csatSrvFilter.params);
+      }
+
+      if (searchQ) {
+        const likeQ = `%${searchQ}%`;
+        whereClauses.push(`(
+          CAST(ea.orden_id AS CHAR) LIKE ? OR
+          ea.codisegui LIKE ? OR
+          ea.comentarios LIKE ? OR
+          v.cliente LIKE ? OR
+          v.ops_cuadrilla LIKE ? OR
+          v.cuadrilla LIKE ? OR
+          v.ops_partner LIKE ? OR
+          v.partner LIKE ?
+        )`);
+        params.push(likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ);
+      }
+
+      const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+      const [rows]: any = await pool.query(
+        `
+        SELECT
+          ea.id,
+          ea.token,
+          COALESCE(NULLIF(TRIM(ea.orden_id), ''), CAST(v.orden_id AS CHAR)) AS orden_id,
+          COALESCE(NULLIF(TRIM(ea.codisegui), ''), v.ticket) AS codisegui,
+          ea.satisfaccion_atencion,
+          ea.facilidad_uso,
+          ea.satisfaccion_experiencia,
+          ea.seguridad_datos_tecnico,
+          ea.comentarios,
+          SUBSTRING(CAST(ea.fecha_registro AS CHAR), 1, 10) AS raw_date,
+          DATE_FORMAT(ea.fecha_registro, '%d/%m') AS fecha_corta,
+          DATE_FORMAT(ea.fecha_registro, '%d/%m/%Y %H:%i') AS fecha_fmt,
+          COALESCE(NULLIF(TRIM(v.cliente), ''), 'Cliente WIN') AS cliente,
+          v.telefono AS telefono,
+          v.producto AS producto,
+          COALESCE(NULLIF(TRIM(v.tipo_operacion), ''), 'OTROS') AS tipo_operacion_calc,
+          COALESCE(NULLIF(TRIM(v.sector_operativo), ''), NULLIF(TRIM(v.ops_zona), ''), 'SIN SECTOR') AS sector_operativo,
+          COALESCE(NULLIF(TRIM(v.ops_cuadrilla), ''), NULLIF(TRIM(v.cuadrilla), ''), 'SIN CUADRILLA') AS cuadrilla,
+          COALESCE(NULLIF(TRIM(v.ops_partner), ''), v.partner) AS partner_raw,
+          COALESCE(NULLIF(TRIM(v.ops_estado), ''), v.estado_ot) AS estado_ot
+        FROM encuesta_app ea
+        LEFT JOIN mat_funnel_casos_360 v ON v.orden_id = ea.orden_id_num
+        ${whereSql}
+        ORDER BY ea.fecha_registro DESC
+        LIMIT 500
+        `,
+        params
       );
-      params.push(startDate, endDate);
-    }
-
-    const tipoOpExprW = `(CASE
-      WHEN ts.Tipo = 'POSTVENTA' THEN 'POSTVENTA'
-      WHEN ts.Tipo IN ('AVERIAS', 'AVERIAS PRV') THEN IF(UPPER(TRIM(COALESCE(w.\`Sector Operativo\`, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(w.Region, ''))) = 'LIMA', 'AVER - LIMA', 'AVER - PROV')
-      WHEN ts.Tipo IN ('INSTALACION', 'PROVINCIA') THEN IF(UPPER(TRIM(COALESCE(w.\`Sector Operativo\`, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(w.Region, ''))) = 'LIMA', 'INSTA - LIMA', 'INSTA - PROV')
-      ELSE COALESCE(ts.Tipo, 'OTROS')
-    END)`;
-
-    const { canonicalList } = resolveProductosFromServiceFilter(service);
-    if (canonicalList.length > 0) {
-      const canonPh = canonicalList.map(() => '?').join(',');
-      whereClauses.push(`${tipoOpExprW} IN (${canonPh})`);
-      params.push(...canonicalList.map((x) => x.toUpperCase()));
-    }
-
-    if (searchQ) {
-      const likeQ = `%${searchQ}%`;
-      whereClauses.push(`(
-        CAST(ea.orden_id AS CHAR) LIKE ? OR
-        ea.codisegui LIKE ? OR
-        ea.comentarios LIKE ? OR
-        w.ClienteFinal LIKE ? OR
-        w.Cliente LIKE ? OR
-        w.Cuadrilla LIKE ? OR
-        w.Proveedeor LIKE ?
-      )`);
-      params.push(likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ);
-    }
-
-    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
-
-    const [rows]: any = await pool.query(
-      `
-      SELECT
-        ea.id,
-        ea.token,
-        COALESCE(NULLIF(TRIM(ea.orden_id), ''), CAST(w.OrdenId AS CHAR)) AS orden_id,
-        COALESCE(NULLIF(TRIM(ea.codisegui), ''), w.CodiSegui) AS codisegui,
-        ea.satisfaccion_atencion,
-        ea.facilidad_uso,
-        ea.satisfaccion_experiencia,
-        ea.seguridad_datos_tecnico,
-        ea.comentarios,
-        SUBSTRING(CAST(ea.fecha_registro AS CHAR), 1, 10) AS raw_date,
-        DATE_FORMAT(ea.fecha_registro, '%d/%m') AS fecha_corta,
-        DATE_FORMAT(ea.fecha_registro, '%d/%m/%Y %H:%i') AS fecha_fmt,
-        COALESCE(NULLIF(TRIM(w.ClienteFinal), ''), NULLIF(TRIM(w.Cliente), ''), 'Cliente WIN') AS cliente,
-        w.TeleMovilNume AS telefono,
-        w.Producto AS producto,
-        ${tipoOpExprW} AS tipo_operacion_calc,
-        COALESCE(NULLIF(TRIM(w.\`Sector Operativo\`), ''), NULLIF(TRIM(w.Zona), ''), 'SIN SECTOR') AS sector_operativo,
-        COALESCE(NULLIF(TRIM(w.Cuadrilla), ''), NULLIF(TRIM(w.Cuadrilla_nombre), ''), 'SIN CUADRILLA') AS cuadrilla,
-        w.Proveedeor AS partner_raw,
-        w.Estado AS estado_ot
-      FROM encuesta_app ea
-      LEFT JOIN vw_winordetraba w ON w.OrdenId = ea.orden_id_num
-      LEFT JOIN tiposervicio ts ON w.Producto = ts.Servicio
-      ${whereSql}
-      ORDER BY ea.fecha_registro DESC
-      LIMIT 500
-      `,
-      params
-    );
 
     const list: any[] = rows || [];
     const total = list.length;
@@ -2649,54 +2688,54 @@ app.get('/api/csat', async (req, res) => {
     const avgExperiencia = countExperiencia > 0 ? sumExperiencia / countExperiencia : 0;
     const totalSeg = segSi + segNo;
 
-    const payload = {
-      ok: true,
-      kpis: {
-        total_encuestas: total,
-        avg_atencion: Number(avgAtencion.toFixed(2)),
-        csat_atencion_pct: countAtencion > 0 ? Number(((top2Atencion / countAtencion) * 100).toFixed(1)) : 0,
-        avg_facilidad: Number(avgFacilidad.toFixed(2)),
-        ces_pct: countFacilidad > 0 ? Number(((avgFacilidad / 5) * 100).toFixed(1)) : 0,
-        avg_experiencia: Number(avgExperiencia.toFixed(2)),
-        csat_experiencia_pct: countExperiencia > 0 ? Number(((top2Experiencia / countExperiencia) * 100).toFixed(1)) : 0,
-        seguridad_si: segSi,
-        seguridad_no: segNo,
-        seguridad_pct: totalSeg > 0 ? Number(((segSi / totalSeg) * 100).toFixed(1)) : 0,
-      },
-      distribution: [5, 4, 3, 2, 1].map((stars) => ({
-        stars,
-        count: distAtencion[stars] || 0,
-        pct: countAtencion > 0 ? Number((((distAtencion[stars] || 0) / countAtencion) * 100).toFixed(1)) : 0,
-      })),
-      byPartner: Array.from(partnerMap.values())
-        .map((p) => {
-          const avgAtn = p.countAtencion > 0 ? p.sumAtencion / p.countAtencion : 0;
-          const avgFac = p.countFacilidad > 0 ? p.sumFacilidad / p.countFacilidad : 0;
-          const avgEx = p.countExp > 0 ? p.sumExp / p.countExp : 0;
-          return {
-            partner: p.partner,
-            surveys: p.surveys,
-            avg_atencion: Number(avgAtn.toFixed(2)),
-            avg_facilidad: Number(avgFac.toFixed(2)),
-            avg_experiencia: Number(avgEx.toFixed(2)),
-            csat_pct: Number(((avgAtn / 5) * 100).toFixed(1)),
-            seguridad_pct: p.surveys > 0 ? Number(((p.segSi / p.surveys) * 100).toFixed(1)) : 0,
-          };
-        })
-        .sort((a, b) => b.avg_atencion - a.avg_atencion || b.surveys - a.surveys),
-      daily: Array.from(dailyMap.values())
-        .sort((a, b) => a.raw_date.localeCompare(b.raw_date))
-        .map((d) => ({
-          raw_date: d.raw_date,
-          fecha: d.fecha,
-          surveys: d.surveys,
-          avg_atencion: d.countAtencion > 0 ? Number((d.sumAtencion / d.countAtencion).toFixed(2)) : 0,
-          avg_experiencia: d.countExp > 0 ? Number((d.sumExp / d.countExp).toFixed(2)) : 0,
+      return {
+        ok: true,
+        kpis: {
+          total_encuestas: total,
+          avg_atencion: Number(avgAtencion.toFixed(2)),
+          csat_atencion_pct: countAtencion > 0 ? Number(((top2Atencion / countAtencion) * 100).toFixed(1)) : 0,
+          avg_facilidad: Number(avgFacilidad.toFixed(2)),
+          ces_pct: countFacilidad > 0 ? Number(((avgFacilidad / 5) * 100).toFixed(1)) : 0,
+          avg_experiencia: Number(avgExperiencia.toFixed(2)),
+          csat_experiencia_pct: countExperiencia > 0 ? Number(((top2Experiencia / countExperiencia) * 100).toFixed(1)) : 0,
+          seguridad_si: segSi,
+          seguridad_no: segNo,
+          seguridad_pct: totalSeg > 0 ? Number(((segSi / totalSeg) * 100).toFixed(1)) : 0,
+        },
+        distribution: [5, 4, 3, 2, 1].map((stars) => ({
+          stars,
+          count: distAtencion[stars] || 0,
+          pct: countAtencion > 0 ? Number((((distAtencion[stars] || 0) / countAtencion) * 100).toFixed(1)) : 0,
         })),
-      responses: enrichedResponses,
-    };
+        byPartner: Array.from(partnerMap.values())
+          .map((p) => {
+            const avgAtn = p.countAtencion > 0 ? p.sumAtencion / p.countAtencion : 0;
+            const avgFac = p.countFacilidad > 0 ? p.sumFacilidad / p.countFacilidad : 0;
+            const avgEx = p.countExp > 0 ? p.sumExp / p.countExp : 0;
+            return {
+              partner: p.partner,
+              surveys: p.surveys,
+              avg_atencion: Number(avgAtn.toFixed(2)),
+              avg_facilidad: Number(avgFac.toFixed(2)),
+              avg_experiencia: Number(avgEx.toFixed(2)),
+              csat_pct: Number(((avgAtn / 5) * 100).toFixed(1)),
+              seguridad_pct: p.surveys > 0 ? Number(((p.segSi / p.surveys) * 100).toFixed(1)) : 0,
+            };
+          })
+          .sort((a, b) => b.avg_atencion - a.avg_atencion || b.surveys - a.surveys),
+        daily: Array.from(dailyMap.values())
+          .sort((a, b) => a.raw_date.localeCompare(b.raw_date))
+          .map((d) => ({
+            raw_date: d.raw_date,
+            fecha: d.fecha,
+            surveys: d.surveys,
+            avg_atencion: d.countAtencion > 0 ? Number((d.sumAtencion / d.countAtencion).toFixed(2)) : 0,
+            avg_experiencia: d.countExp > 0 ? Number((d.sumExp / d.countExp).toFixed(2)) : 0,
+          })),
+        responses: enrichedResponses,
+      };
+    });
 
-    await cacheSet(cacheKey, payload, 120);
     return res.json(payload);
   } catch (err: any) {
     console.error('❌ Error en /api/csat:', err.message);
