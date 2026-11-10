@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { homologarTipoServicio, cleanPartnerName } from './domain';
+import { homologarTipoServicio, cleanPartnerName } from './domain.ts';
 
 describe('Reglas de Negocio WIN en RUTA', () => {
     it('homologa correctamente los 5 tipos de servicio oficiales', () => {

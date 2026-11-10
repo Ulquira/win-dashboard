@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  Search, Shield, LifeBuoy, Send, CalendarClock, Truck,
+  Search, LifeBuoy, Send, CalendarClock, Truck,
   CheckCircle, Clock, Users, ArrowUpRight, Activity,
-  ClipboardList, MessageSquare, Wrench, Database, RefreshCw, Sparkles
+  ClipboardList, MessageSquare, Wrench, RefreshCw, Sparkles
 } from 'lucide-react';
 import {
   AuthUser, CalculatedMetrics, KpiData, NavSection,
@@ -14,11 +14,11 @@ import { apiFetch } from '../config/api';
 interface HomeViewProps {
   authUser: AuthUser;
   calc: CalculatedMetrics;
-  kpis: KpiData | null;
+  kpis?: KpiData | null;
   startDate: string;
   endDate: string;
   service: string;
-  serviceOptions: string[];
+  serviceOptions?: string[];
   canSeeView: (v: NavSection) => boolean;
   canSeeSubview: (sv: ViewMode) => boolean;
   onNavigate: (nav: NavSection, subview?: ViewMode) => void;
@@ -28,11 +28,9 @@ interface HomeViewProps {
 export function HomeView({
   authUser,
   calc,
-  kpis,
   startDate,
   endDate,
   service,
-  serviceOptions,
   canSeeView,
   canSeeSubview,
   onNavigate,
@@ -57,13 +55,6 @@ export function HomeView({
       });
       return apiFetch(`/api/operations?${params.toString()}`, { signal });
     },
-  });
-
-  // Estado de sincronización (sync_runs)
-  const { data: statusData } = useQuery<any>({
-    queryKey: ['homeSystemStatus'],
-    queryFn: ({ signal }) => apiFetch('/api/home/status', { signal }),
-    staleTime: 60_000,
   });
 
   const opsKpis: OperationsKpis | null = opsData?.kpis || null;
@@ -98,15 +89,6 @@ export function HomeView({
 
   const fmt = (n?: number) => Number(n || 0).toLocaleString('es-PE');
   const fmtDec = (n?: number) => Number(n || 0).toFixed(1).replace('.', ',');
-
-  const syncTimeFmt = statusData?.sync?.startedAt
-    ? new Date(statusData.sync.startedAt).toLocaleString('es-PE', {
-        day: '2-digit',
-        month: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    : 'En línea';
 
   return (
     <div className="space-y-6">
