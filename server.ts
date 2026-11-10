@@ -1513,6 +1513,9 @@ app.get('/api/tracking/search', async (req, res) => {
     // En COUNT(*) solo unimos vw_winordetraba si el usuario escribió en el buscador 'q'
     const countWinJoin = q ? `LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id` : '';
 
+    const needsLogsChatInCount = fSoloLogChat || fSoloSos || fTurno === 'BOT';
+    const countLogsChatJoin = needsLogsChatInCount ? logsChatSubquery : '';
+
     const [countResult, rowsResult]: any = await Promise.all([
       pool.query(
         `
@@ -1520,7 +1523,7 @@ app.get('/api/tracking/search', async (req, res) => {
         FROM vw_reporte_funnel_casos_360 v
         LEFT JOIN historial_chats_mantra h ON h.orden_id = v.orden_id
         ${countWinJoin}
-        ${logsChatSubquery}
+        ${countLogsChatJoin}
         ${whereSql}
         `,
         params
@@ -1781,11 +1784,11 @@ app.get('/api/operations', async (req, res) => {
     const chartParams: any[] = [];
 
     if (ignoreDates !== 'true') {
-      whereClauses.push(`${dateExpr} >= ? AND ${dateExpr} <= ?`);
-      queryParams.push(startDate, endDate);
+      whereClauses.push(`w.\`F.Soli\` >= ? AND w.\`F.Soli\` <= ?`);
+      queryParams.push(`${startDate} 00:00:00`, `${endDate} 23:59:59`);
 
-      chartWhereClauses.push(`${dateExpr} >= ? AND ${dateExpr} <= ?`);
-      chartParams.push(chartStartDate, endDate);
+      chartWhereClauses.push(`w.\`F.Soli\` >= ? AND w.\`F.Soli\` <= ?`);
+      chartParams.push(`${chartStartDate} 00:00:00`, `${endDate} 23:59:59`);
     }
 
     const colTipoOrdenOt = `COALESCE(NULLIF(TRIM(w.Producto), ''), NULLIF(TRIM(w.\`Motivo Trabajo\`), ''), '')`;
@@ -1838,7 +1841,7 @@ app.get('/api/operations', async (req, res) => {
     const isAgend = `(NOT ${isFin} AND NOT ${isCurso} AND NOT ${isCancel})`;
 
     // Expresiones explícitas para GROUP BY estricto (sql_mode=only_full_group_by)
-    const rawDateGroupExpr = `DATE_FORMAT(${dateExpr}, '%Y-%m-%d')`;
+    const rawDateGroupExpr = `DATE_FORMAT(w.\`F.Soli\`, '%Y-%m-%d')`;
     const cuadrillaGroupExpr = `COALESCE(${colCuadrilla}, 'SIN ASIGNAR')`;
     const motivoTrabajoGroupExpr = `UPPER(COALESCE(NULLIF(TRIM(w.Producto), ''), NULLIF(TRIM(w.\`Motivo Trabajo\`), ''), 'OTROS'))`;
     const motivoFinGroupExpr = `COALESCE(
@@ -1897,8 +1900,8 @@ app.get('/api/operations', async (req, res) => {
         `
         SELECT
           ${rawDateGroupExpr} AS raw_date,
-          MAX(DATE_FORMAT(${dateExpr}, '%d/%m')) AS fecha,
-          MAX(DATE_FORMAT(${dateExpr}, '%d/%m/%Y')) AS fecha_full,
+          MAX(DATE_FORMAT(w.\`F.Soli\`, '%d/%m')) AS fecha,
+          MAX(DATE_FORMAT(w.\`F.Soli\`, '%d/%m/%Y')) AS fecha_full,
           COUNT(*) AS total,
           COALESCE(SUM(${isFin}), 0) AS finalizadas,
           COALESCE(SUM(${isCurso}), 0) AS en_curso,

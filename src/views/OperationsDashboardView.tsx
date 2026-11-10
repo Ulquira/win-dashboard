@@ -51,6 +51,9 @@ export function OperationsDashboardView({
             return (apiFetch as any)(`/api/operations?${params.toString()}`, { signal });
         },
         placeholderData: (prev: any) => prev,
+        staleTime: 1000 * 60 * 5,
+        gcTime: 1000 * 60 * 30,
+        refetchOnWindowFocus: false,
     });
 
     const error = isError
