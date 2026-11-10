@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
   User, Sparkles, Headset, ExternalLink, MessageSquare,
   ChevronLeft, ChevronRight, RefreshCw, CheckCheck,
@@ -184,6 +184,48 @@ export function TrackingView({
   const serverOrders: RealOrder[] = trackingData?.orders || initialOrders.slice(0, 50);
   const totalRecords = Number(trackingData?.total ?? initialOrders.length);
   const totalPages = Number(trackingData?.totalPages ?? 1);
+
+  const queryClient = useQueryClient();
+
+  // Prefetching predictivo de page + 1 en Seguimiento
+  useEffect(() => {
+    if (!trackingData?.ok || page >= totalPages) return;
+    const nextPage = page + 1;
+    const params = new URLSearchParams({
+      startDate,
+      endDate,
+      service,
+      q: debouncedQuery,
+      ignoreDates: ignoreDates ? 'true' : 'false',
+      soloConChat: soloConChat ? 'true' : 'false',
+      soloSos: soloSos ? 'true' : 'false',
+      soloLogChat: soloLogChat ? 'true' : 'false',
+      sla: slaFilter,
+      turno: turnoFilter,
+      page: String(nextPage),
+      pageSize: String(pageSize),
+      refresh: 'false',
+    });
+    queryClient.prefetchQuery({
+      queryKey: [
+        'trackingSearch',
+        startDate,
+        endDate,
+        service,
+        debouncedQuery,
+        ignoreDates,
+        soloConChat,
+        soloSos,
+        soloLogChat,
+        slaFilter,
+        turnoFilter,
+        nextPage,
+        consultTrigger,
+      ],
+      queryFn: () => (apiFetch as any)(`/api/tracking/search?${params.toString()}`),
+      staleTime: 1000 * 60 * 3,
+    });
+  }, [trackingData?.ok, page, totalPages, startDate, endDate, service, debouncedQuery, ignoreDates, soloConChat, soloSos, soloLogChat, slaFilter, turnoFilter, pageSize, consultTrigger, queryClient]);
 
   const selectedRow: RealOrder | null =
     serverOrders[selectedIndex] || serverOrders[0] || null;

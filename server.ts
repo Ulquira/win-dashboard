@@ -2056,12 +2056,13 @@ app.get('/api/operations', async (req, res) => {
     const rangeDays = Math.max(1, Math.round((endTarget.getTime() - startTarget.getTime()) / 86400000) + 1);
     const useDirectIndexStream = ignoreDates !== 'true' && rangeDays <= 7 && !searchQ;
 
-    const [rangeRes, dailyRes]: any = await Promise.all([
+    const [rangeRes, dailyRes, dailyBySrvRes]: any = await Promise.all([
       // 1. Cubo dimensional consolidado (streaming directo sobre covering index para <= 7 días sin tabla temporal SQL)
       pool.query(
         useDirectIndexStream
           ? `
         SELECT
+          v.tipo_operacion AS tipo_operacion,
           v.ops_estado AS estado,
           v.ops_partner AS partner,
           v.ops_cuadrilla AS cuadrilla,
@@ -2075,6 +2076,7 @@ app.get('/api/operations', async (req, res) => {
         `
           : `
         SELECT
+          v.tipo_operacion AS tipo_operacion,
           v.ops_estado AS estado,
           v.ops_partner AS partner,
           v.ops_cuadrilla AS cuadrilla,
@@ -2086,6 +2088,7 @@ app.get('/api/operations', async (req, res) => {
         FROM mat_funnel_casos_360 v ${indexHint}
         ${whereSql}
         GROUP BY
+          v.tipo_operacion,
           v.ops_estado,
           v.ops_partner,
           v.ops_cuadrilla,
@@ -2097,7 +2100,7 @@ app.get('/api/operations', async (req, res) => {
         queryParams
       ),
 
-      // 2. Avance Diario cubierto por índice
+      // 2. Avance Diario global cubierto por índice
       pool.query(
         `
         SELECT
@@ -2113,6 +2116,29 @@ app.get('/api/operations', async (req, res) => {
         FROM mat_funnel_casos_360 v ${indexHint}
         ${chartWhereSql}
         GROUP BY v.fecha_solicitud_dia
+        HAVING raw_date IS NOT NULL
+        ORDER BY raw_date ASC
+        `,
+        chartParams
+      ),
+
+      // 3. Avance Diario por Servicio (100% ordenado en las 2 primeras columnas de idx_mat_ops_full_cov)
+      pool.query(
+        `
+        SELECT
+          v.tipo_operacion AS tipo_operacion,
+          DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
+          MAX(DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m')) AS fecha,
+          MAX(DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y')) AS fecha_full,
+          COUNT(*) AS total,
+          COALESCE(SUM(${isFin}), 0) AS finalizadas,
+          COALESCE(SUM(${isCurso}), 0) AS en_curso,
+          COALESCE(SUM(${isAgend}), 0) AS agendadas,
+          COALESCE(SUM(${isCancel}), 0) AS canceladas,
+          COUNT(DISTINCT ${colCuadrilla}) AS cuadrillas
+        FROM mat_funnel_casos_360 v ${indexHint}
+        ${chartWhereSql}
+        GROUP BY v.fecha_solicitud_dia, v.tipo_operacion
         HAVING raw_date IS NOT NULL
         ORDER BY raw_date ASC
         `,
@@ -2144,316 +2170,334 @@ app.get('/api/operations', async (req, res) => {
       return { fin, cur, can, age };
     };
 
-    let totalOrdenes = 0;
-    let finalizadas = 0;
-    let enCurso = 0;
-    let agendadas = 0;
-    let canceladas = 0;
-    const allCuadrillas = new Set<string>();
-    const allPartners = new Set<string>();
-    const allZonas = new Set<string>();
+    const buildOpsSlice = (rows: any[], dailyRowsRaw: any[]) => {
+      let totalOrdenes = 0;
+      let finalizadas = 0;
+      let enCurso = 0;
+      let agendadas = 0;
+      let canceladas = 0;
+      const allCuadrillas = new Set<string>();
+      const allPartners = new Set<string>();
+      const allZonas = new Set<string>();
 
-    const estadoMap = new Map<string, { estado: string; total: number; cuadrillasSet: Set<string> }>();
-    const partnerMap = new Map<
-      string,
-      {
-        partner: string;
-        total: number;
-        finalizadas: number;
-        en_curso: number;
-        agendadas: number;
-        canceladas: number;
-        cuadrillasSet: Set<string>;
-      }
-    >();
-    const zonaMap = new Map<
-      string,
-      {
-        zona: string;
-        total: number;
-        finalizadas: number;
-        en_curso: number;
-        agendadas: number;
-        canceladas: number;
-        cuadrillasSet: Set<string>;
-      }
-    >();
-    const cuadrillaMap = new Map<
-      string,
-      {
-        cuadrilla: string;
-        partner: string;
-        total: number;
-        finalizadas: number;
-        en_curso: number;
-        canceladas: number;
-      }
-    >();
-    const motivoTrabajoMap = new Map<
-      string,
-      {
-        motivo_trabajo: string;
-        segmento: string;
-        total: number;
-        finalizadas: number;
-        canceladas: number;
-        cuadrillasSet: Set<string>;
-      }
-    >();
-    const motivoFinMap = new Map<
-      string,
-      {
-        motivo_fin: string;
-        total: number;
-        finalizadas: number;
-        canceladas: number;
-      }
-    >();
+      const estadoMap = new Map<string, { estado: string; total: number; cuadrillasSet: Set<string> }>();
+      const partnerMap = new Map<
+        string,
+        {
+          partner: string;
+          total: number;
+          finalizadas: number;
+          en_curso: number;
+          agendadas: number;
+          canceladas: number;
+          cuadrillasSet: Set<string>;
+        }
+      >();
+      const zonaMap = new Map<
+        string,
+        {
+          zona: string;
+          total: number;
+          finalizadas: number;
+          en_curso: number;
+          agendadas: number;
+          canceladas: number;
+          cuadrillasSet: Set<string>;
+        }
+      >();
+      const cuadrillaMap = new Map<
+        string,
+        {
+          cuadrilla: string;
+          partner: string;
+          total: number;
+          finalizadas: number;
+          en_curso: number;
+          canceladas: number;
+        }
+      >();
+      const motivoTrabajoMap = new Map<
+        string,
+        {
+          motivo_trabajo: string;
+          segmento: string;
+          total: number;
+          finalizadas: number;
+          canceladas: number;
+          cuadrillasSet: Set<string>;
+        }
+      >();
+      const motivoFinMap = new Map<
+        string,
+        {
+          motivo_fin: string;
+          total: number;
+          finalizadas: number;
+          canceladas: number;
+        }
+      >();
 
-    for (const r of rangeRes?.[0] || []) {
-      const cnt = Number(r.total || 0);
-      const est = String(r.estado || 'SIN ESTADO');
-      const par = String(r.partner || 'SIN PARTNER');
-      const cua = r.cuadrilla ? String(r.cuadrilla) : null;
-      const zon = String(r.zona || 'SIN ZONA');
-      const mtr = String(r.motivo_trabajo || 'NO ESPECIFICADO');
-      const seg = String(r.segmento || 'RESIDENCIAL');
-      const mfi = String(r.motivo_fin || 'SIN MOTIVO DE CIERRE');
+      for (const r of rows) {
+        const cnt = Number(r.total || 0);
+        const est = String(r.estado || 'SIN ESTADO');
+        const par = String(r.partner || 'SIN PARTNER');
+        const cua = r.cuadrilla ? String(r.cuadrilla) : null;
+        const zon = String(r.zona || 'SIN ZONA');
+        const mtr = String(r.motivo_trabajo || 'NO ESPECIFICADO');
+        const seg = String(r.segmento || 'RESIDENCIAL');
+        const mfi = String(r.motivo_fin || 'SIN MOTIVO DE CIERRE');
 
-      const { fin, cur, can, age } = classifyEstado(est);
-      const cFin = fin ? cnt : 0;
-      const cCur = cur ? cnt : 0;
-      const cCan = can ? cnt : 0;
-      const cAge = age ? cnt : 0;
+        const { fin, cur, can, age } = classifyEstado(est);
+        const cFin = fin ? cnt : 0;
+        const cCur = cur ? cnt : 0;
+        const cCan = can ? cnt : 0;
+        const cAge = age ? cnt : 0;
 
-      totalOrdenes += cnt;
-      finalizadas += cFin;
-      enCurso += cCur;
-      agendadas += cAge;
-      canceladas += cCan;
+        totalOrdenes += cnt;
+        finalizadas += cFin;
+        enCurso += cCur;
+        agendadas += cAge;
+        canceladas += cCan;
 
-      if (cua && cua !== 'SIN ASIGNAR') allCuadrillas.add(cua);
-      if (par) allPartners.add(par);
-      if (zon) allZonas.add(zon);
+        if (cua && cua !== 'SIN ASIGNAR') allCuadrillas.add(cua);
+        if (par) allPartners.add(par);
+        if (zon) allZonas.add(zon);
 
-      // 1. Por Estado
-      let stNode = estadoMap.get(est);
-      if (!stNode) {
-        stNode = { estado: est, total: 0, cuadrillasSet: new Set() };
-        estadoMap.set(est, stNode);
-      }
-      stNode.total += cnt;
-      if (cua && cua !== 'SIN ASIGNAR') stNode.cuadrillasSet.add(cua);
+        let stNode = estadoMap.get(est);
+        if (!stNode) {
+          stNode = { estado: est, total: 0, cuadrillasSet: new Set() };
+          estadoMap.set(est, stNode);
+        }
+        stNode.total += cnt;
+        if (cua && cua !== 'SIN ASIGNAR') stNode.cuadrillasSet.add(cua);
 
-      // 2. Por Partner
-      let pNode = partnerMap.get(par);
-      if (!pNode) {
-        pNode = {
-          partner: par,
-          total: 0,
-          finalizadas: 0,
-          en_curso: 0,
-          agendadas: 0,
-          canceladas: 0,
-          cuadrillasSet: new Set(),
-        };
-        partnerMap.set(par, pNode);
-      }
-      pNode.total += cnt;
-      pNode.finalizadas += cFin;
-      pNode.en_curso += cCur;
-      pNode.agendadas += cAge;
-      pNode.canceladas += cCan;
-      if (cua && cua !== 'SIN ASIGNAR') pNode.cuadrillasSet.add(cua);
-
-      // 3. Por Zona
-      let zNode = zonaMap.get(zon);
-      if (!zNode) {
-        zNode = {
-          zona: zon,
-          total: 0,
-          finalizadas: 0,
-          en_curso: 0,
-          agendadas: 0,
-          canceladas: 0,
-          cuadrillasSet: new Set(),
-        };
-        zonaMap.set(zon, zNode);
-      }
-      zNode.total += cnt;
-      zNode.finalizadas += cFin;
-      zNode.en_curso += cCur;
-      zNode.agendadas += cAge;
-      zNode.canceladas += cCan;
-      if (cua && cua !== 'SIN ASIGNAR') zNode.cuadrillasSet.add(cua);
-
-      // 4. Top Cuadrillas
-      if (cua && cua !== 'SIN ASIGNAR') {
-        let cNode = cuadrillaMap.get(cua);
-        if (!cNode) {
-          cNode = {
-            cuadrilla: cua,
+        let pNode = partnerMap.get(par);
+        if (!pNode) {
+          pNode = {
             partner: par,
             total: 0,
             finalizadas: 0,
             en_curso: 0,
+            agendadas: 0,
+            canceladas: 0,
+            cuadrillasSet: new Set(),
+          };
+          partnerMap.set(par, pNode);
+        }
+        pNode.total += cnt;
+        pNode.finalizadas += cFin;
+        pNode.en_curso += cCur;
+        pNode.agendadas += cAge;
+        pNode.canceladas += cCan;
+        if (cua && cua !== 'SIN ASIGNAR') pNode.cuadrillasSet.add(cua);
+
+        let zNode = zonaMap.get(zon);
+        if (!zNode) {
+          zNode = {
+            zona: zon,
+            total: 0,
+            finalizadas: 0,
+            en_curso: 0,
+            agendadas: 0,
+            canceladas: 0,
+            cuadrillasSet: new Set(),
+          };
+          zonaMap.set(zon, zNode);
+        }
+        zNode.total += cnt;
+        zNode.finalizadas += cFin;
+        zNode.en_curso += cCur;
+        zNode.agendadas += cAge;
+        zNode.canceladas += cCan;
+        if (cua && cua !== 'SIN ASIGNAR') zNode.cuadrillasSet.add(cua);
+
+        if (cua && cua !== 'SIN ASIGNAR') {
+          let cNode = cuadrillaMap.get(cua);
+          if (!cNode) {
+            cNode = {
+              cuadrilla: cua,
+              partner: par,
+              total: 0,
+              finalizadas: 0,
+              en_curso: 0,
+              canceladas: 0,
+            };
+            cuadrillaMap.set(cua, cNode);
+          }
+          cNode.total += cnt;
+          cNode.finalizadas += cFin;
+          cNode.en_curso += cCur;
+          cNode.canceladas += cCan;
+          if (par > cNode.partner) cNode.partner = par;
+        }
+
+        let mtNode = motivoTrabajoMap.get(mtr);
+        if (!mtNode) {
+          mtNode = {
+            motivo_trabajo: mtr,
+            segmento: seg,
+            total: 0,
+            finalizadas: 0,
+            canceladas: 0,
+            cuadrillasSet: new Set(),
+          };
+          motivoTrabajoMap.set(mtr, mtNode);
+        }
+        mtNode.total += cnt;
+        mtNode.finalizadas += cFin;
+        mtNode.canceladas += cCan;
+        if (seg > mtNode.segmento) mtNode.segmento = seg;
+        if (cua && cua !== 'SIN ASIGNAR') mtNode.cuadrillasSet.add(cua);
+
+        let mfNode = motivoFinMap.get(mfi);
+        if (!mfNode) {
+          mfNode = {
+            motivo_fin: mfi,
+            total: 0,
+            finalizadas: 0,
             canceladas: 0,
           };
-          cuadrillaMap.set(cua, cNode);
+          motivoFinMap.set(mfi, mfNode);
         }
-        cNode.total += cnt;
-        cNode.finalizadas += cFin;
-        cNode.en_curso += cCur;
-        cNode.canceladas += cCan;
-        if (par > cNode.partner) cNode.partner = par;
+        mfNode.total += cnt;
+        mfNode.finalizadas += cFin;
+        mfNode.canceladas += cCan;
       }
 
-      // 5. Por Motivo Trabajo
-      let mtNode = motivoTrabajoMap.get(mtr);
-      if (!mtNode) {
-        mtNode = {
-          motivo_trabajo: mtr,
-          segmento: seg,
-          total: 0,
-          finalizadas: 0,
-          canceladas: 0,
-          cuadrillasSet: new Set(),
-        };
-        motivoTrabajoMap.set(mtr, mtNode);
-      }
-      mtNode.total += cnt;
-      mtNode.finalizadas += cFin;
-      mtNode.canceladas += cCan;
-      if (seg > mtNode.segmento) mtNode.segmento = seg;
-      if (cua && cua !== 'SIN ASIGNAR') mtNode.cuadrillasSet.add(cua);
+      const cuadrillasActivas = allCuadrillas.size;
 
-      // 6. Por Motivo Fin
-      let mfNode = motivoFinMap.get(mfi);
-      if (!mfNode) {
-        mfNode = {
-          motivo_fin: mfi,
-          total: 0,
-          finalizadas: 0,
-          canceladas: 0,
-        };
-        motivoFinMap.set(mfi, mfNode);
-      }
-      mfNode.total += cnt;
-      mfNode.finalizadas += cFin;
-      mfNode.canceladas += cCan;
-    }
-
-    const cuadrillasActivas = allCuadrillas.size;
-
-    const payload = {
-      ok: true,
-      source: 'mat_funnel_casos_360',
-      kpis: {
-        total_ordenes: totalOrdenes,
-        finalizadas,
-        en_curso: enCurso,
-        agendadas,
-        canceladas,
-        cuadrillas_activas: cuadrillasActivas,
-        partners_activos: allPartners.size,
-        zonas_activas: allZonas.size,
-        efectividad_pct: totalOrdenes > 0 ? Number(((finalizadas / totalOrdenes) * 100).toFixed(1)) : 0,
-        cancelacion_pct: totalOrdenes > 0 ? Number(((canceladas / totalOrdenes) * 100).toFixed(1)) : 0,
-        prod_ot_por_cuadrilla: cuadrillasActivas > 0 ? Number((totalOrdenes / cuadrillasActivas).toFixed(1)) : 0,
-        prod_fin_por_cuadrilla: cuadrillasActivas > 0 ? Number((finalizadas / cuadrillasActivas).toFixed(1)) : 0,
-      },
-      byEstado: Array.from(estadoMap.values())
-        .map((st) => ({
-          estado: st.estado,
-          total: st.total,
-          cuadrillas: st.cuadrillasSet.size,
-        }))
-        .sort((a, b) => b.total - a.total),
-      daily: (dailyRes?.[0] || []).map((d: any) => {
-        const tot = Number(d.total || 0);
-        const fin = Number(d.finalizadas || 0);
-        const crw = Number(d.cuadrillas || 0);
-        return {
-          ...d,
-          total: tot,
-          finalizadas: fin,
-          en_curso: Number(d.en_curso || 0),
-          agendadas: Number(d.agendadas || 0),
-          canceladas: Number(d.canceladas || 0),
-          cuadrillas: crw,
-          efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
-          prod_total: crw > 0 ? Number((tot / crw).toFixed(1)) : 0,
-          prod_fin: crw > 0 ? Number((fin / crw).toFixed(1)) : 0,
-        };
-      }),
-      byPartner: Array.from(partnerMap.values())
-        .map((p) => {
-          const tot = p.total;
-          const fin = p.finalizadas;
-          const crw = p.cuadrillasSet.size;
+      return {
+        kpis: {
+          total_ordenes: totalOrdenes,
+          finalizadas,
+          en_curso: enCurso,
+          agendadas,
+          canceladas,
+          cuadrillas_activas: cuadrillasActivas,
+          partners_activos: allPartners.size,
+          zonas_activas: allZonas.size,
+          efectividad_pct: totalOrdenes > 0 ? Number(((finalizadas / totalOrdenes) * 100).toFixed(1)) : 0,
+          cancelacion_pct: totalOrdenes > 0 ? Number(((canceladas / totalOrdenes) * 100).toFixed(1)) : 0,
+          prod_ot_por_cuadrilla: cuadrillasActivas > 0 ? Number((totalOrdenes / cuadrillasActivas).toFixed(1)) : 0,
+          prod_fin_por_cuadrilla: cuadrillasActivas > 0 ? Number((finalizadas / cuadrillasActivas).toFixed(1)) : 0,
+        },
+        byEstado: Array.from(estadoMap.values())
+          .map((st) => ({
+            estado: st.estado,
+            total: st.total,
+            cuadrillas: st.cuadrillasSet.size,
+          }))
+          .sort((a, b) => b.total - a.total),
+        daily: dailyRowsRaw.map((d: any) => {
+          const tot = Number(d.total || 0);
+          const fin = Number(d.finalizadas || 0);
+          const crw = Number(d.cuadrillas || 0);
           return {
-            partner: p.partner,
+            ...d,
             total: tot,
             finalizadas: fin,
-            en_curso: p.en_curso,
-            agendadas: p.agendadas,
-            canceladas: p.canceladas,
+            en_curso: Number(d.en_curso || 0),
+            agendadas: Number(d.agendadas || 0),
+            canceladas: Number(d.canceladas || 0),
             cuadrillas: crw,
             efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
             prod_total: crw > 0 ? Number((tot / crw).toFixed(1)) : 0,
             prod_fin: crw > 0 ? Number((fin / crw).toFixed(1)) : 0,
           };
-        })
-        .sort((a, b) => b.total - a.total),
-      byZona: Array.from(zonaMap.values())
-        .map((z) => {
-          const tot = z.total;
-          const fin = z.finalizadas;
-          const crw = z.cuadrillasSet.size;
-          return {
-            zona: z.zona,
-            total: tot,
-            finalizadas: fin,
-            en_curso: z.en_curso,
-            agendadas: z.agendadas,
-            canceladas: z.canceladas,
-            cuadrillas: crw,
-            efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
-            prod_fin: crw > 0 ? Number((fin / crw).toFixed(1)) : 0,
-          };
-        })
-        .sort((a, b) => b.total - a.total)
-        .slice(0, 30),
-      topCuadrillas: Array.from(cuadrillaMap.values())
-        .map((c) => {
-          const tot = c.total;
-          const fin = c.finalizadas;
-          return {
-            ...c,
-            efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
-          };
-        })
-        .sort((a, b) => b.finalizadas - a.finalizadas || b.total - a.total)
-        .slice(0, 15),
-      byMotivoTrabajo: Array.from(motivoTrabajoMap.values())
-        .map((m) => {
-          const prodKey = String(m.motivo_trabajo || '').trim().toUpperCase();
-          const tipoMapeado = servicioToTipoMap.get(prodKey) || prodKey || 'OTROS';
-          return {
-            motivo_trabajo: m.motivo_trabajo,
-            segmento: m.segmento,
-            total: m.total,
-            finalizadas: m.finalizadas,
-            canceladas: m.canceladas,
-            cuadrillas: m.cuadrillasSet.size,
-            tipo_operacion: tipoMapeado,
-          };
-        })
-        .sort((a, b) => b.total - a.total)
-        .slice(0, 15),
-      byMotivoFin: Array.from(motivoFinMap.values())
-        .sort((a, b) => b.total - a.total)
-        .slice(0, 10),
+        }),
+        byPartner: Array.from(partnerMap.values())
+          .map((p) => {
+            const tot = p.total;
+            const fin = p.finalizadas;
+            const crw = p.cuadrillasSet.size;
+            return {
+              partner: p.partner,
+              total: tot,
+              finalizadas: fin,
+              en_curso: p.en_curso,
+              agendadas: p.agendadas,
+              canceladas: p.canceladas,
+              cuadrillas: crw,
+              efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
+              prod_total: crw > 0 ? Number((tot / crw).toFixed(1)) : 0,
+              prod_fin: crw > 0 ? Number((fin / crw).toFixed(1)) : 0,
+            };
+          })
+          .sort((a, b) => b.total - a.total),
+        byZona: Array.from(zonaMap.values())
+          .map((z) => {
+            const tot = z.total;
+            const fin = z.finalizadas;
+            const crw = z.cuadrillasSet.size;
+            return {
+              zona: z.zona,
+              total: tot,
+              finalizadas: fin,
+              en_curso: z.en_curso,
+              agendadas: z.agendadas,
+              canceladas: z.canceladas,
+              cuadrillas: crw,
+              efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
+              prod_fin: crw > 0 ? Number((fin / crw).toFixed(1)) : 0,
+            };
+          })
+          .sort((a, b) => b.total - a.total)
+          .slice(0, 30),
+        topCuadrillas: Array.from(cuadrillaMap.values())
+          .map((c) => {
+            const tot = c.total;
+            const fin = c.finalizadas;
+            return {
+              ...c,
+              efectividad_pct: tot > 0 ? Number(((fin / tot) * 100).toFixed(1)) : 0,
+            };
+          })
+          .sort((a, b) => b.finalizadas - a.finalizadas || b.total - a.total)
+          .slice(0, 15),
+        byMotivoTrabajo: Array.from(motivoTrabajoMap.values())
+          .map((m) => {
+            const prodKey = String(m.motivo_trabajo || '').trim().toUpperCase();
+            const tipoMapeado = servicioToTipoMap.get(prodKey) || prodKey || 'OTROS';
+            return {
+              motivo_trabajo: m.motivo_trabajo,
+              segmento: m.segmento,
+              total: m.total,
+              finalizadas: m.finalizadas,
+              canceladas: m.canceladas,
+              cuadrillas: m.cuadrillasSet.size,
+              tipo_operacion: tipoMapeado,
+            };
+          })
+          .sort((a, b) => b.total - a.total)
+          .slice(0, 15),
+        byMotivoFin: Array.from(motivoFinMap.values())
+          .sort((a, b) => b.total - a.total)
+          .slice(0, 10),
+      };
+    };
+
+    const allRangeRows: any[] = rangeRes?.[0] || [];
+    const allDailyRows: any[] = dailyRes?.[0] || [];
+    const allDailyBySrvRows: any[] = dailyBySrvRes?.[0] || [];
+
+    const mainSlice = buildOpsSlice(allRangeRows, allDailyRows);
+    const byService: Record<string, any> = {};
+
+    for (const srvName of SERVICIOS_PERMITIDOS) {
+      const srvRangeRows = allRangeRows.filter(
+        (r) => String(r.tipo_operacion || '').trim().toUpperCase() === srvName
+      );
+      const srvDailyRows = allDailyBySrvRows.filter(
+        (d) => String(d.tipo_operacion || '').trim().toUpperCase() === srvName
+      );
+      byService[srvName] = buildOpsSlice(srvRangeRows, srvDailyRows);
+    }
+
+    return {
+      ok: true,
+      source: 'mat_funnel_casos_360',
+      ...mainSlice,
+      byService,
     };
     });
 

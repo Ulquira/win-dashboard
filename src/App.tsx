@@ -284,50 +284,96 @@ export default function App() {
 
   const queryClient = useQueryClient();
 
-  // Pre-cargar Operaciones de Campo y Seguimiento en segundo plano cuando el Dashboard termina de cargar
+  // Pre-cargar Operaciones de Campo, CSAT, Órdenes y Seguimiento en segundo plano cuando el Dashboard termina de cargar
   useEffect(() => {
     if (!authUser || !dashData?.ok) return;
     const timer = setTimeout(() => {
       const opsParams = new URLSearchParams({
         startDate,
         endDate,
-        service,
+        service: baseServiceScope,
         q: globalSearch,
         ignoreDates: ignoreDates ? 'true' : 'false',
         refresh: 'false',
       });
       queryClient.prefetchQuery({
-        queryKey: ['operationsDashboard', startDate, endDate, service, globalSearch, ignoreDates, 0],
+        queryKey: ['operationsDashboard', startDate, endDate, baseServiceScope, globalSearch, ignoreDates, 0],
         queryFn: () => apiFetch(`/api/operations?${opsParams.toString()}`),
         staleTime: 1000 * 60 * 5,
       });
 
-      for (const soloConChat of ['true', 'false']) {
+      const csatParams = new URLSearchParams({
+        startDate,
+        endDate,
+        service: baseServiceScope,
+        q: globalSearch,
+        ignoreDates: ignoreDates ? 'true' : 'false',
+        refresh: 'false',
+      });
+      queryClient.prefetchQuery({
+        queryKey: ['csatApp', startDate, endDate, baseServiceScope, globalSearch, ignoreDates, 0],
+        queryFn: () => apiFetch(`/api/csat?${csatParams.toString()}`),
+        staleTime: 1000 * 60 * 5,
+      });
+
+      const defaultColFilters = {
+        orden: '',
+        cliente: '',
+        operacion: [],
+        sector: [],
+        partner: [],
+        estadoOt: [],
+        wsp: [],
+        tracking: [],
+      };
+      const ordParams = new URLSearchParams({
+        startDate,
+        endDate,
+        service,
+        q: globalSearch,
+        ignoreDates: ignoreDates ? 'true' : 'false',
+        orden: '',
+        cliente: '',
+        operacion: 'Todos',
+        sector: 'Todos',
+        partner: 'Todos',
+        estadoOt: 'Todos',
+        wsp: 'Todos',
+        tracking: 'Todos',
+        page: '1',
+        pageSize: '50',
+      });
+      queryClient.prefetchQuery({
+        queryKey: ['ordersSearch', startDate, endDate, service, globalSearch, ignoreDates, defaultColFilters, 1],
+        queryFn: () => apiFetch(`/api/orders/search?${ordParams.toString()}`),
+        staleTime: 1000 * 60 * 3,
+      });
+
+      for (const soloConChatBool of [true, false]) {
         const params = new URLSearchParams({
           startDate,
           endDate,
           service,
-          zone: 'Todas las zonas',
           q: globalSearch,
           ignoreDates: ignoreDates ? 'true' : 'false',
-          estadoChat: 'Todos',
-          sla: 'Todos',
-          turno: 'Todos',
-          soloConChat,
+          soloConChat: soloConChatBool ? 'true' : 'false',
           soloSos: 'false',
           soloLogChat: 'false',
+          sla: 'Todos',
+          turno: 'Todos',
           page: '1',
           pageSize: '50',
+          refresh: 'false',
         });
         queryClient.prefetchQuery({
-          queryKey: ['trackingSearch', startDate, endDate, service, globalSearch, ignoreDates, 'Todos', 'Todos', 'Todos', soloConChat === 'true', false, false, 1],
+          queryKey: ['trackingSearch', startDate, endDate, service, globalSearch, ignoreDates, soloConChatBool, false, false, 'Todos', 'Todos', 1, 0],
           queryFn: () => apiFetch(`/api/tracking/search?${params.toString()}`),
-          staleTime: 1000 * 45,
+          staleTime: 1000 * 60 * 3,
         });
       }
     }, 600);
     return () => clearTimeout(timer);
-  }, [authUser, dashData?.ok, startDate, endDate, service, globalSearch, ignoreDates, queryClient]);
+  }, [authUser, dashData?.ok, startDate, endDate, service, baseServiceScope, globalSearch, ignoreDates, queryClient]);
 
   const dbOnline = Boolean(dashData?.ok && !isError);
   const errorMsg = isError
@@ -847,6 +893,7 @@ export default function App() {
                   startDate={startDate}
                   endDate={endDate}
                   service={service}
+                  serviceScope={baseServiceScope}
                   globalSearch={globalSearch}
                   ignoreDates={ignoreDates}
                   consultTrigger={consultTrigger}
@@ -904,6 +951,7 @@ export default function App() {
               startDate={startDate}
               endDate={endDate}
               service={service}
+              serviceScope={baseServiceScope}
               globalSearch={globalSearch}
               ignoreDates={ignoreDates}
               consultTrigger={consultTrigger}

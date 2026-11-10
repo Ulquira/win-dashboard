@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
   Filter, ChevronDown, User, ChevronLeft, ChevronRight, RefreshCw, Check
 } from 'lucide-react';
@@ -161,6 +161,46 @@ export function OrdersView({
   const totalPages = Number(
     ordersData?.totalPages ?? Math.max(1, Math.ceil((initialOrders.length || 1) / 50))
   );
+
+  const queryClient = useQueryClient();
+
+  // Prefetching predictivo de page + 1 para paginación instantánea (0 ms)
+  useEffect(() => {
+    if (!ordersData?.ok || page >= totalPages) return;
+    const nextPage = page + 1;
+    const serializeArr = (arr: string[]) => (arr.length > 0 ? arr.join(',') : 'Todos');
+    const params = new URLSearchParams({
+      startDate,
+      endDate,
+      service,
+      q: debouncedQuery,
+      ignoreDates: ignoreDates ? 'true' : 'false',
+      orden: colFilters.orden,
+      cliente: colFilters.cliente,
+      operacion: serializeArr(colFilters.operacion),
+      sector: serializeArr(colFilters.sector),
+      partner: serializeArr(colFilters.partner),
+      estadoOt: serializeArr(colFilters.estadoOt),
+      wsp: serializeArr(colFilters.wsp),
+      tracking: serializeArr(colFilters.tracking),
+      page: String(nextPage),
+      pageSize: String(pageSize),
+    });
+    queryClient.prefetchQuery({
+      queryKey: [
+        'ordersSearch',
+        startDate,
+        endDate,
+        service,
+        debouncedQuery,
+        ignoreDates,
+        colFilters,
+        nextPage,
+      ],
+      queryFn: () => (apiFetch as any)(`/api/orders/search?${params.toString()}`),
+      staleTime: 1000 * 60 * 3,
+    });
+  }, [ordersData?.ok, page, totalPages, startDate, endDate, service, debouncedQuery, ignoreDates, colFilters, pageSize, queryClient]);
 
   const resetAllOrderFilters = () => {
     setColFilters({

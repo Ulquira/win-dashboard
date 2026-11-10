@@ -12,6 +12,7 @@ interface OperationsDashboardViewProps {
     startDate: string;
     endDate: string;
     service: string;
+    serviceScope?: string;
     globalSearch: string;
     ignoreDates: boolean;
     consultTrigger?: number;
@@ -21,6 +22,7 @@ export function OperationsDashboardView({
     startDate,
     endDate,
     service,
+    serviceScope = 'Todos los servicios',
     globalSearch,
     ignoreDates,
     consultTrigger = 0,
@@ -38,12 +40,12 @@ export function OperationsDashboardView({
         isError,
         error: queryError,
     } = useQuery<any>({
-        queryKey: ['operationsDashboard', startDate, endDate, service, debouncedQuery, ignoreDates, consultTrigger],
+        queryKey: ['operationsDashboard', startDate, endDate, serviceScope, debouncedQuery, ignoreDates, consultTrigger],
         queryFn: async ({ signal }): Promise<any> => {
             const params = new URLSearchParams({
                 startDate,
                 endDate,
-                service,
+                service: serviceScope,
                 q: debouncedQuery,
                 ignoreDates: ignoreDates ? 'true' : 'false',
                 refresh: consultTrigger > 0 ? 'true' : 'false',
@@ -62,14 +64,29 @@ export function OperationsDashboardView({
             ? opsData.error || 'No se pudo cargar /api/operations'
             : null;
 
-    const kpis: OperationsKpis | null = opsData?.kpis || null;
-    const byEstado: any[] = opsData?.byEstado || [];
-    const daily: any[] = opsData?.daily || [];
-    const byPartner: any[] = opsData?.byPartner || [];
-    const byZona: any[] = opsData?.byZona || [];
-    const topCuadrillas: any[] = opsData?.topCuadrillas || [];
-    const byMotivoTrabajo: any[] = opsData?.byMotivoTrabajo || [];
-    const byMotivoFin: any[] = opsData?.byMotivoFin || [];
+    // Selección reactiva en memoria (0 ms) al alternar entre Servicios
+    const activeSlice = useMemo(() => {
+        if (!opsData) return null;
+        if (
+            service &&
+            service !== 'Todos los servicios' &&
+            !service.includes(',') &&
+            opsData.byService &&
+            opsData.byService[service]
+        ) {
+            return opsData.byService[service];
+        }
+        return opsData;
+    }, [opsData, service]);
+
+    const kpis: OperationsKpis | null = activeSlice?.kpis || null;
+    const byEstado: any[] = activeSlice?.byEstado || [];
+    const daily: any[] = activeSlice?.daily || [];
+    const byPartner: any[] = activeSlice?.byPartner || [];
+    const byZona: any[] = activeSlice?.byZona || [];
+    const topCuadrillas: any[] = activeSlice?.topCuadrillas || [];
+    const byMotivoTrabajo: any[] = activeSlice?.byMotivoTrabajo || [];
+    const byMotivoFin: any[] = activeSlice?.byMotivoFin || [];
 
     const fmt = (n?: number) => Number(n || 0).toLocaleString('es-PE');
     const fmtDec = (n?: number) => Number(n || 0).toFixed(1).replace('.', ',');

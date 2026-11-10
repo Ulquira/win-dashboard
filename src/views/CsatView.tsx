@@ -11,6 +11,7 @@ interface CsatViewProps {
   startDate: string;
   endDate: string;
   service: string;
+  serviceScope?: string;
   globalSearch: string;
   ignoreDates: boolean;
   consultTrigger?: number;
@@ -21,6 +22,7 @@ export function CsatView({
   startDate,
   endDate,
   service,
+  serviceScope = 'Todos los servicios',
   globalSearch,
   ignoreDates,
   consultTrigger = 0,
@@ -29,32 +31,189 @@ export function CsatView({
   const [partnerFilter, setPartnerFilter] = useState('Todos');
 
   const { data: csatData, isFetching: loading } = useQuery<any>({
-    queryKey: ['csatApp', startDate, endDate, service, globalSearch, ignoreDates, consultTrigger],
+    queryKey: ['csatApp', startDate, endDate, serviceScope, globalSearch, ignoreDates, consultTrigger],
     queryFn: ({ signal }) => {
       const params = new URLSearchParams({
         startDate,
         endDate,
-        service,
+        service: serviceScope,
         q: globalSearch,
         ignoreDates: ignoreDates ? 'true' : 'false',
         refresh: consultTrigger > 0 ? 'true' : 'false',
       });
       return apiFetch(`/api/csat?${params.toString()}`, { signal });
     },
+    placeholderData: (prev: any) => prev,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
+    refetchOnWindowFocus: false,
   });
 
-  const kpis = csatData?.kpis || null;
-  const distribution: any[] = csatData?.distribution || [];
-  const byPartner: any[] = csatData?.byPartner || [];
   const responses: any[] = csatData?.responses || [];
 
-  const filteredResponses = useMemo(() => {
-    return responses.filter((r) => {
-      if (onlyWithComments && (!r.comentarios || !String(r.comentarios).trim())) return false;
+  // Recalculo reactivo en memoria (0 ms) al alternar Servicio, Partner o Comentarios
+  const { kpis, distribution, byPartner, filteredResponses } = useMemo(() => {
+    const isSpecificService = Boolean(
+      service && service !== 'Todos los servicios' && !service.includes(',')
+    );
+
+    const serviceFiltered = isSpecificService
+      ? responses.filter(
+          (r) => String(r.servicio_tipo || r.tipo_operacion_calc || '').toUpperCase() === service.toUpperCase()
+        )
+      : responses;
+
+    // Si no hay filtro específico de servicio, podemos usar las agregaciones directas del servidor para byPartner
+    let sumAtencion = 0;
+    let countAtencion = 0;
+    let top2Atencion = 0;
+    let sumFacilidad = 0;
+    let countFacilidad = 0;
+    let sumExp = 0;
+    let countExp = 0;
+    let top2Exp = 0;
+    let segSi = 0;
+    let segNo = 0;
+    const distMap: Record<number, number> = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+    const pMap = new Map<
+      string,
+      {
+        partner: string;
+        surveys: number;
+        sumAtencion: number;
+        countAtencion: number;
+        sumFacilidad: number;
+        countFacilidad: number;
+        sumExp: number;
+        countExp: number;
+        segSi: number;
+      }
+    >();
+
+    for (const r of serviceFiltered) {
+      const atn = Number(r.satisfaccion_atencion || 0);
+      const fac = Number(r.facilidad_uso || 0);
+      const exp = Number(r.satisfaccion_experiencia || 0);
+      const segRaw = String(r.seguridad_datos_tecnico || '')
+        .trim()
+        .toUpperCase();
+      const isSegPos = segRaw === 'SI' || segRaw === 'SÍ' || segRaw === '1' || segRaw === 'TRUE' || Number(segRaw) >= 4;
+      const isSegNeg = segRaw === 'NO' || segRaw === '0' || segRaw === 'FALSE' || (Number(segRaw) > 0 && Number(segRaw) < 4);
+
+      const pName = String(r.partner || 'SIN PARTNER');
+      let pNode = pMap.get(pName);
+      if (!pNode) {
+        pNode = {
+          partner: pName,
+          surveys: 0,
+          sumAtencion: 0,
+          countAtencion: 0,
+          sumFacilidad: 0,
+          countFacilidad: 0,
+          sumExp: 0,
+          countExp: 0,
+          segSi: 0,
+        };
+        pMap.set(pName, pNode);
+      }
+      pNode.surveys++;
+      if (atn >= 1 && atn <= 5) {
+        pNode.sumAtencion += atn;
+        pNode.countAtencion++;
+      }
+      if (fac >= 1 && fac <= 5) {
+        pNode.sumFacilidad += fac;
+        pNode.countFacilidad++;
+      }
+      if (exp >= 1 && exp <= 5) {
+        pNode.sumExp += exp;
+        pNode.countExp++;
+      }
+      if (isSegPos) pNode.segSi++;
+
+      // Para KPIs y distribución también respetamos partnerFilter si está activo
+      if (partnerFilter !== 'Todos' && pName !== partnerFilter) continue;
+
+      if (atn >= 1 && atn <= 5) {
+        sumAtencion += atn;
+        countAtencion++;
+        if (atn >= 4) top2Atencion++;
+        distMap[Math.round(atn)] = (distMap[Math.round(atn)] || 0) + 1;
+      }
+      if (fac >= 1 && fac <= 5) {
+        sumFacilidad += fac;
+        countFacilidad++;
+      }
+      if (exp >= 1 && exp <= 5) {
+        sumExp += exp;
+        countExp++;
+        if (exp >= 4) top2Exp++;
+      }
+      if (isSegPos) segSi++;
+      else if (isSegNeg) segNo++;
+    }
+
+    const activeList = serviceFiltered.filter((r) => {
       if (partnerFilter !== 'Todos' && r.partner !== partnerFilter) return false;
+      if (onlyWithComments && (!r.comentarios || !String(r.comentarios).trim())) return false;
       return true;
     });
-  }, [responses, onlyWithComments, partnerFilter]);
+
+    const totalFiltered =
+      partnerFilter === 'Todos'
+        ? serviceFiltered.length
+        : serviceFiltered.filter((r) => r.partner === partnerFilter).length;
+    const avgAtencion = countAtencion > 0 ? sumAtencion / countAtencion : 0;
+    const avgFacilidad = countFacilidad > 0 ? sumFacilidad / countFacilidad : 0;
+    const avgExperiencia = countExp > 0 ? sumExp / countExp : 0;
+    const totalSeg = segSi + segNo;
+
+    const computedKpis =
+      !isSpecificService && partnerFilter === 'Todos' && csatData?.kpis
+        ? csatData.kpis
+        : {
+            total_encuestas: totalFiltered,
+            avg_atencion: Number(avgAtencion.toFixed(2)),
+            csat_atencion_pct: countAtencion > 0 ? Number(((top2Atencion / countAtencion) * 100).toFixed(1)) : 0,
+            avg_facilidad: Number(avgFacilidad.toFixed(2)),
+            ces_pct: countFacilidad > 0 ? Number(((avgFacilidad / 5) * 100).toFixed(1)) : 0,
+            avg_experiencia: Number(avgExperiencia.toFixed(2)),
+            csat_experiencia_pct: countExp > 0 ? Number(((top2Exp / countExp) * 100).toFixed(1)) : 0,
+            seguridad_si: segSi,
+            seguridad_no: segNo,
+            seguridad_pct: totalSeg > 0 ? Number(((segSi / totalSeg) * 100).toFixed(1)) : 0,
+          };
+
+    const computedDist = [5, 4, 3, 2, 1].map((stars) => ({
+      stars,
+      count: distMap[stars] || 0,
+      pct: countAtencion > 0 ? Number((((distMap[stars] || 0) / countAtencion) * 100).toFixed(1)) : 0,
+    }));
+
+    const computedPartners = Array.from(pMap.values())
+      .map((p) => {
+        const avgAtn = p.countAtencion > 0 ? p.sumAtencion / p.countAtencion : 0;
+        const avgFac = p.countFacilidad > 0 ? p.sumFacilidad / p.countFacilidad : 0;
+        const avgEx = p.countExp > 0 ? p.sumExp / p.countExp : 0;
+        return {
+          partner: p.partner,
+          surveys: p.surveys,
+          avg_atencion: Number(avgAtn.toFixed(2)),
+          avg_facilidad: Number(avgFac.toFixed(2)),
+          avg_experiencia: Number(avgEx.toFixed(2)),
+          csat_pct: Number(((avgAtn / 5) * 100).toFixed(1)),
+          seguridad_pct: p.surveys > 0 ? Number(((p.segSi / p.surveys) * 100).toFixed(1)) : 0,
+        };
+      })
+      .sort((a, b) => b.avg_atencion - a.avg_atencion || b.surveys - a.surveys);
+
+    return {
+      kpis: computedKpis,
+      distribution: computedDist,
+      byPartner: computedPartners,
+      filteredResponses: activeList,
+    };
+  }, [responses, service, partnerFilter, onlyWithComments, csatData?.kpis]);
 
   const fmt = (n?: number) => Number(n || 0).toLocaleString('es-PE');
   const fmtDec = (n?: number) => Number(n || 0).toFixed(2).replace('.', ',');
