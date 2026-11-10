@@ -1002,22 +1002,27 @@ app.get('/api/dashboard', async (req, res) => {
       const ph = prods.map(() => '?').join(',');
 
       let geoClauseR = '';
-      let geoClauseE = '';
       const onlyLima = canonicalList.length > 0 && canonicalList.every((c) => c.includes('LIMA'));
       const onlyProv = canonicalList.length > 0 && canonicalList.every((c) => c.includes('PROV'));
       if (onlyLima) {
         geoClauseR = " AND (r.sector_operativo LIKE 'LIMA%' OR r.sector_operativo IS NULL)";
-        geoClauseE = " AND (e.sector_operativo LIKE 'LIMA%' OR e.region = 'LIMA' OR e.sector_operativo IS NULL)";
       } else if (onlyProv) {
         geoClauseR = " AND (r.sector_operativo NOT LIKE 'LIMA%' AND r.sector_operativo IS NOT NULL)";
-        geoClauseE = " AND (e.sector_operativo NOT LIKE 'LIMA%' AND (e.region != 'LIMA' OR e.region IS NULL) AND e.sector_operativo IS NOT NULL)";
       }
 
       reprogFilters.push(`AND UPPER(TRIM(r.producto_servicio)) IN (${ph})${geoClauseR}`);
       reprogParams.push(...prods.map((x) => x.toUpperCase()));
 
-      encFilters.push(`AND UPPER(TRIM(e.producto)) IN (${ph})${geoClauseE}`);
-      encParams.push(...prods.map((x) => x.toUpperCase()));
+      // Misma regla canónica de vw_reporte_funnel_casos_360 sobre vw_winordetraba + tiposervicio
+      const canonPh = canonicalList.map(() => '?').join(',');
+      const tipoOpExprW = `(CASE
+        WHEN ts.Tipo = 'POSTVENTA' THEN 'POSTVENTA'
+        WHEN ts.Tipo IN ('AVERIAS', 'AVERIAS PRV') THEN IF(UPPER(TRIM(COALESCE(w.\`Sector Operativo\`, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(w.Region, ''))) = 'LIMA', 'AVER - LIMA', 'AVER - PROV')
+        WHEN ts.Tipo IN ('INSTALACION', 'PROVINCIA') THEN IF(UPPER(TRIM(COALESCE(w.\`Sector Operativo\`, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(w.Region, ''))) = 'LIMA', 'INSTA - LIMA', 'INSTA - PROV')
+        ELSE COALESCE(ts.Tipo, 'OTRO')
+      END)`;
+      encFilters.push(`AND ${tipoOpExprW} IN (${canonPh})`);
+      encParams.push(...canonicalList.map((x) => x.toUpperCase()));
     }
 
     if (zone && zone !== 'Todas las zonas') {
@@ -1027,7 +1032,7 @@ app.get('/api/dashboard', async (req, res) => {
       reprogFilters.push(`AND r.sector_operativo = ?`);
       reprogParams.push(zone);
 
-      encFilters.push(`AND e.sector_operativo = ?`);
+      encFilters.push(`AND w.\`Sector Operativo\` = ?`);
       encParams.push(zone);
     }
 
@@ -1101,27 +1106,59 @@ app.get('/api/dashboard', async (req, res) => {
         .query(
           `
           SELECT 
-            TRIM(REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(e.partner)), '\\\\b(SGI|SGA)\\\\b|[0-9]+', ''), '\\\\s+', ' ')) AS partner,
-            COUNT(*) AS surveys,
-            AVG(e.satisfaccion_general + 0) AS avg_score
-          FROM vw_reporte_encuestas_enriquecido e
-          WHERE e.fecha_registro_encuesta_dia >= ? AND e.fecha_registro_encuesta_dia <= ?
-            AND e.partner IS NOT NULL AND TRIM(e.partner) != ''
+            COALESCE(NULLIF(TRIM(w.Proveedeor), ''), NULLIF(TRIM(w.Empresa), ''), 'SIN PARTNER') AS partner_raw,
+            (CASE
+              WHEN ts.Tipo = 'POSTVENTA' THEN 'POSTVENTA'
+              WHEN ts.Tipo IN ('AVERIAS', 'AVERIAS PRV') THEN IF(UPPER(TRIM(COALESCE(w.\`Sector Operativo\`, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(w.Region, ''))) = 'LIMA', 'AVER - LIMA', 'AVER - PROV')
+              WHEN ts.Tipo IN ('INSTALACION', 'PROVINCIA') THEN IF(UPPER(TRIM(COALESCE(w.\`Sector Operativo\`, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(w.Region, ''))) = 'LIMA', 'INSTA - LIMA', 'INSTA - PROV')
+              ELSE COALESCE(ts.Tipo, 'OTROS')
+            END) AS tipo_operacion,
+            COALESCE(NULLIF(TRIM(w.\`Sector Operativo\`), ''), 'SIN SECTOR') AS sector_operativo,
+            COUNT(DISTINCT ea.id) AS surveys,
+            AVG(COALESCE(ea.satisfaccion_atencion, ea.satisfaccion_experiencia) + 0) AS avg_score
+          FROM encuesta_app ea
+          LEFT JOIN vw_winordetraba w ON w.OrdenId = COALESCE(
+            CAST(NULLIF(TRIM(ea.orden_id), '') AS UNSIGNED),
+            (SELECT w2.OrdenId FROM vw_winordetraba w2 WHERE w2.token = ea.token LIMIT 1),
+            (SELECT w3.OrdenId FROM vw_winordetraba w3 WHERE w3.CodiSegui = ea.codisegui LIMIT 1)
+          )
+          LEFT JOIN tiposervicio ts ON w.Producto = ts.Servicio
+          WHERE CAST(ea.fecha_registro AS CHAR) >= CONCAT(?, ' 00:00:00')
+            AND CAST(ea.fecha_registro AS CHAR) <= CONCAT(?, ' 23:59:59')
           ${encFilters.join(' ')}
-          GROUP BY partner
+          GROUP BY partner_raw, tipo_operacion, sector_operativo
           ORDER BY avg_score DESC, surveys DESC
           `,
           [startDate, endDate, ...encParams]
         )
         .catch((err: any) => {
-          console.warn('⚠️ Error consultando vw_reporte_encuestas_enriquecido:', err.message);
+          console.warn('⚠️ Error consultando encuesta_app:', err.message);
           return [[]];
         }),
     ]);
 
     const totalReprogReal = Number(reprogResult?.[0]?.[0]?.total_reprog || 0);
 
-    let encRows: any[] = encResult?.[0] || [];
+    let encRowsRaw: any[] = encResult?.[0] || [];
+    const partnerAggMap = new Map<string, { partner: string; surveys: number; sumPoints: number }>();
+    for (const r of encRowsRaw) {
+      const pName = cleanPartnerName(r.partner_raw);
+      const sv = Number(r.surveys || 0);
+      const avg = Number(r.avg_score || 0);
+      const cur = partnerAggMap.get(pName) || { partner: pName, surveys: 0, sumPoints: 0 };
+      cur.surveys += sv;
+      cur.sumPoints += avg * sv;
+      partnerAggMap.set(pName, cur);
+    }
+
+    const encRows = Array.from(partnerAggMap.values())
+      .map((p) => ({
+        partner: p.partner,
+        surveys: p.surveys,
+        avg_score: p.surveys > 0 ? p.sumPoints / p.surveys : 0,
+      }))
+      .sort((a, b) => b.avg_score - a.avg_score || b.surveys - a.surveys);
+
     const totalEncuestasReal = encRows.reduce(
       (acc: number, r: any) => acc + Number(r.surveys || 0),
       0
@@ -1132,29 +1169,6 @@ app.get('/api/dashboard', async (req, res) => {
       0
     );
     const csatAvgGlobal = totalEncuestasReal > 0 ? sumPonderada / totalEncuestasReal : 0;
-
-    if (encRows.length === 0 && chartStartDate < startDate) {
-      try {
-        const [fallbackRows]: any = await pool.query(
-          `
-          SELECT 
-            TRIM(e.partner) AS partner,
-            COUNT(*) AS surveys,
-            AVG(e.satisfaccion_general + 0) AS avg_score
-          FROM vw_reporte_encuestas_enriquecido e
-          WHERE e.fecha_registro_encuesta_dia >= ? AND e.fecha_registro_encuesta_dia <= ?
-            AND e.partner IS NOT NULL AND TRIM(e.partner) != ''
-          ${encFilters.join(' ')}
-          GROUP BY TRIM(e.partner)
-          ORDER BY avg_score DESC, surveys DESC
-          `,
-          [chartStartDate, endDate, ...encParams]
-        );
-        encRows = fallbackRows || [];
-      } catch (errFallback: any) {
-        console.warn('⚠️ Error consultando fallback de encuestas:', errFallback.message);
-      }
-    }
 
     const partnersRanking = (encRows || []).slice(0, 6).map((r: any, idx: number) => {
       const avg = Number(r.avg_score || 0);
@@ -1313,12 +1327,9 @@ app.get('/api/dashboard', async (req, res) => {
       }
     );
 
-    if (totalReprogReal > 0) {
-      kpis.reprogramaciones = totalReprogReal;
-    }
-    if (totalEncuestasReal > 0) {
-      kpis.encuestas_respondidas = totalEncuestasReal;
-    }
+    kpis.reprogramaciones = totalReprogReal;
+    kpis.encuestas_respondidas = totalEncuestasReal;
+    kpis.csat_avg = Number(csatAvgGlobal.toFixed(2));
 
     const ordersWithTipo = (orderResult[0] || []).map((o: any) => ({
       ...o,
@@ -2276,6 +2287,297 @@ app.get('/api/operations', async (req, res) => {
   } catch (error: any) {
     console.error('❌ Error en /api/operations:', error.message);
     return res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// 7. Endpoint exclusivo de Experiencia (CSAT) basado 100% en la nueva tabla `encuesta_app`
+app.get('/api/csat', async (req, res) => {
+  try {
+    if (tiposUnicosList.length === 0) await loadTipoServicioCache();
+
+    const todayDefault = new Date().toLocaleDateString('en-CA');
+    const {
+      startDate = todayDefault,
+      endDate = todayDefault,
+      service: rawService = 'Todos los servicios',
+      q = '',
+      ignoreDates = 'false',
+      refresh = 'false',
+    } = req.query as Record<string, string>;
+
+    const service = enforceRoleServiceScope(req, rawService);
+    const searchQ = String(q || '').trim();
+    const cacheKey = `csat_v2_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
+
+    if (refresh !== 'true') {
+      const cached = await cacheGet(cacheKey);
+      if (cached) return res.json(cached);
+    }
+
+    const whereClauses: string[] = [];
+    const params: any[] = [];
+
+    if (ignoreDates !== 'true') {
+      // Comparación directa sobre el string de fecha de MySQL para no desplazar horas por timezone
+      whereClauses.push(
+        `CAST(ea.fecha_registro AS CHAR) >= CONCAT(?, ' 00:00:00') AND CAST(ea.fecha_registro AS CHAR) <= CONCAT(?, ' 23:59:59')`
+      );
+      params.push(startDate, endDate);
+    }
+
+    const tipoOpExprW = `(CASE
+      WHEN ts.Tipo = 'POSTVENTA' THEN 'POSTVENTA'
+      WHEN ts.Tipo IN ('AVERIAS', 'AVERIAS PRV') THEN IF(UPPER(TRIM(COALESCE(w.\`Sector Operativo\`, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(w.Region, ''))) = 'LIMA', 'AVER - LIMA', 'AVER - PROV')
+      WHEN ts.Tipo IN ('INSTALACION', 'PROVINCIA') THEN IF(UPPER(TRIM(COALESCE(w.\`Sector Operativo\`, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(w.Region, ''))) = 'LIMA', 'INSTA - LIMA', 'INSTA - PROV')
+      ELSE COALESCE(ts.Tipo, 'OTROS')
+    END)`;
+
+    const { canonicalList } = resolveProductosFromServiceFilter(service);
+    if (canonicalList.length > 0) {
+      const canonPh = canonicalList.map(() => '?').join(',');
+      whereClauses.push(`${tipoOpExprW} IN (${canonPh})`);
+      params.push(...canonicalList.map((x) => x.toUpperCase()));
+    }
+
+    if (searchQ) {
+      const likeQ = `%${searchQ}%`;
+      whereClauses.push(`(
+        CAST(ea.orden_id AS CHAR) LIKE ? OR
+        ea.codisegui LIKE ? OR
+        ea.comentarios LIKE ? OR
+        w.ClienteFinal LIKE ? OR
+        w.Cliente LIKE ? OR
+        w.Cuadrilla LIKE ? OR
+        w.Proveedeor LIKE ?
+      )`);
+      params.push(likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+    const [rows]: any = await pool.query(
+      `
+      SELECT
+        ea.id,
+        ea.token,
+        COALESCE(NULLIF(TRIM(ea.orden_id), ''), CAST(w.OrdenId AS CHAR)) AS orden_id,
+        COALESCE(NULLIF(TRIM(ea.codisegui), ''), w.CodiSegui) AS codisegui,
+        ea.satisfaccion_atencion,
+        ea.facilidad_uso,
+        ea.satisfaccion_experiencia,
+        ea.seguridad_datos_tecnico,
+        ea.comentarios,
+        SUBSTRING(CAST(ea.fecha_registro AS CHAR), 1, 10) AS raw_date,
+        DATE_FORMAT(ea.fecha_registro, '%d/%m') AS fecha_corta,
+        DATE_FORMAT(ea.fecha_registro, '%d/%m/%Y %H:%i') AS fecha_fmt,
+        COALESCE(NULLIF(TRIM(w.ClienteFinal), ''), NULLIF(TRIM(w.Cliente), ''), 'Cliente WIN') AS cliente,
+        w.TeleMovilNume AS telefono,
+        w.Producto AS producto,
+        ${tipoOpExprW} AS tipo_operacion_calc,
+        COALESCE(NULLIF(TRIM(w.\`Sector Operativo\`), ''), NULLIF(TRIM(w.Zona), ''), 'SIN SECTOR') AS sector_operativo,
+        COALESCE(NULLIF(TRIM(w.Cuadrilla), ''), NULLIF(TRIM(w.Cuadrilla_nombre), ''), 'SIN CUADRILLA') AS cuadrilla,
+        w.Proveedeor AS partner_raw,
+        w.Estado AS estado_ot
+      FROM encuesta_app ea
+      LEFT JOIN vw_winordetraba w ON w.OrdenId = COALESCE(
+        CAST(NULLIF(TRIM(ea.orden_id), '') AS UNSIGNED),
+        (SELECT w2.OrdenId FROM vw_winordetraba w2 WHERE w2.token = ea.token LIMIT 1),
+        (SELECT w3.OrdenId FROM vw_winordetraba w3 WHERE w3.CodiSegui = ea.codisegui LIMIT 1)
+      )
+      LEFT JOIN tiposervicio ts ON w.Producto = ts.Servicio
+      ${whereSql}
+      ORDER BY ea.fecha_registro DESC
+      LIMIT 500
+      `,
+      params
+    );
+
+    const list: any[] = rows || [];
+    const total = list.length;
+
+    let sumAtencion = 0;
+    let countAtencion = 0;
+    let top2Atencion = 0;
+
+    let sumFacilidad = 0;
+    let countFacilidad = 0;
+
+    let sumExperiencia = 0;
+    let countExperiencia = 0;
+    let top2Experiencia = 0;
+
+    let segSi = 0;
+    let segNo = 0;
+
+    const distAtencion: Record<number, number> = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+    const partnerMap = new Map<string, {
+      partner: string;
+      surveys: number;
+      sumAtencion: number;
+      countAtencion: number;
+      sumFacilidad: number;
+      countFacilidad: number;
+      sumExp: number;
+      countExp: number;
+      segSi: number;
+    }>();
+    const dailyMap = new Map<string, {
+      raw_date: string;
+      fecha: string;
+      surveys: number;
+      sumAtencion: number;
+      countAtencion: number;
+      sumExp: number;
+      countExp: number;
+    }>();
+
+    const enrichedResponses = list.map((r) => {
+      const atn = r.satisfaccion_atencion !== null && r.satisfaccion_atencion !== undefined ? Number(r.satisfaccion_atencion) : 0;
+      const fac = r.facilidad_uso !== null && r.facilidad_uso !== undefined ? Number(r.facilidad_uso) : 0;
+      const exp = r.satisfaccion_experiencia !== null && r.satisfaccion_experiencia !== undefined ? Number(r.satisfaccion_experiencia) : 0;
+      const segRaw = String(r.seguridad_datos_tecnico || '').trim().toUpperCase();
+      const isSegPositive =
+        segRaw.includes('SI') ||
+        segRaw.includes('SÍ') ||
+        segRaw === '1' ||
+        segRaw === 'TRUE' ||
+        segRaw === '4' ||
+        segRaw === '5';
+
+      if (atn > 0) {
+        sumAtencion += atn;
+        countAtencion++;
+        if (atn >= 4) top2Atencion++;
+        if (distAtencion[atn] !== undefined) distAtencion[atn]++;
+      }
+      if (fac > 0) {
+        sumFacilidad += fac;
+        countFacilidad++;
+      }
+      if (exp > 0) {
+        sumExperiencia += exp;
+        countExperiencia++;
+        if (exp >= 4) top2Experiencia++;
+      }
+      if (segRaw) {
+        if (isSegPositive) segSi++;
+        else segNo++;
+      }
+
+      const partnerClean = cleanPartnerName(r.partner_raw);
+      const pEntry = partnerMap.get(partnerClean) || {
+        partner: partnerClean,
+        surveys: 0,
+        sumAtencion: 0,
+        countAtencion: 0,
+        sumFacilidad: 0,
+        countFacilidad: 0,
+        sumExp: 0,
+        countExp: 0,
+        segSi: 0,
+      };
+      pEntry.surveys++;
+      if (atn > 0) {
+        pEntry.sumAtencion += atn;
+        pEntry.countAtencion++;
+      }
+      if (fac > 0) {
+        pEntry.sumFacilidad += fac;
+        pEntry.countFacilidad++;
+      }
+      if (exp > 0) {
+        pEntry.sumExp += exp;
+        pEntry.countExp++;
+      }
+      if (isSegPositive) pEntry.segSi++;
+      partnerMap.set(partnerClean, pEntry);
+
+      if (r.raw_date) {
+        const dEntry = dailyMap.get(r.raw_date) || {
+          raw_date: r.raw_date,
+          fecha: r.fecha_corta,
+          surveys: 0,
+          sumAtencion: 0,
+          countAtencion: 0,
+          sumExp: 0,
+          countExp: 0,
+        };
+        dEntry.surveys++;
+        if (atn > 0) {
+          dEntry.sumAtencion += atn;
+          dEntry.countAtencion++;
+        }
+        if (exp > 0) {
+          dEntry.sumExp += exp;
+          dEntry.countExp++;
+        }
+        dailyMap.set(r.raw_date, dEntry);
+      }
+
+      return {
+        ...r,
+        partner: partnerClean,
+        servicio_tipo: classifyOrderServiceType(r.producto, r.tipo_operacion_calc),
+      };
+    });
+
+    const avgAtencion = countAtencion > 0 ? sumAtencion / countAtencion : 0;
+    const avgFacilidad = countFacilidad > 0 ? sumFacilidad / countFacilidad : 0;
+    const avgExperiencia = countExperiencia > 0 ? sumExperiencia / countExperiencia : 0;
+    const totalSeg = segSi + segNo;
+
+    const payload = {
+      ok: true,
+      kpis: {
+        total_encuestas: total,
+        avg_atencion: Number(avgAtencion.toFixed(2)),
+        csat_atencion_pct: countAtencion > 0 ? Number(((top2Atencion / countAtencion) * 100).toFixed(1)) : 0,
+        avg_facilidad: Number(avgFacilidad.toFixed(2)),
+        ces_pct: countFacilidad > 0 ? Number(((avgFacilidad / 5) * 100).toFixed(1)) : 0,
+        avg_experiencia: Number(avgExperiencia.toFixed(2)),
+        csat_experiencia_pct: countExperiencia > 0 ? Number(((top2Experiencia / countExperiencia) * 100).toFixed(1)) : 0,
+        seguridad_si: segSi,
+        seguridad_no: segNo,
+        seguridad_pct: totalSeg > 0 ? Number(((segSi / totalSeg) * 100).toFixed(1)) : 0,
+      },
+      distribution: [5, 4, 3, 2, 1].map((stars) => ({
+        stars,
+        count: distAtencion[stars] || 0,
+        pct: countAtencion > 0 ? Number((((distAtencion[stars] || 0) / countAtencion) * 100).toFixed(1)) : 0,
+      })),
+      byPartner: Array.from(partnerMap.values())
+        .map((p) => {
+          const avgAtn = p.countAtencion > 0 ? p.sumAtencion / p.countAtencion : 0;
+          const avgFac = p.countFacilidad > 0 ? p.sumFacilidad / p.countFacilidad : 0;
+          const avgEx = p.countExp > 0 ? p.sumExp / p.countExp : 0;
+          return {
+            partner: p.partner,
+            surveys: p.surveys,
+            avg_atencion: Number(avgAtn.toFixed(2)),
+            avg_facilidad: Number(avgFac.toFixed(2)),
+            avg_experiencia: Number(avgEx.toFixed(2)),
+            csat_pct: Number(((avgAtn / 5) * 100).toFixed(1)),
+            seguridad_pct: p.surveys > 0 ? Number(((p.segSi / p.surveys) * 100).toFixed(1)) : 0,
+          };
+        })
+        .sort((a, b) => b.avg_atencion - a.avg_atencion || b.surveys - a.surveys),
+      daily: Array.from(dailyMap.values())
+        .sort((a, b) => a.raw_date.localeCompare(b.raw_date))
+        .map((d) => ({
+          raw_date: d.raw_date,
+          fecha: d.fecha,
+          surveys: d.surveys,
+          avg_atencion: d.countAtencion > 0 ? Number((d.sumAtencion / d.countAtencion).toFixed(2)) : 0,
+          avg_experiencia: d.countExp > 0 ? Number((d.sumExp / d.countExp).toFixed(2)) : 0,
+        })),
+      responses: enrichedResponses,
+    };
+
+    await cacheSet(cacheKey, payload, 120);
+    return res.json(payload);
+  } catch (err: any) {
+    console.error('❌ Error en /api/csat:', err.message);
+    return res.status(500).json({ ok: false, error: err.message });
   }
 });
 

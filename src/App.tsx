@@ -17,6 +17,7 @@ import { TrackingView } from './views/TrackingView';
 import { OrdersView } from './views/OrdersView';
 import { LoginView } from './views/LoginView';
 import { UsersRolesView } from './views/UsersRolesView';
+import { CsatView } from './views/CsatView.tsx';
 import { apiFetch, API_BASE_URL, AUTH_TOKEN_KEY, AUTH_USER_KEY } from './config/api';
 
 const VALID_NAVS: NavSection[] = [
@@ -185,7 +186,7 @@ export default function App() {
   // Subvistas del Dashboard permitidas por el Rol
   const allowedViews = authUser?.permisos?.vistas || ['*'];
   const canSeeView = (v: NavSection) =>
-    v === 'Inicio' || allowedViews.includes('*') || allowedViews.includes(v);
+    v === 'Inicio' || v === 'Experiencia (CSAT)' || allowedViews.includes('*') || allowedViews.includes(v);
 
   const allowedSubviews = authUser?.permisos?.subvistas || ['*'];
   const canSeeSubview = (sv: ViewMode) =>
@@ -792,6 +793,18 @@ export default function App() {
             onSelectOrder={setSelectedOrder}
           />
         )}
+        {activeNav === 'Experiencia (CSAT)' && (
+          <CsatView
+            startDate={startDate}
+            endDate={endDate}
+            service={service}
+            globalSearch={globalSearch}
+            ignoreDates={ignoreDates}
+            consultTrigger={consultTrigger}
+            onSelectOrder={setSelectedOrder}
+          />
+        )}
+
         {activeNav === 'Accesos' && canSeeView('Accesos') && <UsersRolesView />}
 
         <OrderDetailDrawer
