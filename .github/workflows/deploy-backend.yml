@@ -1,45 +1,44 @@
-name: Deploy WIN Backend to Azure App Service
+name: Deploy Backend to Azure App Service
 
 on:
   push:
     branches:
       - main
-    paths:
-      - 'server.ts'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'tsconfig*.json'
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout del repositorio
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configurar Node.js 22
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '22.x'
           cache: 'npm'
 
-      - name: Instalar dependencias completas
-        run: npm ci
-
-      - name: Preparar paquete liviano de producción
+      - name: Install dependencies and build frontend
         run: |
-          mkdir -p release-backend
-          cp server.ts release-backend/server.ts
-          cp package.json release-backend/package.json
-          cp package-lock.json release-backend/package-lock.json
-          cd release-backend
+          npm ci
+          npm run build
+
+      - name: Prepare deployment package
+        run: |
+          mkdir -p deploy_pkg/src
+          cp -r dist deploy_pkg/
+          cp -r src/server deploy_pkg/src/
+          cp server.ts package.json package-lock.json tsconfig.json tsconfig.node.json tsconfig.app.json deploy_pkg/
+
+      - name: Install production dependencies in package
+        run: |
+          cd deploy_pkg
           npm ci --omit=dev
 
-      - name: Desplegar backend a Azure App Service
+      - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'win-dashboard-api'
-          slot-name: 'production'
-          publish-profile: ${{ secrets.AZURE_APP_SERVICE_BACKEND_PUBLISH_PROFILE }}
-          package: release-backend
-
+          package: deploy_pkg
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
