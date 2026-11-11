@@ -6,9 +6,11 @@ on:
       - main
     paths:
       - 'server.ts'
+      - 'src/server/**'
       - 'package.json'
       - 'package-lock.json'
       - 'tsconfig*.json'
+      - '.github/workflows/deploy-backend.yml'
 
 jobs:
   build-and-deploy:
@@ -28,10 +30,12 @@ jobs:
 
       - name: Preparar paquete liviano de producción
         run: |
-          mkdir -p release-backend
+          mkdir -p release-backend/src
+          cp -r src/server release-backend/src/
           cp server.ts release-backend/server.ts
           cp package.json release-backend/package.json
           cp package-lock.json release-backend/package-lock.json
+          cp tsconfig*.json release-backend/
           cd release-backend
           npm ci --omit=dev
 
@@ -42,4 +46,3 @@ jobs:
           slot-name: 'production'
           publish-profile: ${{ secrets.AZURE_APP_SERVICE_BACKEND_PUBLISH_PROFILE }}
           package: release-backend
-
