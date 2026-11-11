@@ -20,6 +20,7 @@ const TrackingView = lazy(() => import('./views/TrackingView').then((m) => ({ de
 const OrdersView = lazy(() => import('./views/OrdersView').then((m) => ({ default: m.OrdersView })));
 const UsersRolesView = lazy(() => import('./views/UsersRolesView').then((m) => ({ default: m.UsersRolesView })));
 const CsatView = lazy(() => import('./views/CsatView').then((m) => ({ default: m.CsatView })));
+const EfficiencyView = lazy(() => import('./views/EfficiencyView').then((m) => ({ default: m.EfficiencyView })));
 
 const VALID_NAVS: NavSection[] = [
   'Inicio',
@@ -187,7 +188,7 @@ export default function App() {
   // Subvistas del Dashboard permitidas por el Rol
   const allowedViews = authUser?.permisos?.vistas || ['*'];
   const canSeeView = (v: NavSection) =>
-    v === 'Inicio' || v === 'Experiencia (CSAT)' || allowedViews.includes('*') || allowedViews.includes(v);
+    v === 'Inicio' || v === 'Eficiencia' || v === 'Experiencia (CSAT)' || allowedViews.includes('*') || allowedViews.includes(v);
 
   const allowedSubviews = authUser?.permisos?.subvistas || ['*'];
   const canSeeSubview = (sv: ViewMode) =>
@@ -578,15 +579,11 @@ export default function App() {
       if (dashData.kpis.reprogramaciones !== undefined) {
         computedKpis.reprogramaciones = dashData.kpis.reprogramaciones;
       }
-      if (dashData.kpis.encuestas_respondidas !== undefined) {
-        computedKpis.encuestas_respondidas = dashData.kpis.encuestas_respondidas;
-      }
-      if (dashData.kpis.csat_avg !== undefined) {
-        computedKpis.csat_avg = dashData.kpis.csat_avg;
-      }
-    } else if (isFiltering && encuestasByService.length > 0) {
+      computedKpis.encuestas_respondidas = Number(dashData.kpis.encuestas_respondidas || 0);
+      computedKpis.csat_avg = Number(dashData.kpis.csat_avg || 0);
+    } else if (isFiltering) {
       const activeEnc = encuestasByService.filter((e) =>
-        filterSet.has(String(e.tipo_operacion || '').toUpperCase())
+        filterSet.has(String(e.tipo_operacion || '').trim().toUpperCase())
       );
 
       const pMap = new Map<string, { partner: string; surveys: number; sumPoints: number }>();
@@ -598,7 +595,6 @@ export default function App() {
         const avg = Number(e.avg_score || 0);
         totalSv += sv;
         totalPts += avg * sv;
-
         const cur = pMap.get(e.partner) || { partner: e.partner, surveys: 0, sumPoints: 0 };
         cur.surveys += sv;
         cur.sumPoints += avg * sv;
@@ -942,6 +938,22 @@ export default function App() {
               globalSearch={globalSearch}
               ignoreDates={ignoreDates}
               consultTrigger={consultTrigger}
+              onSelectOrder={setSelectedOrder}
+            />
+          )}
+
+          {activeNav === 'Eficiencia' && (
+            <EfficiencyView
+              startDate={startDate}
+              endDate={endDate}
+              service={service}
+              globalSearch={globalSearch}
+              ignoreDates={ignoreDates}
+              consultTrigger={consultTrigger}
+              onSetDateRange={(s, e) => {
+                setStartDate(s);
+                setEndDate(e);
+              }}
               onSelectOrder={setSelectedOrder}
             />
           )}
