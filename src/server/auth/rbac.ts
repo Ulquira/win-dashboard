@@ -34,7 +34,7 @@ export async function ensureRbacTables(): Promise<void> {
     (1, 'ADMIN', 'Administrador Total', '["*"]', '["*"]', '["*"]'),
     (2, 'INSTALACIONES_LIMA', 'Supervisor Instalaciones Lima', '["Dashboard", "Órdenes", "Seguimiento"]', '["ejecutiva", "operativa", "operaciones"]', '["INSTA - LIMA"]'),
     (3, 'PROVINCIA', 'Coordinador Provincia', '["Dashboard", "Órdenes", "Seguimiento"]', '["operativa", "operaciones"]', '["INSTA - PROV", "AVER - PROV"]'),
-    (4, 'VISITA_TECNICA_AVERIAS', 'Supervisor Averías y Postventa', '["Dashboard", "Órdenes", "Seguimiento"]', '["ejecutiva", "operativa", "operaciones"]', '["AVER - LIMA", "AVER - PROV", "POSTVENTA"])
+    (4, 'VISITA_TECNICA_AVERIAS', 'Supervisor Averías y Postventa', '["Dashboard", "Órdenes", "Seguimiento"]', '["ejecutiva", "operativa", "operaciones"]', '["AVER - LIMA", "AVER - PROV", "POSTVENTA"]')
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS usuarios (

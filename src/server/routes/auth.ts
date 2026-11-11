@@ -4,7 +4,7 @@ import { pool } from '../config/db';
 import { signAuthToken, verifyAuthToken } from '../auth/jwt';
 import { requireAuth, requireAdmin, enforceRoleServiceScope } from '../auth/middleware';
 import { ensureRbacTables, parseJsonSafe } from '../auth/rbac';
-import { hashPassword, comparePassword, isBcryptHash, BCRYPT_ROUNDS } from '../auth/password';
+import { hashPassword, comparePassword, isBcryptHash, sha256Hex, BCRYPT_ROUNDS } from '../auth/password';
 import { loginLimiter } from '../middleware/rateLimit';
 
 const router = Router();
@@ -83,7 +83,7 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
     if (isBcryptHashValue) {
       isPasswordValid = await comparePassword(password, dbPass);
     } else {
-      const sha256Input = require('crypto').createHash('sha256').update(password).digest('hex');
+      const sha256Input = sha256Hex(password);
       isPasswordValid = dbPass === password || dbPass === sha256Input;
 
       // Auto-migración transparente: si la contraseña estaba en texto plano, la encripta con Bcrypt en BD

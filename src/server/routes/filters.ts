@@ -5,7 +5,7 @@ import { getRedisClient, isRedisReady } from '../config/redis';
 import { requireAuth } from '../auth/middleware';
 import { parseJsonSafe } from '../auth/rbac';
 import { cleanPartnerName, SERVICIOS_PERMITIDOS, homologarTipoServicio, HOMOLOGACION_INVERSA_DB } from '../domain/index';
-import { loadTipoServicioCache } from '../services/matFunnel.sync';
+import { loadTipoServicioCacheIfNeeded } from '../services/matFunnel.sync';
 
 const router = Router();
 
@@ -62,7 +62,7 @@ router.get('/filters', async (_req: Request, res: Response) => {
       return res.json(cachedFilters);
     }
 
-    await loadTipoServicioCache();
+    await loadTipoServicioCacheIfNeeded();
 
     const [zonasRes, partnersRes]: any = await Promise.all([
       pool

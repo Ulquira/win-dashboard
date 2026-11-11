@@ -3,7 +3,13 @@ import { pool } from '../config/db';
 import { buildStrictOrderTypeSql, classifyOrderServiceType, cleanPartnerName, homologarTipoServicio, HOMOLOGACION_INVERSA_DB } from '../domain/index';
 import { requireAuth, enforceRoleServiceScope } from '../auth/middleware';
 import { cacheGet, cacheSet } from '../config/cache';
-import { loadTipoServicioCache } from '../services/matFunnel.sync';
+import {
+  loadTipoServicioCacheIfNeeded,
+  getServicioToTipoMap,
+  syncMatFunnelIncremental,
+  withSingleFlightSwr,
+  resolveProductosFromServiceFilter,
+} from '../services/matFunnel.sync';
 
 const router = Router();
 
@@ -28,7 +34,7 @@ router.get('/dashboard', async (req: Request, res: Response) => {
       120,
       refresh === 'true',
       async () => {
-        await loadTipoServicioCache();
+        await loadTipoServicioCacheIfNeeded();
         if (refresh === 'true') {
           await syncMatFunnelIncremental(startDate, endDate);
         }
@@ -398,142 +404,5 @@ router.get('/dashboard', async (req: Request, res: Response) => {
     res.status(500).json({ ok: false, error: error.message });
   }
 });
-
-// ===== Helpers locales (migrados desde server.ts) =====
-
-let servicioToTipoMapCache: Map<string, string> | null = null;
-let tiposUnicosListCache: string[] = [];
-
-function getServicioToTipoMap(): Map<string, string> {
-  return servicioToTipoMapCache || new Map();
-}
-
-function getTiposUnicosList(): string[] {
-  return tiposUnicosListCache;
-}
-
-function setTipoServicioCache(map: Map<string, string>, list: string[]): void {
-  servicioToTipoMapCache = map;
-  tiposUnicosListCache = list;
-}
-
-async function withSingleFlightSwr<T>(
-  key: string,
-  ttlSeconds: number,
-  forceRefresh: boolean,
-  computeFn: () => Promise<T>
-): Promise<T> {
-  const runCompute = (): Promise<T> => {
-    const existing = inFlightRequestsGet(key);
-    if (existing) return existing as Promise<T>;
-    const p = computeFn()
-      .then(async (result) => {
-        await cacheSet(key, result, ttlSeconds);
-        return result;
-      })
-      .finally(() => {
-        inFlightRequestsDelete(key);
-      });
-    inFlightRequestsSet(key, p);
-    return p;
-  };
-
-  if (!forceRefresh) {
-    const swrEntry = swrMemoryCacheGet<T>(key);
-    if (swrEntry) {
-      if (Date.now() >= swrEntry.freshUntil && !inFlightRequestsHas(key)) {
-        runCompute().catch((err) => console.warn(`⚠️ Error en SWR background (${key}):`, err.message));
-      }
-      return swrEntry.data;
-    }
-    const cached = await cacheGet<T>(key);
-    if (cached) {
-      swrMemoryCacheSet(
-        key,
-        { data: cached, freshUntil: Date.now() + ttlSeconds * 1000 } as any,
-        Math.max(ttlSeconds * 6, 900)
-      );
-      return cached;
-    }
-  }
-
-  return runCompute();
-}
-
-async function syncMatFunnelIncremental(customStart?: string, customEnd?: string): Promise<void> {
-  try {
-    if (customStart && customEnd) {
-      await pool.query(`CALL sp_sync_mat_funnel_range(?, CONCAT(?, ' 23:59:59'))`, [
-        `${customStart} 00:00:00`,
-        customEnd,
-      ]);
-    } else {
-      await pool.query(
-        `CALL sp_sync_mat_funnel_range(DATE_SUB(NOW(), INTERVAL 4 HOUR), DATE_ADD(NOW(), INTERVAL 1 DAY))`
-      );
-    }
-  } catch (err: any) {
-    console.warn('⚠️ Aviso en syncMatFunnelIncremental:', err.message);
-  }
-}
-
-function resolveProductosFromServiceFilter(
-  serviceParam: string,
-  servicioToTipoMap: Map<string, string>
-): { srvList: string[]; productosDelTipo: string[]; canonicalList: string[] } {
-  const isAll =
-    !serviceParam ||
-    serviceParam === 'Todos' ||
-    serviceParam === 'Todos los servicios';
-
-  const rawSelected = isAll
-    ? []
-    : serviceParam
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-  const canonicalSet = new Set<string>();
-  const dbSrvEquivalents = new Set<string>();
-
-  for (const item of rawSelected) {
-    const canon = homologarTipoServicio(item) || (servicioToTipoMap.get(item.toUpperCase()) ?? null);
-    if (!canon) continue;
-    canonicalSet.add(canon);
-    dbSrvEquivalents.add(canon);
-    const aliases = HOMOLOGACION_INVERSA_DB[canon] || [];
-    aliases.forEach((a) => dbSrvEquivalents.add(a.toUpperCase()));
-  }
-
-  const productosDelTipo: string[] = [];
-  if (canonicalSet.size > 0) {
-    servicioToTipoMap.forEach((tipoHomologado, prodKey) => {
-      if (canonicalSet.has(tipoHomologado)) {
-        productosDelTipo.push(prodKey);
-      }
-    });
-  }
-
-  return {
-    srvList: Array.from(dbSrvEquivalents),
-    productosDelTipo,
-    canonicalList: Array.from(canonicalSet),
-  };
-}
-
-// In-memory SWR / single-flight (re-exported from config for simplicity)
-const inFlightRequests = new Map<string, Promise<any>>();
-function inFlightRequestsGet(key: string): Promise<any> | undefined { return inFlightRequests.get(key); }
-function inFlightRequestsSet(key: string, p: Promise<any>): void { inFlightRequests.set(key, p); }
-function inFlightRequestsDelete(key: string): void { inFlightRequests.delete(key); }
-function inFlightRequestsHas(key: string): boolean { return inFlightRequests.has(key); }
-
-const swrMemoryCache = new Map<string, { data: any; freshUntil: number }>();
-function swrMemoryCacheGet<T = any>(key: string): { data: T; freshUntil: number } | undefined {
-  return swrMemoryCache.get(key);
-}
-function swrMemoryCacheSet(key: string, val: any, ttl: number): void {
-  swrMemoryCache.set(key, { data: val, freshUntil: Date.now() + ttl });
-}
 
 export default router;

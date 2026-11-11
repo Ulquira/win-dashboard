@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../config/db';
 import { cacheGet, cacheSet, queryCache } from '../config/cache';
-import { buildStrictOrderTypeSql } from '../domain/index';
+import { buildStrictOrderTypeSql, homologarTipoServicio } from '../domain/index';
 import { requireAuth, enforceRoleServiceScope } from '../auth/middleware';
 import { getServicioToTipoMap } from '../services/matFunnel.sync';
 import { loadTipoServicioCacheIfNeeded } from '../services/matFunnel.sync';
@@ -221,7 +221,7 @@ router.get('/tracking/search', async (req: Request, res: Response) => {
       ...r,
       servicio_tipo:
         getServicioToTipoMap().get(String(r.producto || '').trim().toUpperCase()) ||
-        require('../domain/index').homologarTipoServicio(String(r.servicio_tipo || '')) ||
+        homologarTipoServicio(String(r.servicio_tipo || '')) ||
         r.servicio_tipo,
       ultimos_mensajes_json: r.chat_json_mantra || r.ultimos_mensajes_json || null,
     }));

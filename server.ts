@@ -4,21 +4,22 @@ import compression from 'compression';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { env } from './src/server/config/env.ts';
-import { pool, endPool } from './src/server/config/db.ts';
-import { quitRedis } from './src/server/config/redis.ts';
-import { errorHandler, asyncHandler } from './src/server/middleware/errorHandler.ts';
-import { loginLimiter, apiLimiter } from './src/server/middleware/rateLimit.ts';
-import { ensureRbacTables } from './src/server/routes/auth.ts';
+import { env } from './src/server/config/env';
+import { pool, endPool } from './src/server/config/db';
+import { quitRedis } from './src/server/config/redis';
+import { errorHandler } from './src/server/middleware/errorHandler';
+import { apiLimiter } from './src/server/middleware/rateLimit';
+import { ensureRbacTables } from './src/server/routes/auth';
+import { loadTipoServicioCacheIfNeeded } from './src/server/services/matFunnel.sync';
 
-import authRoutes from './src/server/routes/auth.ts';
-import dashboardRoutes from './src/server/routes/dashboard.ts';
-import ordersRoutes from './src/server/routes/orders.ts';
-import trackingRoutes from './src/server/routes/tracking.ts';
-import operationsRoutes from './src/server/routes/operations.ts';
-import csatRoutes from './src/server/routes/csat.ts';
-import efficiencyRoutes from './src/server/routes/efficiency.ts';
-import filtersRoutes from './src/server/routes/filters.ts';
+import authRoutes from './src/server/routes/auth';
+import dashboardRoutes from './src/server/routes/dashboard';
+import ordersRoutes from './src/server/routes/orders';
+import trackingRoutes from './src/server/routes/tracking';
+import operationsRoutes from './src/server/routes/operations';
+import csatRoutes from './src/server/routes/csat';
+import efficiencyRoutes from './src/server/routes/efficiency';
+import filtersRoutes from './src/server/routes/filters';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -76,7 +77,8 @@ const serverInstance = app.listen(PORT, async () => {
   console.log(`✅ Servidor WIN en RUTA activo en puerto ${PORT}`);
   try {
     await ensureRbacTables();
-    console.log('✅ Tablas RBAC verificadas');
+    await loadTipoServicioCacheIfNeeded();
+    console.log('✅ Tablas RBAC y catálogo de servicios verificados');
   } catch (err: any) {
     console.warn('⚠️ Aviso verificando tablas RBAC:', err.message);
   }
