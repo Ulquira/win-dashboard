@@ -376,7 +376,7 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [authUser, dashData?.ok, startDate, endDate, service, baseServiceScope, globalSearch, ignoreDates, queryClient]);
 
-  const dbOnline = Boolean(dashData?.ok && !isError);
+  const dbOnline = Boolean((dashData?.ok || filtersData?.ok) && !isError);
   const errorMsg = isError
     ? `No se pudo conectar a la API ${API_BASE_URL} (${(queryError as Error)?.message || 'Error'})`
     : dashData && !dashData.ok

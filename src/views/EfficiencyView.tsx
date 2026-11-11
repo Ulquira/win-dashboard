@@ -257,10 +257,10 @@ export function EfficiencyView({
         <div className="space-y-1.5">
           <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-[#FF5500]/15 border border-[#FF5500]/30 text-[#FF5500] text-[11px] font-extrabold uppercase tracking-wider">
             <Sparkles size={12} />
-            <span>Auditoría Operativa IA ({effData?.model || 'Gemini Flash-Lite'})</span>
+            <span>Auditoría IA</span>
           </div>
           <h3 className="text-lg sm:text-xl font-black tracking-tight text-white">
-            Diagnóstico de Quiebres, Responsables y Plan de Ataque en Chats
+            Diagnóstico de Quiebres
           </h3>
           <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300 pt-0.5">
             <span>
@@ -414,7 +414,7 @@ export function EfficiencyView({
               <PhoneCall size={16} className="text-[#FF5500]" />
               <div>
                 <h3 className="font-bold text-sm text-slate-900">
-                  Plan de Acción Inmediata (¿Qué hacer y qué no?)
+                  Plan de Acción
                 </h3>
                 <p className="text-[11px] text-slate-400">
                   Haz clic en una acción para filtrar las órdenes que debes gestionar ahora
@@ -491,7 +491,7 @@ export function EfficiencyView({
                 <Wrench size={16} className="text-[#FF5500]" />
                 <div>
                   <h3 className="font-bold text-sm text-slate-900">
-                    Origen del Quiebre (¿A quién atacar?)
+                    Origen del Quiebre
                   </h3>
                   <p className="text-[11px] text-slate-400">
                     Identifica si el fallo viene de Campo, Mantra, Bot o Cliente
@@ -585,7 +585,7 @@ export function EfficiencyView({
         <div className="lg:col-span-6 bg-white border border-slate-100 rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)]">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
             <h3 className="font-bold text-sm text-slate-900">
-              Motivos Homologados de Contacto (Clic para filtrar)
+              Motivos de Contacto
             </h3>
             {filterMotivo !== 'Todos' && (
               <button
@@ -650,7 +650,7 @@ export function EfficiencyView({
               <Building2 size={16} className="text-[#FF5500]" />
               <div>
                 <h3 className="font-bold text-sm text-slate-900">
-                  Partners con Quiebres Reportados en Chat
+                  Quiebres por Partner
                 </h3>
                 <p className="text-[11px] text-slate-400">
                   Demoras, incumplimientos de visita y casos críticos por contrata
@@ -732,7 +732,7 @@ export function EfficiencyView({
           <div className="flex items-center gap-2">
             <Filter size={15} className="text-[#FF5500]" />
             <h3 className="font-bold text-sm text-slate-900">
-              Matriz de Conversaciones Auditadas ({filteredAudits.length})
+              Conversaciones Auditadas ({filteredAudits.length})
             </h3>
             <span className="text-[11px] text-slate-400">
               • Haz clic en cualquier fila para leer el chat real
