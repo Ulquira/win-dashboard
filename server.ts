@@ -20,6 +20,7 @@ import operationsRoutes from './src/server/routes/operations';
 import csatRoutes from './src/server/routes/csat';
 import efficiencyRoutes from './src/server/routes/efficiency';
 import filtersRoutes from './src/server/routes/filters';
+import liveChatRoutes from './src/server/routes/liveChat';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -50,6 +51,7 @@ app.use('/api', operationsRoutes);
 app.use('/api', csatRoutes);
 app.use('/api', efficiencyRoutes);
 app.use('/api', filtersRoutes);
+app.use('/api', liveChatRoutes);
 
 // Middleware global de manejo de errores
 app.use(errorHandler);

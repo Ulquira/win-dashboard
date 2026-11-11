@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
 
-const ALL_VISTAS = ['Dashboard', 'Órdenes', 'Seguimiento', 'Accesos'];
+const ALL_VISTAS = ['Dashboard', 'Órdenes', 'Seguimiento', 'Chat en Vivo', 'Eficiencia', 'Experiencia (CSAT)', 'Accesos'];
 const ALL_SUBVISTAS = [
     { id: 'ejecutiva', label: 'Vista Ejecutiva' },
     { id: 'operativa', label: 'Vista Operativa' },

@@ -4,6 +4,7 @@ export type NavSection =
   | 'Dashboard'
   | 'Órdenes'
   | 'Seguimiento'
+  | 'Chat en Vivo'
   | 'Eficiencia'
   | 'Experiencia (CSAT)'
   | 'Accesos';

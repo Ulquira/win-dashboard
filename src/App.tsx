@@ -21,12 +21,14 @@ const OrdersView = lazy(() => import('./views/OrdersView').then((m) => ({ defaul
 const UsersRolesView = lazy(() => import('./views/UsersRolesView').then((m) => ({ default: m.UsersRolesView })));
 const CsatView = lazy(() => import('./views/CsatView').then((m) => ({ default: m.CsatView })));
 const EfficiencyView = lazy(() => import('./views/EfficiencyView').then((m) => ({ default: m.EfficiencyView })));
+const LiveChatView = lazy(() => import('./views/LiveChatView').then((m) => ({ default: m.LiveChatView })));
 
 const VALID_NAVS: NavSection[] = [
   'Inicio',
   'Dashboard',
   'Órdenes',
   'Seguimiento',
+  'Chat en Vivo',
   'Eficiencia',
   'Experiencia (CSAT)',
   'Accesos',
@@ -188,7 +190,7 @@ export default function App() {
   // Subvistas del Dashboard permitidas por el Rol
   const allowedViews = authUser?.permisos?.vistas || ['*'];
   const canSeeView = (v: NavSection) =>
-    v === 'Inicio' || v === 'Eficiencia' || v === 'Experiencia (CSAT)' || allowedViews.includes('*') || allowedViews.includes(v);
+    v === 'Inicio' || v === 'Chat en Vivo' || v === 'Eficiencia' || v === 'Experiencia (CSAT)' || allowedViews.includes('*') || allowedViews.includes(v);
 
   const allowedSubviews = authUser?.permisos?.subvistas || ['*'];
   const canSeeSubview = (sv: ViewMode) =>
@@ -938,6 +940,13 @@ export default function App() {
               globalSearch={globalSearch}
               ignoreDates={ignoreDates}
               consultTrigger={consultTrigger}
+              onSelectOrder={setSelectedOrder}
+            />
+          )}
+
+          {activeNav === 'Chat en Vivo' && (
+            <LiveChatView
+              authUser={authUser}
               onSelectOrder={setSelectedOrder}
             />
           )}

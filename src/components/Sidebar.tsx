@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Home, BarChart2, Layers, MessageSquare, Settings, Star,
-  ChevronDown, Activity, ClipboardList, X, Wrench, Shield
+  ChevronDown, Activity, ClipboardList, X, Wrench, Shield, Headset
 } from 'lucide-react';
 import { NavSection, ViewMode } from '../types/dashboard';
 
@@ -29,7 +29,7 @@ export function Sidebar({
   const [dashExpanded, setDashExpanded] = useState<boolean>(true);
 
   const canSeeView = (v: NavSection) =>
-    v === 'Inicio' || allowedViews.includes('*') || allowedViews.includes(v);
+    v === 'Inicio' || v === 'Chat en Vivo' || v === 'Eficiencia' || v === 'Experiencia (CSAT)' || allowedViews.includes('*') || allowedViews.includes(v);
 
   const canSeeSubview = (sv: ViewMode) =>
     allowedSubviews.includes('*') || allowedSubviews.includes(sv);
@@ -162,6 +162,14 @@ export function Sidebar({
               label="Seguimiento"
               active={activeNav === 'Seguimiento'}
               onClick={() => handleSelectNav('Seguimiento')}
+            />
+          )}
+          {canSeeView('Chat en Vivo') && (
+            <NavItem
+              icon={<Headset size={16} />}
+              label="Chat en Vivo"
+              active={activeNav === 'Chat en Vivo'}
+              onClick={() => handleSelectNav('Chat en Vivo')}
             />
           )}
           {canSeeView('Eficiencia') && (
