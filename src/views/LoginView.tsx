@@ -92,12 +92,12 @@ export function LoginView({ onLoginSuccess }: LoginViewProps) {
                         <span>Monitoreo en Tiempo Real</span>
                     </div>
 
-                    <h1 className="text-4xl xl:text-5xl font-black tracking-tight leading-[1.12] text-white">
-                        Gestión y {' '}
-                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#FF5500] to-amber-400">
-                            trazabilidad 360°
+                    <h1 className="text-4xl xl:text-5xl font-black tracking-tight leading-[1.12]">
+                         Gestión y Trazabilidad
+                         <span className="block bg-gradient-to-r from-[#FF5500] to-amber-400 bg-clip-text text-transparent">
+                          WIN en Ruta
                         </span>
-                    </h1>
+                     </h1>
 
                     {/* Tarjetas flotantes de telemetría */}
                     <div className="grid grid-cols-3 gap-3.5 pt-4">
