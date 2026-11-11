@@ -3,12 +3,14 @@ import cors from 'cors';
 import compression from 'compression';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
 import { env } from './src/server/config/env';
 import { pool, endPool } from './src/server/config/db';
 import { quitRedis } from './src/server/config/redis';
-import { errorHandler, asyncHandler } from './src/server/middleware/errorHandler';
-import { loginLimiter, apiLimiter } from './src/server/middleware/rateLimit';
+import { errorHandler } from './src/server/middleware/errorHandler';
+import { apiLimiter } from './src/server/middleware/rateLimit';
 import { ensureRbacTables } from './src/server/routes/auth';
+
 import authRoutes from './src/server/routes/auth';
 import dashboardRoutes from './src/server/routes/dashboard';
 import ordersRoutes from './src/server/routes/orders';
@@ -22,8 +24,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-
-// Requerido en Azure App Service (detrás de Load Balancer / Auto-Scaling) para leer la IP real del cliente
 app.set('trust proxy', 1);
 
 // Middlewares globales
@@ -34,8 +34,14 @@ app.use(express.json({ limit: '1mb' }));
 // Rate limiters
 app.use('/api', apiLimiter);
 
-// Montar rutas
+// Healthcheck público para Azure App Service Load Balancer
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true, status: 'UP', timestamp: new Date().toISOString() });
+});
+
+// Montar rutas en ambos prefijos (/api/auth y /api) para evitar 404 por doble prefijo
 app.use('/api/auth', authRoutes);
+app.use('/api', authRoutes);
 app.use('/api', dashboardRoutes);
 app.use('/api', ordersRoutes);
 app.use('/api', trackingRoutes);
