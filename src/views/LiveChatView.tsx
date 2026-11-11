@@ -197,10 +197,28 @@ export function LiveChatView({ authUser }: LiveChatViewProps) {
     });
   }, [sessions, filterTab, searchTerm]);
 
-  // Seleccionar automáticamente el primer chat disponible si no hay uno seleccionado
+  // Seleccionar automáticamente un chat activo cuando el actual se cierra o cuando entra una nueva sesión de la misma orden
   useEffect(() => {
-    if (selectedId === null && filteredSessions.length > 0) {
+    if (filteredSessions.length === 0) return;
+
+    const currentInFiltered = filteredSessions.find((s) => s.id === selectedId);
+    if (!currentInFiltered) {
       setSelectedId(filteredSessions[0].id);
+      return;
+    }
+
+    // Si la sesión seleccionada está resuelta pero el cliente abrió una nueva sesión activa para la misma orden/token, saltar a la nueva
+    if (currentInFiltered.estado_chat === 'resuelto') {
+      const newerActiveSameOrder = filteredSessions.find(
+        (s) =>
+          s.id !== currentInFiltered.id &&
+          s.estado_chat !== 'resuelto' &&
+          ((s.orden_id && s.orden_id === currentInFiltered.orden_id) ||
+            (s.token && s.token === currentInFiltered.token))
+      );
+      if (newerActiveSameOrder) {
+        setSelectedId(newerActiveSameOrder.id);
+      }
     }
   }, [filteredSessions, selectedId]);
 
@@ -628,7 +646,7 @@ export function LiveChatView({ authUser }: LiveChatViewProps) {
                     </a>
                   )}
 
-                  {activeSession.estado_chat !== 'resuelto' && (
+                  {activeSession.estado_chat !== 'resuelto' ? (
                     <button
                       type="button"
                       disabled={sending}
@@ -637,6 +655,21 @@ export function LiveChatView({ authUser }: LiveChatViewProps) {
                     >
                       <CheckCircle2 size={14} />
                       <span>Marcar como Resuelto</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={sending}
+                      onClick={() =>
+                        handleSendAction(
+                          'en_atencion',
+                          'Hemos reabierto tu atención en línea. ¿En qué podemos ayudarte?'
+                        )
+                      }
+                      className="px-3.5 py-1.5 rounded-xl bg-[#FF5A0A] hover:bg-[#e04e00] disabled:opacity-50 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                    >
+                      <RefreshCw size={13} />
+                      <span>Reabrir Chat</span>
                     </button>
                   )}
                 </div>

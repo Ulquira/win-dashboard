@@ -5,6 +5,22 @@ import { requireAuth } from '../auth/middleware';
 
 const router = Router();
 
+let indexChecked = false;
+async function ensureLogsChatMultiSessionIndex(): Promise<void> {
+  if (indexChecked) return;
+  indexChecked = true;
+  try {
+    const [idxRows]: any = await pool.query(
+      `SHOW INDEX FROM logs_chat WHERE Key_name = 'uk_token'`
+    );
+    if (Array.isArray(idxRows) && idxRows.length > 0) {
+      await pool.query(`ALTER TABLE logs_chat DROP INDEX uk_token, ADD INDEX idx_token (token)`);
+    }
+  } catch {
+    // Ignorar si ya fue migrado
+  }
+}
+
 export interface NormalizedChatMessage {
   sender: 'bot' | 'user' | 'agent';
   author?: string;
@@ -79,6 +95,7 @@ router.get(
   asyncHandler(async (req: Request, res: Response) => {
     const authUser = requireAuth(req, res);
     if (!authUser) return;
+    await ensureLogsChatMultiSessionIndex();
     const scope = String(req.query.scope || 'activos').toLowerCase();
 
     const whereClause =
