@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   User, Sparkles, Headset, ExternalLink, MessageSquare,
   ChevronLeft, ChevronRight, RefreshCw, CheckCheck,
   MapPin, Phone, ShieldCheck, Copy, Check, Layers, Wrench,
-  ChevronDown, ChevronUp, Bot, LifeBuoy
+  ChevronDown, ChevronUp, Bot, LifeBuoy, Send, CheckCircle2, AlertCircle
 } from 'lucide-react';
-import { RealOrder } from '../types/dashboard';
+import { AuthUser, RealOrder } from '../types/dashboard';
 import { apiFetch } from '../config/api';
 
 export interface RawChatMessage {
@@ -17,6 +17,8 @@ export interface RawChatMessage {
   timestamp?: string;
   emisor?: string;
   rol?: string;
+  sender?: 'bot' | 'user' | 'agent' | string;
+  author?: string;
   direction?: string;
   from_me?: boolean;
   tipo?: string;
@@ -25,10 +27,13 @@ export interface RawChatMessage {
   agente?: string;
   usuario?: string;
   texto?: string;
+  text?: string;
   mensaje?: string;
   body?: string;
   contenido?: string;
   estado?: string;
+  _fromLogChat?: boolean;
+  _firstLogChatMsg?: boolean;
   [key: string]: any;
 }
 
@@ -40,7 +45,24 @@ interface TrackingViewProps {
   globalSearch: string;
   ignoreDates: boolean;
   consultTrigger?: number;
+  authUser?: AuthUser | null;
   onSelectOrder: (order: RealOrder) => void;
+}
+
+const QUICK_REPLIES = [
+  '¡Hola! Te saluda tu asesor de Soporte WIN. Estoy revisando el estado de tu orden en este momento.',
+  'Hemos verificado con la cuadrilla asignada y están en ruta hacia tu domicilio.',
+  '¿Me confirmas por favor si te encuentras disponible en el domicilio para recibir al técnico?',
+  'Hemos registrado tu solicitud prioritaria. ¿Puedo ayudarte con alguna consulta adicional?',
+];
+
+function normalizeLogEstado(raw?: string | null): string {
+  const val = String(raw || '').trim().toLowerCase();
+  if (val === 'esperando_asesor' || val === 'derivado a asesor') return 'esperando_asesor';
+  if (val === 'en_atencion' || val === 'en atención') return 'en_atencion';
+  if (val === 'en_curso' || val === 'en curso') return 'en_curso';
+  if (val === 'resuelto' || val === 'finalizado') return 'resuelto';
+  return val || '';
 }
 
 function formatChatDateTime(raw?: string | null): string {
@@ -78,6 +100,7 @@ export function TrackingView({
   globalSearch,
   ignoreDates,
   consultTrigger = 0,
+  authUser,
   onSelectOrder,
 }: TrackingViewProps) {
   const [debouncedQuery, setDebouncedQuery] = useState<string>(globalSearch);
@@ -110,6 +133,11 @@ export function TrackingView({
   const [showTechCard, setShowTechCard] = useState<boolean>(true);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
 
+  // Estado para respuesta en vivo hacia logs_chat (GoWIN | Tracking)
+  const [replyText, setReplyText] = useState<string>('');
+  const [sendingReply, setSendingReply] = useState<boolean>(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
+
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const [showScrollDownBtn, setShowScrollDownBtn] = useState<boolean>(false);
 
@@ -137,7 +165,7 @@ export function TrackingView({
     return () => clearTimeout(timer);
   }, [globalSearch]);
 
-  // 1. Consulta de Bandeja gestionada con React Query (caché instantáneo + cancelación automática)
+  // 1. Consulta de Bandeja gestionada con React Query
   const {
     data: trackingData,
     isFetching: loadingPage,
@@ -181,7 +209,142 @@ export function TrackingView({
     refetchOnWindowFocus: false,
   });
 
-  const serverOrders: RealOrder[] = trackingData?.orders || initialOrders.slice(0, 50);
+  // 1b. Short Polling cada 3 segundos hacia /api/chat-log/activos?scope=todos para actualizar chats web en vivo al instante
+  const { data: liveLogsResponse } = useQuery<any>({
+    queryKey: ['liveChatLogsPolling', consultTrigger],
+    queryFn: ({ signal }) => apiFetch('/api/chat-log/activos?scope=todos', { signal }),
+    refetchInterval: 3000,
+    refetchIntervalInBackground: false,
+    staleTime: 1500,
+  });
+
+  const liveLogsList: any[] = useMemo(
+    () => (Array.isArray(liveLogsResponse?.data) ? liveLogsResponse.data : []),
+    [liveLogsResponse]
+  );
+
+  const liveWaitingCount = useMemo(
+    () =>
+      liveLogsList.filter(
+        (x) =>
+          normalizeLogEstado(x.estado_chat) === 'esperando_asesor' ||
+          normalizeLogEstado(x.estado_chat) === 'en_atencion'
+      ).length,
+    [liveLogsList]
+  );
+
+  // Combinar órdenes del servidor con las sesiones activas en tiempo real de logs_chat
+  const serverOrders: RealOrder[] = useMemo(() => {
+    const baseOrders: RealOrder[] = trackingData?.orders || initialOrders.slice(0, 50);
+    const liveByOrden = new Map<string, any>();
+    for (const l of liveLogsList) {
+      if (l.orden_id) liveByOrden.set(String(l.orden_id), l);
+    }
+
+    // Actualizar en caliente cualquier orden de la página actual que tenga sesión en logs_chat
+    const enrichedBase = baseOrders.map((ord) => {
+      const live = liveByOrden.get(String(ord.orden_id));
+      if (!live) return ord;
+      const stNorm = normalizeLogEstado(live.estado_chat);
+      return {
+        ...ord,
+        log_chat_id: live.id,
+        log_chat_token: live.token,
+        log_grupo_servicio: live.grupo_servicio,
+        log_motivo_sos: live.motivo,
+        log_estado_chat: stNorm,
+        log_asesor_nombre: live.asesor_nombre,
+        log_ultimo_mensaje_por: live.ultimo_mensaje_por,
+        log_mensajes_json: live.mensajes,
+        log_updated_at: live.updated_at,
+        quien_tiene_la_palabra:
+          stNorm === 'esperando_asesor' || live.ultimo_mensaje_por === 'cliente'
+            ? 'CLIENTE'
+            : stNorm === 'en_atencion' && live.ultimo_mensaje_por === 'asesor'
+              ? 'ASESOR'
+              : ord.quien_tiene_la_palabra,
+        semaforo_sla:
+          stNorm === 'esperando_asesor'
+            ? 'ROJO'
+            : stNorm === 'en_atencion'
+              ? 'AMARILLO'
+              : ord.semaforo_sla,
+      };
+    });
+
+    // Inyectar en el tope las sesiones de logs_chat que están activas ('esperando_asesor' o 'en_atencion')
+    // o todas las de logs_chat cuando el filtro "Bot SOS / Chat Web" está activo, aunque sean de otra fecha
+    const existingIds = new Set(enrichedBase.map((o) => String(o.orden_id)));
+    const qLower = debouncedQuery.trim().toLowerCase();
+
+    const injectedLiveOrders: RealOrder[] = liveLogsList
+      .filter((live) => {
+        if (existingIds.has(String(live.orden_id))) return false;
+        const st = normalizeLogEstado(live.estado_chat);
+        const isActiveLive = st === 'esperando_asesor' || st === 'en_atencion';
+        if (!soloLogChat && !isActiveLive) return false;
+        if (qLower) {
+          const match =
+            String(live.orden_id || '').toLowerCase().includes(qLower) ||
+            String(live.cliente || '').toLowerCase().includes(qLower) ||
+            String(live.phone || '').toLowerCase().includes(qLower) ||
+            String(live.codisegui || '').toLowerCase().includes(qLower);
+          if (!match) return false;
+        }
+        return true;
+      })
+      .map((live) => {
+        const stNorm = normalizeLogEstado(live.estado_chat);
+        return {
+          orden_id: Number(live.orden_id) || live.id,
+          ticket: live.codisegui || String(live.orden_id),
+          cliente: live.cliente || `Cliente OT #${live.orden_id}`,
+          telefono: live.phone || '',
+          mantra_phone: live.mantra_phone || live.phone || '',
+          numero_documento: live.numero_documento || live.codisegui || '-',
+          codi_segui_ot: live.codisegui || '-',
+          producto: live.producto || live.grupo_servicio || 'Servicio WIN',
+          servicio_tipo: live.servicio_tipo || live.grupo_servicio || 'INSTA - LIMA',
+          tipo_trabajo: live.motivo || 'Atención en Tracking',
+          estado_ot: live.estado_ot || 'En Proceso',
+          fecha_solicitud_fmt: live.fecha_solicitud_fmt || 'Hoy',
+          sector_operativo: live.sector_operativo || 'LIMA',
+          distrito: live.distrito || '-',
+          partner: live.partner || '-',
+          cuadrilla: live.cuadrilla || '-',
+          se_envio_wsp: live.se_envio_wsp || 'SI',
+          estado_wsp: live.estado_wsp || 'READ',
+          ingreso_tracking: 'SI',
+          link_tracking: live.token ? `https://enruta.win.pe/seguimiento/${live.token}` : '',
+          pulso_soporte: live.pulso_soporte || (stNorm === 'esperando_asesor' ? 'SI' : 'NO'),
+          semaforo_sla: live.semaforo_sla || 'ROJO',
+          quien_tiene_la_palabra: live.quien_tiene_la_palabra || 'CLIENTE',
+          ultimos_mensajes_json: live.chat_json_mantra || null,
+          log_chat_id: live.id,
+          log_chat_token: live.token,
+          log_grupo_servicio: live.grupo_servicio,
+          log_motivo_sos: live.motivo,
+          log_estado_chat: stNorm,
+          log_asesor_nombre: live.asesor_nombre,
+          log_ultimo_mensaje_por: live.ultimo_mensaje_por,
+          log_mensajes_json: live.mensajes,
+          log_updated_at: live.updated_at,
+        } as RealOrder;
+      });
+
+    const merged = [...injectedLiveOrders, ...enrichedBase];
+
+    // Priorizar arriba de todo los casos con 'esperando_asesor' y luego 'en_atencion'
+    return merged.sort((a, b) => {
+      const stA = normalizeLogEstado(a.log_estado_chat);
+      const stB = normalizeLogEstado(b.log_estado_chat);
+      const prioA = stA === 'esperando_asesor' ? 2 : stA === 'en_atencion' ? 1 : 0;
+      const prioB = stB === 'esperando_asesor' ? 2 : stB === 'en_atencion' ? 1 : 0;
+      if (prioA !== prioB) return prioB - prioA;
+      return 0;
+    });
+  }, [trackingData?.orders, initialOrders, liveLogsList, soloLogChat, debouncedQuery]);
+
   const totalRecords = Number(trackingData?.total ?? initialOrders.length);
   const totalPages = Number(trackingData?.totalPages ?? 1);
 
@@ -231,14 +394,14 @@ export function TrackingView({
     serverOrders[selectedIndex] || serverOrders[0] || null;
   const selectedOrderId = selectedRow?.orden_id ?? null;
 
-  // 2. Consulta del Hilo de Chat en Vivo gestionada por React Query (cacheada por orden_id)
+  // 2. Consulta del Hilo de Chat en Vivo Mantra gestionada por React Query (cacheada por orden_id)
   const {
     data: liveChatData,
     isFetching: loadingChat,
   } = useQuery<any>({
     queryKey: ['mantraLiveChat', selectedOrderId, consultTrigger],
     enabled: Boolean(selectedRow && (selectedRow.mantra_phone || selectedRow.telefono || selectedRow.orden_id)),
-    staleTime: 1000 * 45, // 45s de caché por conversación
+    staleTime: 1000 * 45,
     queryFn: async ({ signal }): Promise<any> => {
       const phone = String(selectedRow?.mantra_phone || selectedRow?.telefono || '').replace(/\D/g, '');
       const grupo = String(selectedRow?.servicio_tipo || selectedRow?.producto || 'GENERAL');
@@ -312,6 +475,8 @@ export function TrackingView({
         if (Array.isArray(parsedLog)) {
           logChatList = parsedLog.map((m: any, i: number) => ({
             ...m,
+            texto: m.text ?? m.texto ?? m.mensaje ?? '',
+            fecha_utc: m.timestamp ?? m.fecha_utc ?? m.fecha ?? '',
             _fromLogChat: true,
             _firstLogChatMsg: i === 0,
           }));
@@ -323,14 +488,22 @@ export function TrackingView({
 
     let combined: RawChatMessage[] = [...mantraList, ...logChatList];
 
-    if (combined.length === 0 && selectedRow.se_envio_wsp === 'SI') {
+    // Si tiene disparo WSP pero no hay plantilla explícita en Mantra, mostrar la burbuja inicial HSM como origen del flujo
+    const hasTemplateMsg = combined.some(
+      (m) => m.tipo === 'template' || Boolean(m.es_plantilla)
+    );
+    if (!hasTemplateMsg && selectedRow.se_envio_wsp === 'SI') {
       const linkTrk =
         selectedRow.link_tracking ||
-        (selectedRow.token ? `https://enruta.win.pe/seguimiento/${selectedRow.token}` : 'https://enruta.win.pe');
+        (selectedRow.log_chat_token
+          ? `https://enruta.win.pe/seguimiento/${selectedRow.log_chat_token}`
+          : selectedRow.token
+            ? `https://enruta.win.pe/seguimiento/${selectedRow.token}`
+            : 'https://enruta.win.pe');
       combined = [
         {
-          orden: 1,
-          fecha_utc: selectedRow.fecha_solicitud_fmt || selectedRow.fecha_solicitud || 'Hoy',
+          orden: 0,
+          fecha_utc: selectedRow.fecha_solicitud_fmt || selectedRow.fecha_solicitud || 'Inicio',
           tipo: 'template',
           es_plantilla: true,
           nombre_plantilla: 'WIN - Seguimiento de VT',
@@ -338,10 +511,13 @@ export function TrackingView({
           estado: selectedRow.estado_wsp || 'SENT',
           texto: `Hola *${selectedRow.cliente || 'Cliente'}*, te informamos sobre la Confirmación de Visita Técnica (${selectedRow.producto || selectedRow.servicio_tipo || 'Servicio WIN'}).\n\n📍 *Dirección:* ${selectedRow.direccion_cliente || selectedRow.distrito || '-'}\n👷 *Cuadrilla:* ${selectedRow.cuadrilla_completa || selectedRow.cuadrilla || '-'} | [Ver Tracking en Vivo,${linkTrk}] | [Reprogramar Visita]`,
         },
+        ...combined,
       ];
     }
 
     return combined.sort((a, b) => {
+      if (a.es_plantilla && !b.es_plantilla) return -1;
+      if (!a.es_plantilla && b.es_plantilla) return 1;
       const tA = new Date(a.fecha_utc || a.fecha || a.timestamp || 0).getTime() || 0;
       const tB = new Date(b.fecha_utc || b.fecha || b.timestamp || 0).getTime() || 0;
       if (tA !== tB) return tA - tB;
@@ -373,6 +549,48 @@ export function TrackingView({
     });
   }, [selectedOrderId, parsedChatMessages.length, loadingChat, scrollToBottom]);
 
+  // Enviar mensaje o cambiar estado en el Chat Web (logs_chat)
+  const handleSendLiveReply = async (
+    nuevoEstado: 'en_atencion' | 'resuelto',
+    customText?: string
+  ) => {
+    if (!selectedRow?.log_chat_id || sendingReply) return;
+    const textToSend = (customText !== undefined ? customText : replyText).trim();
+    if (nuevoEstado === 'en_atencion' && !textToSend) return;
+
+    setSendingReply(true);
+    setReplyError(null);
+    try {
+      const payload = {
+        sender: 'agent',
+        asesor_nombre: authUser?.nombre || 'Asesor WIN',
+        text:
+          textToSend ||
+          (nuevoEstado === 'resuelto'
+            ? 'Hemos dado por finalizada esta consulta. ¡Gracias por comunicarte con WIN!'
+            : ''),
+        nuevo_estado: nuevoEstado,
+      };
+
+      await apiFetch(`/api/chat-log/${selectedRow.log_chat_id}/mensaje`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      if (customText === undefined) {
+        setReplyText('');
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['liveChatLogsPolling'] }),
+        queryClient.invalidateQueries({ queryKey: ['trackingSearch'] }),
+      ]);
+    } catch (err: any) {
+      setReplyError(err?.message || 'Error al enviar respuesta al Chat Web');
+    } finally {
+      setSendingReply(false);
+    }
+  };
+
   const isOrderSos = (row?: RealOrder | null) => {
     if (!row) return false;
     const val = String(row.pulso_soporte || '').trim().toUpperCase();
@@ -392,8 +610,8 @@ export function TrackingView({
 
     let msgIndex = parsedChatMessages.findIndex((m) => {
       if (m._fromLogChat) return false;
-      const txt = String(m.texto || m.mensaje || m.body || m.contenido || '');
-      const sender = String(m.emisor || m.rol || m.direction || '').toLowerCase();
+      const txt = String(m.texto || m.text || m.mensaje || m.body || m.contenido || '');
+      const sender = String(m.emisor || m.rol || m.sender || m.direction || '').toLowerCase();
       const isCli = sender.includes('cli') || sender.includes('inbound') || sender.includes('user') || m.from_me === false;
       return isCli && triggerRegex.test(txt);
     });
@@ -411,8 +629,8 @@ export function TrackingView({
 
     if (msgIndex === -1 && hasSosFlag && parsedChatMessages.length > 0 && !selectedRow?.log_chat_id) {
       const firstAgentIdx = parsedChatMessages.findIndex((m) => {
-        const sender = String(m.emisor || m.rol || m.direction || '').toLowerCase();
-        const txt = String(m.texto || m.mensaje || m.body || m.contenido || '');
+        const sender = String(m.emisor || m.rol || m.sender || m.direction || '').toLowerCase();
+        const txt = String(m.texto || m.text || m.mensaje || m.body || m.contenido || '');
         const isCli = sender.includes('cli') || sender.includes('inbound') || sender.includes('user') || m.from_me === false;
         const isTpl = m.tipo === 'template' || Boolean(m.es_plantilla) || /enruta\.win\.pe|confirmaci[oó]n de visita|\|\s*\[/i.test(txt);
         return !isCli && !isTpl;
@@ -421,7 +639,7 @@ export function TrackingView({
         msgIndex = firstAgentIdx;
       } else {
         const firstCliIdx = parsedChatMessages.findIndex((m) => {
-          const sender = String(m.emisor || m.rol || m.direction || '').toLowerCase();
+          const sender = String(m.emisor || m.rol || m.sender || m.direction || '').toLowerCase();
           return sender.includes('cli') || sender.includes('inbound') || sender.includes('user') || m.from_me === false;
         });
         msgIndex = firstCliIdx !== -1 ? firstCliIdx : parsedChatMessages.length - 1;
@@ -433,9 +651,9 @@ export function TrackingView({
       rawSosDate ||
       (msgIndex !== -1
         ? parsedChatMessages[msgIndex]?.fecha_utc ||
-        parsedChatMessages[msgIndex]?.fecha ||
-        parsedChatMessages[msgIndex]?.timestamp ||
-        ''
+          parsedChatMessages[msgIndex]?.fecha ||
+          parsedChatMessages[msgIndex]?.timestamp ||
+          ''
         : '');
 
     return {
@@ -451,18 +669,21 @@ export function TrackingView({
     selectedRow?.quien_tiene_la_palabra ||
     (parsedChatMessages.length > 0
       ? String(
-        parsedChatMessages[parsedChatMessages.length - 1].emisor ||
-        parsedChatMessages[parsedChatMessages.length - 1].rol ||
-        ''
-      )
-        .toLowerCase()
-        .includes('cli')
+          parsedChatMessages[parsedChatMessages.length - 1].sender ||
+            parsedChatMessages[parsedChatMessages.length - 1].emisor ||
+            parsedChatMessages[parsedChatMessages.length - 1].rol ||
+            ''
+        )
+          .toLowerCase()
+          .includes('cli') ||
+        String(parsedChatMessages[parsedChatMessages.length - 1].sender || '').toLowerCase() === 'user'
         ? 'CLIENTE'
         : 'ASESOR'
       : 'BOT');
 
   const activeSla = chatMeta?.semaforo_sla || selectedRow?.semaforo_sla || 'VERDE';
   const activeEstadoChat = chatMeta?.estado_chat || selectedRow?.estado_chat || null;
+  const activeLogEstado = normalizeLogEstado(selectedRow?.log_estado_chat);
 
   const renderSlaTrafficDot = (slaRaw?: string | null) => {
     const s = String(slaRaw || 'VERDE').toUpperCase();
@@ -483,7 +704,7 @@ export function TrackingView({
 
   const renderLastWriterBadge = (turnoRaw?: string | null) => {
     const t = String(turnoRaw || 'BOT').toUpperCase();
-    const isCli = t.includes('CLI');
+    const isCli = t.includes('CLI') || t === 'USER';
     const isBot = t.includes('BOT') || t.includes('HSM') || t.includes('SIST');
     if (isCli) {
       return (
@@ -565,7 +786,7 @@ export function TrackingView({
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 lg:h-[calc(100vh-140px)] min-h-[640px]">
-      {/* PANEL IZQUIERDO: BANDEJA DE CONVERSACIONES */}
+      {/* PANEL IZQUIERDO: BANDEJA UNIFICADA (MANTRA + CHAT WEB TRACKING) */}
       <div className="lg:col-span-4 bg-white border border-slate-100 rounded-2xl flex flex-col overflow-hidden shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)]">
         <div className="p-3 border-b border-slate-100 space-y-2.5">
           <div className="flex items-center justify-between gap-2 min-w-0">
@@ -585,10 +806,11 @@ export function TrackingView({
                   setPage(1);
                   setSelectedIndex(0);
                 }}
-                className={`h-6 inline-flex items-center gap-1 px-2 rounded-full border text-[10px] font-bold whitespace-nowrap shrink-0 transition ${soloSos
-                  ? 'bg-rose-600 text-white border-rose-600 shadow-2xs'
-                  : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
-                  }`}
+                className={`h-6 inline-flex items-center gap-1 px-2 rounded-full border text-[10px] font-bold whitespace-nowrap shrink-0 transition cursor-pointer ${
+                  soloSos
+                    ? 'bg-rose-600 text-white border-rose-600 shadow-2xs'
+                    : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                }`}
                 title="Filtrar chats que pulsaron el botón SOS / Soporte"
               >
                 <LifeBuoy size={10} className="shrink-0" />
@@ -604,14 +826,19 @@ export function TrackingView({
                   setPage(1);
                   setSelectedIndex(0);
                 }}
-                className={`h-6 inline-flex items-center gap-1 px-2 rounded-full border text-[10px] font-bold whitespace-nowrap shrink-0 transition ${soloLogChat
-                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
-                  : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
-                  }`}
-                title="Filtrar chats con Asistente Inteligente de Soporte (logs_chat)"
+                className={`h-6 inline-flex items-center gap-1 px-2 rounded-full border text-[10px] font-bold whitespace-nowrap shrink-0 transition cursor-pointer ${
+                  soloLogChat
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                    : liveWaitingCount > 0
+                      ? 'bg-[#FF5500] text-white border-[#FF5500] animate-pulse'
+                      : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                }`}
+                title="Filtrar chats en vivo del Asistente Web de Tracking (logs_chat)"
               >
                 <Bot size={11} className="shrink-0" />
-                <span>Bot SOS</span>
+                <span>
+                  {liveWaitingCount > 0 ? `Chat Web (${liveWaitingCount})` : 'Bot SOS'}
+                </span>
               </button>
 
               <button
@@ -621,11 +848,12 @@ export function TrackingView({
                   setPage(1);
                   setSelectedIndex(0);
                 }}
-                className={`h-6 inline-flex items-center gap-1 px-2 rounded-full border text-[10px] font-bold whitespace-nowrap shrink-0 transition ${soloConChat
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                  }`}
-                title="Alternar entre órdenes con chat en Mantra o todas las órdenes"
+                className={`h-6 inline-flex items-center gap-1 px-2 rounded-full border text-[10px] font-bold whitespace-nowrap shrink-0 transition cursor-pointer ${
+                  soloConChat
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                }`}
+                title="Alternar entre órdenes con chat o todas las órdenes"
               >
                 <span>{soloConChat ? '💬 Con Chat' : '📋 Todas'}</span>
               </button>
@@ -656,10 +884,11 @@ export function TrackingView({
                   setPage(1);
                   setSelectedIndex(0);
                 }}
-                className={`py-1.5 px-1.5 rounded-lg font-bold transition truncate ${turnoFilter === btn.id
-                  ? 'bg-[#FF5500] text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
-                  }`}
+                className={`py-1.5 px-1.5 rounded-lg font-bold transition truncate cursor-pointer ${
+                  turnoFilter === btn.id
+                    ? 'bg-[#FF5500] text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                }`}
               >
                 {btn.label}
               </button>
@@ -686,7 +915,11 @@ export function TrackingView({
         </div>
 
         {/* Lista de Conversaciones */}
-        <div className={`flex-1 overflow-y-auto divide-y divide-slate-100 transition-opacity ${loadingPage ? 'opacity-60' : 'opacity-100'}`}>
+        <div
+          className={`flex-1 overflow-y-auto divide-y divide-slate-100 transition-opacity ${
+            loadingPage ? 'opacity-60' : 'opacity-100'
+          }`}
+        >
           {serverOrders.length > 0 ? (
             serverOrders.map((item, idx) => {
               const isSelected = selectedRow?.orden_id === item.orden_id;
@@ -694,19 +927,26 @@ export function TrackingView({
               const docVal = item.numero_documento || '-';
               const codSeguiVal = item.codi_segui_ot || item.ticket || item.CodiSegui || '-';
               const lastWriter = item.quien_tiene_la_palabra || 'BOT';
+              const itemLogState = normalizeLogEstado(item.log_estado_chat);
+              const isWaitingWebAdvisor = itemLogState === 'esperando_asesor';
+              const isInWebAttention = itemLogState === 'en_atencion';
 
               return (
                 <div
-                  key={item.orden_id}
+                  key={`${item.orden_id}-${item.log_chat_id || idx}`}
                   onClick={() => {
                     const selection = window.getSelection()?.toString();
                     if (selection && selection.length > 0) return;
                     setSelectedIndex(idx);
+                    setReplyError(null);
                   }}
-                  className={`p-3 cursor-pointer transition ${isSelected
-                    ? 'bg-[#FFF0E5]/70 border-l-4 border-l-[#FF5500]'
-                    : 'hover:bg-slate-50'
-                    }`}
+                  className={`p-3 cursor-pointer transition ${
+                    isSelected
+                      ? 'bg-[#FFF0E5]/70 border-l-4 border-l-[#FF5500]'
+                      : isWaitingWebAdvisor
+                        ? 'bg-orange-50/50 hover:bg-orange-50/80 border-l-4 border-l-[#FF5500]'
+                        : 'hover:bg-slate-50'
+                  }`}
                 >
                   <div className="flex items-center justify-between text-xs gap-2">
                     <div className="flex items-center gap-1.5 truncate">
@@ -731,15 +971,29 @@ export function TrackingView({
                       <Phone size={10} />
                       {item.mantra_phone || item.telefono || 'Sin teléfono'}
                     </span>
-                    <div className="flex items-center gap-1.5">
-                      {(item.log_motivo_sos || item.log_chat_id) && (
-                        <span
-                          className="inline-flex items-center justify-center w-5 h-4 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200"
-                          title={`Bot SOS: ${item.log_motivo_sos || 'Soporte'}`}
-                        >
-                          <Bot size={10} />
+                    <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                      {isWaitingWebAdvisor && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#FF5500] text-white text-[9px] font-extrabold uppercase animate-pulse">
+                          <AlertCircle size={9} />
+                          Espera Web
                         </span>
                       )}
+                      {isInWebAttention && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 text-[9px] font-extrabold uppercase">
+                          <Headset size={9} />
+                          Atención Web
+                        </span>
+                      )}
+                      {(item.log_motivo_sos || item.log_chat_id) &&
+                        !isWaitingWebAdvisor &&
+                        !isInWebAttention && (
+                          <span
+                            className="inline-flex items-center justify-center w-5 h-4 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200"
+                            title={`Bot SOS / Chat Web: ${item.log_motivo_sos || 'Soporte'}`}
+                          >
+                            <Bot size={10} />
+                          </span>
+                        )}
                       {isOrderSos(item) && (
                         <span
                           className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 text-[9px] font-extrabold"
@@ -755,16 +1009,17 @@ export function TrackingView({
                         </span>
                       )}
                       <span
-                        className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${stWsp === 'READ'
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : stWsp.includes('DELIVER')
-                            ? 'bg-sky-100 text-sky-800'
-                            : stWsp === 'SENT'
-                              ? 'bg-blue-100 text-blue-800'
-                              : stWsp === 'FAILED'
-                                ? 'bg-rose-100 text-rose-800'
-                                : 'bg-slate-100 text-slate-600'
-                          }`}
+                        className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${
+                          stWsp === 'READ'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : stWsp.includes('DELIVER')
+                              ? 'bg-sky-100 text-sky-800'
+                              : stWsp === 'SENT'
+                                ? 'bg-blue-100 text-blue-800'
+                                : stWsp === 'FAILED'
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : 'bg-slate-100 text-slate-600'
+                        }`}
                       >
                         {stWsp}
                       </span>
@@ -827,7 +1082,7 @@ export function TrackingView({
         </div>
       </div>
 
-      {/* PANEL DERECHO: FICHA TÉCNICA + VISOR CONVERSACIONAL COMPLETO */}
+      {/* PANEL DERECHO: FICHA TÉCNICA + VISOR CONVERSACIONAL OMNICANAL + CAJA DE RESPUESTA */}
       <div className="lg:col-span-8 bg-white border border-slate-100 rounded-2xl flex flex-col overflow-hidden shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)]">
         {selectedRow ? (
           <>
@@ -856,12 +1111,28 @@ export function TrackingView({
                         <span>SOS</span>
                       </span>
                     )}
-                    {(selectedRow.log_motivo_sos || selectedRow.log_chat_id) && (
+                    {selectedRow.log_chat_id && (
                       <span
-                        className="inline-flex items-center justify-center w-6 h-5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200 shadow-2xs"
-                        title={`Bot SOS: ${selectedRow.log_motivo_sos || 'Soporte'} (${selectedRow.log_estado_chat || 'Activo'})`}
+                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase shadow-2xs ${
+                          activeLogEstado === 'esperando_asesor'
+                            ? 'bg-[#FF5500] text-white animate-pulse'
+                            : activeLogEstado === 'en_atencion'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              : activeLogEstado === 'resuelto'
+                                ? 'bg-slate-100 text-slate-600 border border-slate-200'
+                                : 'bg-indigo-100 text-indigo-700 border border-indigo-200'
+                        }`}
                       >
-                        <Bot size={12} className="text-indigo-600" />
+                        <Bot size={11} />
+                        <span>
+                          {activeLogEstado === 'esperando_asesor'
+                            ? 'Chat Web: Esperando Asesor'
+                            : activeLogEstado === 'en_atencion'
+                              ? 'Chat Web: En Atención'
+                              : activeLogEstado === 'resuelto'
+                                ? 'Chat Web: Resuelto'
+                                : 'Chat Web: En Curso'}
+                        </span>
                       </span>
                     )}
                     {renderLastWriterBadge(activeTurno)}
@@ -880,14 +1151,17 @@ export function TrackingView({
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-medium">
-                        Histórico BD
+                        Polling 3s
                       </span>
                     )}
                   </div>
 
                   <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-x-2.5 mt-1">
                     <span>
-                      Móvil: <strong className="text-emerald-700">{selectedRow.mantra_phone || selectedRow.telefono || '-'}</strong>
+                      Móvil:{' '}
+                      <strong className="text-emerald-700">
+                        {selectedRow.mantra_phone || selectedRow.telefono || '-'}
+                      </strong>
                     </span>
                     <span>•</span>
                     <span>
@@ -900,9 +1174,9 @@ export function TrackingView({
                         copyToClipboard(
                           String(
                             selectedRow.codi_segui_ot ||
-                            selectedRow.ticket ||
-                            selectedRow.numero_documento ||
-                            selectedRow.orden_id
+                              selectedRow.ticket ||
+                              selectedRow.numero_documento ||
+                              selectedRow.orden_id
                           )
                         )
                       }
@@ -918,13 +1192,43 @@ export function TrackingView({
 
               {/* Controles Superiores */}
               <div className="flex items-center gap-2 text-xs">
+                {selectedRow.log_chat_id && (
+                  activeLogEstado !== 'resuelto' ? (
+                    <button
+                      type="button"
+                      disabled={sendingReply}
+                      onClick={() => handleSendLiveReply('resuelto')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-[11px] transition shadow-xs cursor-pointer"
+                    >
+                      <CheckCircle2 size={13} />
+                      <span>Marcar Resuelto</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={sendingReply}
+                      onClick={() =>
+                        handleSendLiveReply(
+                          'en_atencion',
+                          'Hemos reabierto tu atención en línea. ¿En qué podemos ayudarte?'
+                        )
+                      }
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white font-bold text-[11px] transition shadow-xs cursor-pointer"
+                    >
+                      <RefreshCw size={12} />
+                      <span>Reabrir Chat</span>
+                    </button>
+                  )
+                )}
+
                 <button
                   type="button"
                   onClick={() => setShowTechCard(!showTechCard)}
-                  className={`flex items-center gap-1 px-3 py-1.5 rounded-xl border text-[11px] font-bold transition ${showTechCard
-                    ? 'bg-slate-100 text-slate-900 border-slate-300'
-                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                    }`}
+                  className={`flex items-center gap-1 px-3 py-1.5 rounded-xl border text-[11px] font-bold transition cursor-pointer ${
+                    showTechCard
+                      ? 'bg-slate-100 text-slate-900 border-slate-300'
+                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                  }`}
                   title="Mostrar/Ocultar Ficha Técnica (Tecla F)"
                 >
                   <span>Ficha Técnica</span>
@@ -933,7 +1237,7 @@ export function TrackingView({
                 <button
                   type="button"
                   onClick={() => onSelectOrder(selectedRow)}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[#FF5500] hover:bg-[#E04B00] text-white font-bold text-[11px] transition shadow-xs shadow-orange-500/20"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[#FF5500] hover:bg-[#E04B00] text-white font-bold text-[11px] transition shadow-xs shadow-orange-500/20 cursor-pointer"
                 >
                   <span>Detalle</span>
                 </button>
@@ -945,55 +1249,108 @@ export function TrackingView({
               <div className="p-3.5 bg-slate-50/80 border-b border-slate-100 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2.5 text-xs">
                 <div className="bg-white border border-slate-200/80 rounded-xl p-2.5 space-y-1 shadow-2xs">
                   <div className="flex items-center justify-between text-[10px] font-extrabold text-blue-600 uppercase">
-                    <span className="flex items-center gap-1"><User size={12} /> Cliente</span>
-                    <span className="text-slate-400">{selectedRow.segmento_cliente || 'Residencial'}</span>
+                    <span className="flex items-center gap-1">
+                      <User size={12} /> Cliente
+                    </span>
+                    <span className="text-slate-400">
+                      {selectedRow.segmento_cliente || 'Residencial'}
+                    </span>
                   </div>
-                  <div className="font-bold text-slate-900 text-[11px] truncate" title={selectedRow.cliente}>
+                  <div
+                    className="font-bold text-slate-900 text-[11px] truncate"
+                    title={selectedRow.cliente}
+                  >
                     {selectedRow.cliente || '-'}
                   </div>
                   <div className="text-[10px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-100">
-                    <span>Doc: <strong className="text-slate-800">{selectedRow.numero_documento || '-'}</strong></span>
-                    <span>Cód: <strong className="text-sky-700">{selectedRow.codi_segui_ot || selectedRow.ticket || '-'}</strong></span>
+                    <span>
+                      Doc: <strong className="text-slate-800">{selectedRow.numero_documento || '-'}</strong>
+                    </span>
+                    <span>
+                      Cód:{' '}
+                      <strong className="text-sky-700">
+                        {selectedRow.codi_segui_ot || selectedRow.ticket || '-'}
+                      </strong>
+                    </span>
                   </div>
                 </div>
 
                 <div className="bg-white border border-slate-200/80 rounded-xl p-2.5 space-y-1 shadow-2xs">
                   <div className="flex items-center justify-between text-[10px] font-extrabold text-rose-600 uppercase">
-                    <span className="flex items-center gap-1"><MapPin size={12} /> Ubicación</span>
-                    <span className="text-sky-700 truncate max-w-[90px]">{selectedRow.distrito || '-'}</span>
+                    <span className="flex items-center gap-1">
+                      <MapPin size={12} /> Ubicación
+                    </span>
+                    <span className="text-sky-700 truncate max-w-[90px]">
+                      {selectedRow.distrito || '-'}
+                    </span>
                   </div>
-                  <div className="text-[11px] text-slate-700 font-medium line-clamp-1" title={selectedRow.direccion_cliente}>
+                  <div
+                    className="text-[11px] text-slate-700 font-medium line-clamp-1"
+                    title={selectedRow.direccion_cliente}
+                  >
                     {selectedRow.direccion_cliente || 'Sin dirección detallada'}
                   </div>
                   <div className="text-[10px] text-slate-500 pt-1 border-t border-slate-100 truncate">
-                    Sector: <strong className="text-slate-800">{selectedRow.sector_operativo || selectedRow.provincia_cliente || 'LIMA'}</strong>
+                    Sector:{' '}
+                    <strong className="text-slate-800">
+                      {selectedRow.sector_operativo || selectedRow.provincia_cliente || 'LIMA'}
+                    </strong>
                   </div>
                 </div>
 
                 <div className="bg-white border border-slate-200/80 rounded-xl p-2.5 space-y-1 shadow-2xs">
                   <div className="flex items-center justify-between text-[10px] font-extrabold text-indigo-600 uppercase">
-                    <span className="flex items-center gap-1"><Wrench size={12} /> Cuadrilla</span>
-                    <span className="text-amber-700 truncate max-w-[90px]">{selectedRow.partner || selectedRow.proveedor_ot || '-'}</span>
+                    <span className="flex items-center gap-1">
+                      <Wrench size={12} /> Cuadrilla
+                    </span>
+                    <span className="text-amber-700 truncate max-w-[90px]">
+                      {selectedRow.partner || selectedRow.proveedor_ot || '-'}
+                    </span>
                   </div>
-                  <div className="text-[11px] text-slate-900 font-bold line-clamp-1" title={selectedRow.cuadrilla_completa || selectedRow.cuadrilla}>
-                    {selectedRow.cuadrilla_completa || selectedRow.cuadrilla || 'Sin cuadrilla asignada'}
+                  <div
+                    className="text-[11px] text-slate-900 font-bold line-clamp-1"
+                    title={selectedRow.cuadrilla_completa || selectedRow.cuadrilla}
+                  >
+                    {selectedRow.cuadrilla_completa ||
+                      selectedRow.cuadrilla ||
+                      'Sin cuadrilla asignada'}
                   </div>
                   <div className="text-[10px] text-slate-500 pt-1 border-t border-slate-100 flex justify-between">
-                    <span>Estado: <strong className="text-emerald-700">{selectedRow.estado_ot || '-'}</strong></span>
+                    <span>
+                      Estado: <strong className="text-emerald-700">{selectedRow.estado_ot || '-'}</strong>
+                    </span>
                     <span>{selectedRow.fecha_solicitud_fmt || '-'}</span>
                   </div>
                 </div>
 
                 <div className="bg-white border border-slate-200/80 rounded-xl p-2.5 space-y-1 shadow-2xs">
                   <div className="flex items-center justify-between text-[10px] font-extrabold text-emerald-600 uppercase">
-                    <span className="flex items-center gap-1"><Layers size={12} /> Servicio</span>
-                    <span className="font-mono text-slate-400">{selectedRow.ticket || selectedRow.codi_segui_ot || '-'}</span>
+                    <span className="flex items-center gap-1">
+                      <Layers size={12} /> Servicio
+                    </span>
+                    <span className="font-mono text-slate-400">
+                      {selectedRow.ticket || selectedRow.codi_segui_ot || '-'}
+                    </span>
                   </div>
                   <div className="text-[11px] text-slate-900 font-bold truncate">
                     {selectedRow.producto || selectedRow.servicio_tipo || '-'}
                   </div>
-                  <div className="text-[10px] text-slate-500 pt-1 border-t border-slate-100 truncate" title={selectedRow.motivo_trabajo || selectedRow.diagnostico_tecnico}>
-                    Motivo: <strong className="text-slate-800">{selectedRow.motivo_trabajo || selectedRow.diagnostico_tecnico || selectedRow.tipo_trabajo || '-'}</strong>
+                  <div
+                    className="text-[10px] text-slate-500 pt-1 border-t border-slate-100 truncate"
+                    title={
+                      selectedRow.log_motivo_sos ||
+                      selectedRow.motivo_trabajo ||
+                      selectedRow.diagnostico_tecnico
+                    }
+                  >
+                    Motivo:{' '}
+                    <strong className="text-slate-800">
+                      {selectedRow.log_motivo_sos ||
+                        selectedRow.motivo_trabajo ||
+                        selectedRow.diagnostico_tecnico ||
+                        selectedRow.tipo_trabajo ||
+                        '-'}
+                    </strong>
                   </div>
                 </div>
               </div>
@@ -1008,30 +1365,45 @@ export function TrackingView({
               >
                 {parsedChatMessages.length > 0 ? (
                   parsedChatMessages.map((msg, idx) => {
-                    const textContent = msg.texto || msg.mensaje || msg.body || msg.contenido || '';
-                    const senderRaw = String(msg.emisor || msg.rol || msg.direction || '').toLowerCase();
+                    const textContent =
+                      msg.text || msg.texto || msg.mensaje || msg.body || msg.contenido || '';
+                    const senderRaw = String(
+                      msg.sender || msg.emisor || msg.rol || msg.direction || ''
+                    ).toLowerCase();
                     const isFromLogChat = Boolean(msg._fromLogChat);
+
                     const isCliente =
+                      senderRaw === 'user' ||
                       senderRaw.includes('cli') ||
                       senderRaw.includes('inbound') ||
-                      senderRaw.includes('user') ||
                       msg.from_me === false;
+
+                    const isAgentWeb =
+                      !isCliente && isFromLogChat && (senderRaw === 'agent' || senderRaw.includes('asesor'));
 
                     const isAsistenteWin =
                       !isCliente &&
+                      !isAgentWeb &&
                       (isFromLogChat ||
+                        senderRaw === 'bot' ||
                         String(msg.emisor || '').toUpperCase() === 'ASISTENTE_WIN' ||
                         String(msg.rol || '').toLowerCase() === 'bot');
 
                     const isTemplate =
                       !isCliente &&
                       !isAsistenteWin &&
+                      !isAgentWeb &&
                       (msg.tipo === 'template' ||
                         Boolean(msg.es_plantilla) ||
-                        /enruta\.win\.pe|confirmaci[oó]n de visita|plantilla preaprobada|\|\s*\[/i.test(textContent));
+                        /enruta\.win\.pe|confirmaci[oó]n de visita|plantilla preaprobada|\|\s*\[/i.test(
+                          textContent
+                        ));
 
-                    const timeLabel = formatChatDateTime(msg.fecha_utc || msg.fecha || msg.timestamp || '');
-                    const showSosMilestoneHere = sosTimelineInfo.active && sosTimelineInfo.msgIndex === idx;
+                    const timeLabel = formatChatDateTime(
+                      msg.timestamp || msg.fecha_utc || msg.fecha || ''
+                    );
+                    const showSosMilestoneHere =
+                      sosTimelineInfo.active && sosTimelineInfo.msgIndex === idx;
                     const showLogChatBannerHere = Boolean(msg._firstLogChatMsg);
 
                     const sosMilestoneBanner = showSosMilestoneHere ? (
@@ -1055,10 +1427,10 @@ export function TrackingView({
                         <div className="flex-1 h-px bg-gradient-to-r from-transparent via-indigo-300 to-indigo-400" />
                         <div
                           className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-800 text-[10.5px] font-extrabold shadow-2xs"
-                          title={selectedRow.log_motivo_sos || 'Bot SOS'}
+                          title={selectedRow.log_motivo_sos || 'Chat Web Tracking'}
                         >
                           <Bot size={13} className="text-indigo-600 shrink-0" />
-                          <span>SOS</span>
+                          <span>Chat Web Tracking • {selectedRow.log_motivo_sos || 'En Vivo'}</span>
                           {timeLabel && (
                             <span className="text-[10px] font-medium text-indigo-600 pl-1 border-l border-indigo-200">
                               {timeLabel}
@@ -1076,20 +1448,25 @@ export function TrackingView({
                           {logChatMilestoneBanner}
                           <div className="flex flex-col items-start">
                             <div
-                              className={`max-w-[78%] rounded-2xl rounded-tl-sm p-3.5 shadow-xs space-y-2 ${isFromLogChat
-                                ? 'bg-indigo-50/40 border border-indigo-200/90'
-                                : 'bg-white border border-slate-200'
-                                }`}
+                              className={`max-w-[78%] rounded-2xl rounded-tl-sm p-3.5 shadow-xs space-y-2 ${
+                                isFromLogChat
+                                  ? 'bg-indigo-50/40 border border-indigo-200/90'
+                                  : 'bg-white border border-slate-200'
+                              }`}
                             >
                               <div className="flex items-center justify-between gap-4">
                                 <span
-                                  className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold border ${isFromLogChat
-                                    ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
-                                    : 'bg-sky-100 text-sky-800 border-sky-200'
-                                    }`}
+                                  className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                                    isFromLogChat
+                                      ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
+                                      : 'bg-sky-100 text-sky-800 border-sky-200'
+                                  }`}
                                 >
                                   <User size={11} />
-                                  <span>Cliente • {selectedRow.cliente}</span>
+                                  <span>
+                                    {isFromLogChat ? 'Cliente (Web) • ' : 'Cliente (WSP) • '}
+                                    {selectedRow.cliente}
+                                  </span>
                                 </span>
                                 <span className="text-[10px] text-slate-400">{timeLabel}</span>
                               </div>
@@ -1109,12 +1486,15 @@ export function TrackingView({
                             <div className="max-w-[78%] rounded-2xl rounded-tr-sm p-3.5 bg-indigo-50/90 border border-indigo-200 shadow-xs space-y-2">
                               <div className="flex items-center justify-between gap-4 border-b border-indigo-200/60 pb-1.5">
                                 <span
-                                  className="inline-flex items-center justify-center w-6 h-5 rounded-full bg-indigo-600 text-white"
-                                  title="Bot SOS"
+                                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-indigo-600 text-white text-[10px] font-bold"
+                                  title="Asistente Virtual WIN (Tracking Web)"
                                 >
-                                  <Bot size={12} />
+                                  <Bot size={11} />
+                                  <span>Asistente WIN (Web)</span>
                                 </span>
-                                <span className="text-[10px] text-indigo-700 font-semibold">{timeLabel}</span>
+                                <span className="text-[10px] text-indigo-700 font-semibold">
+                                  {timeLabel}
+                                </span>
                               </div>
                               {renderFormattedChatMessage(textContent)}
                             </div>
@@ -1163,7 +1543,10 @@ export function TrackingView({
                             <div className="flex items-center justify-between gap-4">
                               <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-white text-[#FF5500] border border-orange-200">
                                 <Headset size={11} />
-                                <span>Asesor WIN • {msg.agente || msg.usuario || 'Agente Mantra'}</span>
+                                <span>
+                                  {isAgentWeb ? 'Asesor WIN (Web) • ' : 'Asesor WIN (Mantra) • '}
+                                  {msg.author || msg.agente || msg.usuario || 'Agente WIN'}
+                                </span>
                               </span>
                               <span className="text-[10px] text-slate-500">{timeLabel}</span>
                             </div>
@@ -1176,9 +1559,12 @@ export function TrackingView({
                 ) : (
                   <div className="h-full flex flex-col items-center justify-center text-center py-12 text-slate-400">
                     <MessageSquare size={32} className="text-slate-300 mb-2" />
-                    <p className="text-sm font-bold text-slate-600">Sin mensajes en historial_chats_mantra para este caso</p>
+                    <p className="text-sm font-bold text-slate-600">
+                      Sin mensajes registrados para este caso
+                    </p>
                     <p className="text-xs text-slate-400 mt-1">
-                      Estado WSP: {selectedRow.estado_wsp || 'NO ENVIADO'} • Ingreso Tracking: {selectedRow.ingreso_tracking || 'NO'}
+                      Estado WSP: {selectedRow.estado_wsp || 'NO ENVIADO'} • Ingreso Tracking:{' '}
+                      {selectedRow.ingreso_tracking || 'NO'}
                     </p>
                   </div>
                 )}
@@ -1198,21 +1584,86 @@ export function TrackingView({
               )}
             </div>
 
-            {/* Pie del Visor */}
-            <div className="px-4 py-2.5 bg-white border-t border-slate-100 flex flex-wrap items-center justify-between text-[11px] text-slate-500">
-              <div className="flex items-center gap-3">
-                <span>
-                  <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 font-mono">↑</kbd>{' '}
-                  <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 font-mono">↓</kbd> Recorrer casos
-                </span>
-                <span>
-                  <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 font-mono">F</kbd> Ocultar/Ver Ficha Técnica
-                </span>
+            {/* PIE INTERACTIVO: CAJA DE RESPUESTA EN VIVO (SI TIENE CHAT WEB) O BARRA DE ATAJOS */}
+            {selectedRow.log_chat_id ? (
+              <div className="p-3 bg-white border-t border-slate-200 space-y-2">
+                {replyError && (
+                  <div className="px-3 py-1.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
+                    {replyError}
+                  </div>
+                )}
+
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+                  <span className="text-[10px] font-bold text-slate-400 shrink-0 flex items-center gap-1">
+                    <Sparkles size={11} className="text-[#FF5500]" />
+                    Rápidas:
+                  </span>
+                  {QUICK_REPLIES.map((tpl, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setReplyText(tpl)}
+                      className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-[#FFF0E5] hover:text-[#FF5500] text-slate-600 text-[10.5px] font-medium truncate max-w-[210px] shrink-0 transition cursor-pointer"
+                      title={tpl}
+                    >
+                      {tpl}
+                    </button>
+                  ))}
+                </div>
+
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleSendLiveReply('en_atencion');
+                  }}
+                  className="flex items-center gap-2"
+                >
+                  <input
+                    type="text"
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                    disabled={sendingReply}
+                    placeholder={
+                      activeLogEstado === 'resuelto'
+                        ? 'Chat Web resuelto. Escribe para reabrir y responder al cliente...'
+                        : 'Escribe tu respuesta directa al Chat Web de GoWIN | Tracking...'
+                    }
+                    className="flex-1 px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-[#FF5500]"
+                  />
+                  <button
+                    type="submit"
+                    disabled={sendingReply || !replyText.trim()}
+                    className="px-4 py-2 rounded-xl bg-[#FF5500] hover:bg-[#e04b00] disabled:opacity-40 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-sm shadow-orange-500/20 transition cursor-pointer shrink-0"
+                  >
+                    <Send size={13} />
+                    <span>{sendingReply ? 'Enviando...' : 'Responder Web'}</span>
+                  </button>
+                </form>
               </div>
-              <div className="font-medium text-slate-600">
-                Historial completo ({parsedChatMessages.length} mensajes)
+            ) : (
+              <div className="px-4 py-2.5 bg-white border-t border-slate-100 flex flex-wrap items-center justify-between text-[11px] text-slate-500">
+                <div className="flex items-center gap-3">
+                  <span>
+                    <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 font-mono">
+                      ↑
+                    </kbd>{' '}
+                    <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 font-mono">
+                      ↓
+                    </kbd>{' '}
+                    Recorrer casos
+                  </span>
+                  <span>
+                    <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 font-mono">
+                      F
+                    </kbd>{' '}
+                    Ocultar/Ver Ficha Técnica
+                  </span>
+                </div>
+                <div className="font-medium text-slate-600">
+                  Historial completo ({parsedChatMessages.length} mensajes)
+                </div>
               </div>
-            </div>
+            )}
           </>
         ) : (
           <div className="h-full flex items-center justify-center text-sm text-slate-400">

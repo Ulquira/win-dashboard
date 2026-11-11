@@ -195,13 +195,15 @@ router.get('/tracking/search', async (req: Request, res: Response) => {
           lc.grupo_servicio AS log_grupo_servicio,
           lc.motivo AS log_motivo_sos,
           lc.estado_chat AS log_estado_chat,
+          lc.asesor_nombre AS log_asesor_nombre,
+          lc.ultimo_mensaje_por AS log_ultimo_mensaje_por,
           lc.mensajes_json AS log_mensajes_json,
           lc.updated_at AS log_updated_at
         FROM mat_funnel_casos_360 v
         LEFT JOIN historial_chats_mantra h ON h.orden_id = v.orden_id
         LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
         LEFT JOIN (
-          SELECT l1.id, l1.orden_id, l1.token, l1.grupo_servicio, l1.motivo, l1.estado_chat, l1.mensajes_json, l1.updated_at
+          SELECT l1.id, l1.orden_id, l1.token, l1.grupo_servicio, l1.motivo, l1.estado_chat, l1.asesor_nombre, l1.ultimo_mensaje_por, l1.mensajes_json, l1.updated_at
           FROM logs_chat l1
           INNER JOIN (
             SELECT orden_id, MAX(id) AS max_id

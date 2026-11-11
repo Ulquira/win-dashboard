@@ -85,10 +85,21 @@ function normalizeMessages(rawJson: any): NormalizedChatMessage[] {
     .filter((m): m is NormalizedChatMessage => m !== null);
 }
 
+function extractClientNameFromGreeting(mensajes: NormalizedChatMessage[]): string | null {
+  for (const m of mensajes) {
+    if (m.sender === 'bot') {
+      const match = m.text.match(/¡?Hola\s+([A-Za-zÁÉÍÓÚÑáéíóúñ\s]{2,35})!/i);
+      if (match && match[1]) {
+        return match[1].trim().toUpperCase();
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * GET /api/chat-log/activos
- * Devuelve las sesiones de logs_chat priorizando 'esperando_asesor' y luego por updated_at DESC.
- * Si ?scope=todos se incluye también 'en_curso', 'iniciado' y 'resuelto' recientes.
+ * Devuelve las sesiones más recientes por orden_id de logs_chat enriquecidas con Ficha Técnica y Mantra.
  */
 router.get(
   '/chat-log/activos',
@@ -96,38 +107,70 @@ router.get(
     const authUser = requireAuth(req, res);
     if (!authUser) return;
     await ensureLogsChatMultiSessionIndex();
+
     const scope = String(req.query.scope || 'activos').toLowerCase();
 
     const whereClause =
       scope === 'todos'
         ? '1=1'
-        : `LOWER(TRIM(estado_chat)) IN ('esperando_asesor', 'derivado a asesor', 'en_atencion', 'en atención', 'en_curso', 'en curso')`;
+        : `LOWER(TRIM(lc.estado_chat)) IN ('esperando_asesor', 'derivado a asesor', 'en_atencion', 'en atención', 'en_curso', 'en curso')`;
 
     const [rows]: any = await pool.query(
       `SELECT
-         id,
-         token,
-         orden_id,
-         codisegui,
-         phone,
-         grupo_servicio,
-         motivo,
-         estado_chat,
-         asesor_nombre,
-         ultimo_mensaje_por,
-         mensajes_json,
-         created_at,
-         updated_at
-       FROM logs_chat
+         lc.id,
+         lc.token,
+         lc.orden_id,
+         lc.codisegui,
+         lc.phone,
+         lc.grupo_servicio,
+         lc.motivo,
+         lc.estado_chat,
+         lc.asesor_nombre,
+         lc.ultimo_mensaje_por,
+         lc.mensajes_json,
+         lc.created_at,
+         lc.updated_at,
+         v.cliente,
+         v.ticket,
+         v.telefono,
+         v.producto,
+         v.tipo_operacion,
+         v.estado_ot,
+         DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_solicitud_fmt,
+         v.sector_operativo,
+         v.distrito,
+         v.partner,
+         v.cuadrilla,
+         v.se_envio_wsp,
+         v.estado_wsp,
+         v.ingreso_tracking,
+         v.link_tracking,
+         v.pulso_soporte,
+         v.ops_num_doc AS numero_documento,
+         v.ops_codi_segui_clien AS codi_segui_clien,
+         v.ops_cuadrilla AS cuadrilla_completa,
+         h.phone AS mantra_phone,
+         h.estado_chat AS mantra_estado_chat,
+         h.semaforo_sla,
+         h.quien_tiene_la_palabra,
+         h.ultimos_mensajes_json AS chat_json_mantra
+       FROM logs_chat lc
+       INNER JOIN (
+         SELECT orden_id, MAX(id) AS max_id
+         FROM logs_chat
+         GROUP BY orden_id
+       ) latest ON lc.id = latest.max_id
+       LEFT JOIN mat_funnel_casos_360 v ON v.orden_id = lc.orden_id
+       LEFT JOIN historial_chats_mantra h ON h.orden_id = lc.orden_id
        WHERE ${whereClause}
        ORDER BY
          CASE
-           WHEN LOWER(TRIM(estado_chat)) IN ('esperando_asesor', 'derivado a asesor') THEN 0
-           WHEN LOWER(TRIM(estado_chat)) IN ('en_atencion', 'en atención') THEN 1
-           WHEN LOWER(TRIM(estado_chat)) IN ('en_curso', 'en curso') THEN 2
+           WHEN LOWER(TRIM(lc.estado_chat)) IN ('esperando_asesor', 'derivado a asesor') THEN 0
+           WHEN LOWER(TRIM(lc.estado_chat)) IN ('en_atencion', 'en atención') THEN 1
+           WHEN LOWER(TRIM(lc.estado_chat)) IN ('en_curso', 'en curso') THEN 2
            ELSE 3
          END ASC,
-         updated_at DESC
+         lc.updated_at DESC
        LIMIT 100`
     );
 
@@ -143,13 +186,15 @@ router.get(
             ? 'asesor'
             : 'bot');
 
+      const inferredName = extractClientNameFromGreeting(mensajes);
+
       return {
         id: Number(r.id),
         token: r.token || '',
         orden_id: String(r.orden_id || ''),
-        codisegui: String(r.codisegui || ''),
-        phone: String(r.phone || ''),
-        grupo_servicio: String(r.grupo_servicio || 'General'),
+        codisegui: String(r.codisegui || r.ticket || ''),
+        phone: String(r.phone || r.telefono || ''),
+        grupo_servicio: String(r.grupo_servicio || r.tipo_operacion || 'General'),
         motivo: String(r.motivo || 'Consulta en Tracking'),
         estado_chat: estadoNorm,
         estado_original: r.estado_chat,
@@ -158,6 +203,35 @@ router.get(
         mensajes,
         created_at: r.created_at,
         updated_at: r.updated_at,
+        // Datos enriquecidos para la vista unificada de Seguimiento
+        cliente: r.cliente || (inferredName ? `${inferredName} (Tracking Web)` : `Cliente OT #${r.orden_id}`),
+        numero_documento: r.numero_documento || r.codisegui || '-',
+        codi_segui_ot: r.codisegui || r.ticket || '-',
+        distrito: r.distrito || '-',
+        sector_operativo: r.sector_operativo || r.grupo_servicio || 'LIMA',
+        partner: r.partner || '-',
+        cuadrilla: r.cuadrilla_completa || r.cuadrilla || 'En asignación',
+        estado_ot: r.estado_ot || 'En Proceso',
+        fecha_solicitud_fmt: r.fecha_solicitud_fmt || 'Hoy',
+        producto: r.producto || r.grupo_servicio || 'Servicio WIN',
+        servicio_tipo: r.tipo_operacion || r.grupo_servicio || 'INSTA - LIMA',
+        se_envio_wsp: r.se_envio_wsp || 'SI',
+        estado_wsp: r.estado_wsp || 'READ',
+        ingreso_tracking: 'SI',
+        pulso_soporte: r.pulso_soporte || (estadoNorm === 'esperando_asesor' ? 'SI' : 'NO'),
+        semaforo_sla:
+          estadoNorm === 'esperando_asesor'
+            ? 'ROJO'
+            : estadoNorm === 'en_atencion'
+              ? 'AMARILLO'
+              : r.semaforo_sla || 'VERDE',
+        quien_tiene_la_palabra:
+          String(ultimoPor).toLowerCase() === 'cliente'
+            ? 'CLIENTE'
+            : String(ultimoPor).toLowerCase() === 'asesor'
+              ? 'ASESOR'
+              : r.quien_tiene_la_palabra || 'BOT',
+        chat_json_mantra: r.chat_json_mantra || null,
       };
     });
 
