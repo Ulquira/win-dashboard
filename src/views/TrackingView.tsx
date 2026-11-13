@@ -4,9 +4,11 @@ import {
   User, Sparkles, Headset, ExternalLink, MessageSquare,
   ChevronLeft, ChevronRight, RefreshCw, CheckCheck,
   MapPin, Phone, ShieldCheck, Copy, Check, Layers, Wrench,
-  ChevronDown, ChevronUp, Bot, LifeBuoy, Send, CheckCircle2, AlertCircle
+  ChevronDown, ChevronUp, Bot, LifeBuoy, Send, CheckCircle2, AlertCircle,
+  Lock, Clock, Bell, BellOff, Smile
 } from 'lucide-react';
 import { AuthUser, RealOrder } from '../types/dashboard';
+import EmojiPicker, { EmojiClickData, Theme } from 'emoji-picker-react';
 import { apiFetch } from '../config/api';
 
 export interface RawChatMessage {
@@ -56,12 +58,24 @@ const QUICK_REPLIES = [
   'Hemos registrado tu solicitud prioritaria. ¿Puedo ayudarte con alguna consulta adicional?',
 ];
 
+const QUICK_EMOJIS = [
+  '👋', '😊', '👍', '🙌', '✅', '🔧', '🚐', '📍', '🏠', '⏱️', '📞', '🙏', '🧡', '✨', '⚠️', '📋',
+];
+
 function normalizeLogEstado(raw?: string | null): string {
   const val = String(raw || '').trim().toLowerCase();
   if (val === 'esperando_asesor' || val === 'derivado a asesor') return 'esperando_asesor';
   if (val === 'en_atencion' || val === 'en atención') return 'en_atencion';
   if (val === 'en_curso' || val === 'en curso') return 'en_curso';
-  if (val === 'resuelto' || val === 'finalizado') return 'resuelto';
+  if (
+    val.includes('resuelto') ||
+    val.includes('finaliz') ||
+    val.includes('cerrad') ||
+    val.includes('complet') ||
+    val.includes('autogestion')
+  ) {
+    return 'resuelto';
+  }
   return val || '';
 }
 
@@ -90,6 +104,56 @@ function formatChatDateTime(raw?: string | null): string {
   });
 
   return `${fecha} • ${hora}`;
+}
+
+// Sonido de notificación limpio (doble chime ascendente) vía Web Audio API sin archivos externos
+function playNotificationSound() {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+
+    const playTone = (freq: number, startTime: number, duration: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, startTime);
+
+      gain.gain.setValueAtTime(0.001, startTime);
+      gain.gain.exponentialRampToValueAtTime(0.22, startTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(startTime);
+      osc.stop(startTime + duration);
+    };
+
+    const now = ctx.currentTime;
+    playTone(587.33, now, 0.16);        // D5
+    playTone(880.0, now + 0.14, 0.28);  // A5
+  } catch {
+    // Ignorar si el navegador bloquea autoplay antes de la primera interacción
+  }
+}
+
+function triggerBrowserPushNotification(title: string, body: string) {
+  if (typeof window === 'undefined' || !('Notification' in window)) return;
+  if (Notification.permission === 'granted') {
+    try {
+      const notif = new Notification(title, {
+        body,
+        icon: '/favicon.svg',
+        tag: `win-chat-${Date.now()}`,
+      });
+      notif.onclick = () => {
+        window.focus();
+        notif.close();
+      };
+    } catch {
+      // Fallback silencioso
+    }
+  }
 }
 
 export function TrackingView({
@@ -137,6 +201,8 @@ export function TrackingView({
   const [replyText, setReplyText] = useState<string>('');
   const [sendingReply, setSendingReply] = useState<boolean>(false);
   const [replyError, setReplyError] = useState<string | null>(null);
+  const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false);
+  const replyInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const [showScrollDownBtn, setShowScrollDownBtn] = useState<boolean>(false);
@@ -232,6 +298,96 @@ export function TrackingView({
       ).length,
     [liveLogsList]
   );
+
+  // Estado de alertas sonoras, permisos Push y órdenes con mensajes nuevos destellando
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('win_chat_sound') !== 'false';
+  });
+  const [unreadWebOrders, setUnreadWebOrders] = useState<Record<string, boolean>>({});
+  const prevLogsSnapshotRef = useRef<
+    Map<string, { msgCount: number; estado: string; lastSender: string }>
+  >(new Map());
+  const initialLoadDoneRef = useRef<boolean>(false);
+
+  const toggleSoundAndRequestPush = async () => {
+    const next = !soundEnabled;
+    setSoundEnabled(next);
+    localStorage.setItem('win_chat_sound', String(next));
+    if (next) {
+      playNotificationSound();
+      if ('Notification' in window && Notification.permission === 'default') {
+        await Notification.requestPermission().catch(() => {});
+      }
+    }
+  };
+
+  // Pedir permiso de notificaciones push en el primer clic si aún está en 'default'
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
+  }, []);
+
+  // Detector de nuevos mensajes / derivaciones desde Asistente Virtual Web
+  useEffect(() => {
+    if (!liveLogsList || liveLogsList.length === 0) return;
+
+    const prevMap = prevLogsSnapshotRef.current;
+    const newFlashing: Record<string, boolean> = {};
+    let shouldAlert = false;
+    let alertTitle = '';
+    let alertBody = '';
+
+    for (const item of liveLogsList) {
+      const ordKey = String(item.orden_id || item.id);
+      const msgs = Array.isArray(item.mensajes) ? item.mensajes : [];
+      const msgCount = msgs.length;
+      const estado = normalizeLogEstado(item.estado_chat);
+      const lastMsg = msgCount > 0 ? msgs[msgCount - 1] : null;
+      const lastSender = String(
+        item.ultimo_mensaje_por || lastMsg?.sender || ''
+      ).toLowerCase();
+
+      const prev = prevMap.get(ordKey);
+
+      if (initialLoadDoneRef.current) {
+        const isNewDerivation = !prev && estado === 'esperando_asesor';
+        const hasNewMessage =
+          prev !== undefined &&
+          msgCount > prev.msgCount &&
+          lastSender !== 'asesor' &&
+          lastSender !== 'agent';
+        const becameWaiting =
+          prev !== undefined &&
+          prev.estado !== 'esperando_asesor' &&
+          estado === 'esperando_asesor';
+
+        if ((isNewDerivation || hasNewMessage || becameWaiting) && estado !== 'resuelto') {
+          newFlashing[ordKey] = true;
+          shouldAlert = true;
+          alertTitle = `🔔 Nuevo mensaje Web • ${item.cliente || `OT #${ordKey}`}`;
+          alertBody = String(
+            lastMsg?.text || item.motivo || 'El cliente solicita atención en Tracking Web'
+          ).slice(0, 120);
+        }
+      }
+
+      prevMap.set(ordKey, { msgCount, estado, lastSender });
+    }
+
+    if (!initialLoadDoneRef.current) {
+      initialLoadDoneRef.current = true;
+      return;
+    }
+
+    if (shouldAlert) {
+      setUnreadWebOrders((prev) => ({ ...prev, ...newFlashing }));
+      if (soundEnabled) {
+        playNotificationSound();
+      }
+      triggerBrowserPushNotification(alertTitle, alertBody);
+    }
+  }, [liveLogsList, soundEnabled]);
 
   // Combinar órdenes del servidor con las sesiones activas en tiempo real de logs_chat
   const serverOrders: RealOrder[] = useMemo(() => {
@@ -552,9 +708,14 @@ export function TrackingView({
   // Enviar mensaje o cambiar estado en el Chat Web (logs_chat)
   const handleSendLiveReply = async (
     nuevoEstado: 'en_atencion' | 'resuelto',
-    customText?: string
+    customText?: string,
+    reopen = false
   ) => {
     if (!selectedRow?.log_chat_id || sendingReply) return;
+    if (isWebChatResolved && nuevoEstado !== 'resuelto' && !reopen) {
+      setReplyError('El chat está resuelto. Pulsa "Reabrir Chat" si necesitas escribir.');
+      return;
+    }
     const textToSend = (customText !== undefined ? customText : replyText).trim();
     if (nuevoEstado === 'en_atencion' && !textToSend) return;
 
@@ -570,6 +731,7 @@ export function TrackingView({
             ? 'Hemos dado por finalizada esta consulta. ¡Gracias por comunicarte con WIN!'
             : ''),
         nuevo_estado: nuevoEstado,
+        reopen,
       };
 
       await apiFetch(`/api/chat-log/${selectedRow.log_chat_id}/mensaje`, {
@@ -683,12 +845,102 @@ export function TrackingView({
 
   const activeSla = chatMeta?.semaforo_sla || selectedRow?.semaforo_sla || 'VERDE';
   const activeEstadoChat = chatMeta?.estado_chat || selectedRow?.estado_chat || null;
-  const activeLogEstado = normalizeLogEstado(selectedRow?.log_estado_chat);
 
-  const renderSlaTrafficDot = (slaRaw?: string | null) => {
+  // Separar mensajes de WhatsApp/Mantra vs sesión encapsulada de Chat Web Tracking
+  const { mantraMessages, webSessionMessages } = useMemo(() => {
+    const mantra: RawChatMessage[] = [];
+    const web: RawChatMessage[] = [];
+    for (const m of parsedChatMessages) {
+      if (m._fromLogChat) web.push(m);
+      else mantra.push(m);
+    }
+    return { mantraMessages: mantra, webSessionMessages: web };
+  }, [parsedChatMessages]);
+
+  // Detectar si el bot o el asesor ya cerraron la consulta en el hilo o si el estado es resuelto
+  const isBotResolvedInThread = useMemo(() => {
+    if (webSessionMessages.length === 0) return false;
+    // Busca el último mensaje del bot o de cierre
+    for (let i = webSessionMessages.length - 1; i >= 0; i--) {
+      const m = webSessionMessages[i];
+      const txt = String(m.text || m.texto || m.mensaje || '').toLowerCase();
+      if (txt.includes('hemos reabierto tu atención')) return false;
+      if (
+        txt.includes('actualizado tu ticket a resuelto') ||
+        txt.includes('dado por finalizada esta consulta') ||
+        txt.includes('atención ha sido marcada como resuelta')
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }, [webSessionMessages]);
+
+  const rawNormState = normalizeLogEstado(selectedRow?.log_estado_chat);
+  const isWebChatResolved =
+    rawNormState === 'resuelto' ||
+    (rawNormState !== 'esperando_asesor' && isBotResolvedInThread);
+  const activeLogEstado = isWebChatResolved ? 'resuelto' : rawNormState;
+
+  // Detectar si el cliente abandonó el Chat Web (>= 5 min sin responder tras mensaje del asesor)
+  const webAbandonmentInfo = useMemo(() => {
+    if (!selectedRow?.log_chat_id || isWebChatResolved) {
+      return { abandoned: false, inactiveMinutes: 0 };
+    }
+    const lastWebMsg = webSessionMessages[webSessionMessages.length - 1];
+    const lastSender = String(
+      selectedRow.log_ultimo_mensaje_por ||
+        lastWebMsg?.sender ||
+        lastWebMsg?.rol ||
+        lastWebMsg?.emisor ||
+        ''
+    ).toLowerCase();
+
+    const lastWasAdvisor =
+      lastSender === 'asesor' || lastSender === 'agent' || lastSender.includes('asesor');
+    if (!lastWasAdvisor) {
+      return { abandoned: false, inactiveMinutes: 0 };
+    }
+
+    const rawLastTs =
+      lastWebMsg?.timestamp ||
+      lastWebMsg?.fecha_utc ||
+      lastWebMsg?.fecha ||
+      selectedRow.log_updated_at ||
+      '';
+    const lastMs = rawLastTs ? new Date(rawLastTs).getTime() : NaN;
+    if (isNaN(lastMs)) {
+      return { abandoned: false, inactiveMinutes: 0 };
+    }
+
+    const diffMin = Math.floor((Date.now() - lastMs) / 60000);
+    return {
+      abandoned: diffMin >= 5,
+      inactiveMinutes: Math.max(0, diffMin),
+    };
+  }, [selectedRow, isWebChatResolved, webSessionMessages]);
+
+  const renderSlaTrafficDot = (slaRaw?: string | null, hasNewMsg = false) => {
     const s = String(slaRaw || 'VERDE').toUpperCase();
     const isRed = s.includes('ROJO') || s.includes('CRIT') || s.includes('VENC');
     const isYellow = s.includes('AMAR') || s.includes('ALERT');
+
+    if (hasNewMsg) {
+      const bellCls = isRed
+        ? 'bg-rose-500 text-white shadow-[0_0_10px_#f43f5e] ring-rose-500/40'
+        : isYellow
+          ? 'bg-amber-400 text-slate-950 shadow-[0_0_10px_#fbbf24] ring-amber-400/40'
+          : 'bg-emerald-500 text-white shadow-[0_0_10px_#10b981] ring-emerald-500/40';
+      return (
+        <span
+          title={`Nuevo mensaje • Semáforo SLA: ${s}`}
+          className={`inline-flex items-center justify-center w-5 h-5 rounded-full ring-2 shrink-0 ${bellCls}`}
+        >
+          <Bell size={11} className="animate-bounce" />
+        </span>
+      );
+    }
+
     const dotCls = isRed
       ? 'bg-rose-500 shadow-[0_0_8px_#f43f5e] ring-rose-500/30'
       : isYellow
@@ -790,11 +1042,29 @@ export function TrackingView({
       <div className="lg:col-span-4 bg-white border border-slate-100 rounded-2xl flex flex-col overflow-hidden shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)]">
         <div className="p-3 border-b border-slate-100 space-y-2.5">
           <div className="flex items-center justify-between gap-2 min-w-0">
-            <h3 className="font-bold text-xs sm:text-[13px] text-slate-900 flex items-center gap-1.5 whitespace-nowrap shrink-0">
-              <MessageSquare size={15} className="text-[#FF5500] shrink-0" />
-              <span>Bandeja Mantra</span>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <h3 className="font-bold text-xs sm:text-[13px] text-slate-900 flex items-center gap-1.5 whitespace-nowrap">
+                <MessageSquare size={15} className="text-[#FF5500] shrink-0" />
+                <span>Bandeja Mantra</span>
+              </h3>
+              <button
+                type="button"
+                onClick={toggleSoundAndRequestPush}
+                title={
+                  soundEnabled
+                    ? 'Sonido y alertas Push activadas (clic para silenciar)'
+                    : 'Alertas silenciadas (clic para activar sonido)'
+                }
+                className={`p-1 rounded-lg border transition cursor-pointer ${
+                  soundEnabled
+                    ? 'bg-orange-50 text-[#FF5500] border-orange-200 hover:bg-orange-100'
+                    : 'bg-slate-100 text-slate-400 border-slate-200 hover:text-slate-600'
+                }`}
+              >
+                {soundEnabled ? <Bell size={12} /> : <BellOff size={12} />}
+              </button>
               {loadingPage && <RefreshCw size={12} className="text-[#FF5500] animate-spin shrink-0" />}
-            </h3>
+            </div>
 
             <div className="flex items-center gap-1 shrink-0">
               <button
@@ -930,6 +1200,15 @@ export function TrackingView({
               const itemLogState = normalizeLogEstado(item.log_estado_chat);
               const isWaitingWebAdvisor = itemLogState === 'esperando_asesor';
               const isInWebAttention = itemLogState === 'en_atencion';
+              const itemUpdatedMs = item.log_updated_at ? new Date(item.log_updated_at).getTime() : NaN;
+              const isItemClientAbandoned =
+                isInWebAttention &&
+                String(item.log_ultimo_mensaje_por || '').toLowerCase() === 'asesor' &&
+                !isNaN(itemUpdatedMs) &&
+                Date.now() - itemUpdatedMs >= 5 * 60 * 1000;
+
+              const isFlashingUnread =
+                Boolean(unreadWebOrders[String(item.orden_id)]) || isWaitingWebAdvisor;
 
               return (
                 <div
@@ -939,12 +1218,18 @@ export function TrackingView({
                     if (selection && selection.length > 0) return;
                     setSelectedIndex(idx);
                     setReplyError(null);
+                    setUnreadWebOrders((prev) => {
+                      if (!prev[String(item.orden_id)]) return prev;
+                      const copy = { ...prev };
+                      delete copy[String(item.orden_id)];
+                      return copy;
+                    });
                   }}
-                  className={`p-3 cursor-pointer transition ${
-                    isSelected
-                      ? 'bg-[#FFF0E5]/70 border-l-4 border-l-[#FF5500]'
-                      : isWaitingWebAdvisor
-                        ? 'bg-orange-50/50 hover:bg-orange-50/80 border-l-4 border-l-[#FF5500]'
+                  className={`p-3 cursor-pointer transition relative ${
+                    isFlashingUnread && !isSelected
+                      ? 'bg-gradient-to-r from-orange-100/90 via-amber-50/90 to-white border-l-4 border-l-[#FF5500] animate-pulse ring-1 ring-inset ring-[#FF5500]/40'
+                      : isSelected
+                        ? 'bg-[#FFF0E5]/70 border-l-4 border-l-[#FF5500]'
                         : 'hover:bg-slate-50'
                   }`}
                 >
@@ -957,7 +1242,10 @@ export function TrackingView({
                       </span>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
-                      {renderSlaTrafficDot(item.semaforo_sla)}
+                      {renderSlaTrafficDot(
+                        item.semaforo_sla,
+                        Boolean(unreadWebOrders[String(item.orden_id)]) || isWaitingWebAdvisor
+                      )}
                       {renderLastWriterBadge(lastWriter)}
                     </div>
                   </div>
@@ -978,11 +1266,21 @@ export function TrackingView({
                           Espera Web
                         </span>
                       )}
-                      {isInWebAttention && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 text-[9px] font-extrabold uppercase">
-                          <Headset size={9} />
-                          Atención Web
+                      {isItemClientAbandoned ? (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 text-[9px] font-extrabold uppercase"
+                          title="El cliente lleva más de 5 min sin responder al asesor"
+                        >
+                          <Clock size={9} />
+                          Inactivo / Abandonó
                         </span>
+                      ) : (
+                        isInWebAttention && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 text-[9px] font-extrabold uppercase">
+                            <Headset size={9} />
+                            Atención Web
+                          </span>
+                        )
                       )}
                       {(item.log_motivo_sos || item.log_chat_id) &&
                         !isWaitingWebAdvisor &&
@@ -1141,6 +1439,12 @@ export function TrackingView({
                         {activeEstadoChat}
                       </span>
                     )}
+                    {webAbandonmentInfo.abandoned && (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-extrabold uppercase">
+                        <Clock size={11} className="text-amber-700" />
+                        <span>Cliente Inactivo ({webAbandonmentInfo.inactiveMinutes} min)</span>
+                      </span>
+                    )}
                     {loadingChat ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 text-[10px] font-bold">
                         <RefreshCw size={10} className="animate-spin" /> Sincronizando...
@@ -1149,11 +1453,7 @@ export function TrackingView({
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> Mantra Live
                       </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-medium">
-                        Polling 3s
-                      </span>
-                    )}
+                    ) : null}
                   </div>
 
                   <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-x-2.5 mt-1">
@@ -1192,33 +1492,16 @@ export function TrackingView({
 
               {/* Controles Superiores */}
               <div className="flex items-center gap-2 text-xs">
-                {selectedRow.log_chat_id && (
-                  activeLogEstado !== 'resuelto' ? (
-                    <button
-                      type="button"
-                      disabled={sendingReply}
-                      onClick={() => handleSendLiveReply('resuelto')}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-[11px] transition shadow-xs cursor-pointer"
-                    >
-                      <CheckCircle2 size={13} />
-                      <span>Marcar Resuelto</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={sendingReply}
-                      onClick={() =>
-                        handleSendLiveReply(
-                          'en_atencion',
-                          'Hemos reabierto tu atención en línea. ¿En qué podemos ayudarte?'
-                        )
-                      }
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white font-bold text-[11px] transition shadow-xs cursor-pointer"
-                    >
-                      <RefreshCw size={12} />
-                      <span>Reabrir Chat</span>
-                    </button>
-                  )
+                {selectedRow.log_chat_id && !isWebChatResolved && (
+                  <button
+                    type="button"
+                    disabled={sendingReply}
+                    onClick={() => handleSendLiveReply('resuelto')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-[11px] transition shadow-xs cursor-pointer"
+                  >
+                    <CheckCircle2 size={13} />
+                    <span>Marcar Resuelto</span>
+                  </button>
                 )}
 
                 <button
@@ -1356,207 +1639,14 @@ export function TrackingView({
               </div>
             )}
 
-            {/* LIENZO DE CHAT COMPLETO CON BOTÓN FLOTANTE */}
+            {/* LIENZO DE CHAT COMPLETO CON CONTENEDOR ENCAPSULADO PARA WEB TRACKING */}
             <div className="relative flex-1 flex flex-col min-h-0 overflow-hidden">
               <div
                 ref={chatContainerRef}
                 onScroll={handleChatScroll}
                 className="flex-1 overflow-y-auto p-5 space-y-4 bg-[#F8F9FA] bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] [background-size:16px_16px]"
               >
-                {parsedChatMessages.length > 0 ? (
-                  parsedChatMessages.map((msg, idx) => {
-                    const textContent =
-                      msg.text || msg.texto || msg.mensaje || msg.body || msg.contenido || '';
-                    const senderRaw = String(
-                      msg.sender || msg.emisor || msg.rol || msg.direction || ''
-                    ).toLowerCase();
-                    const isFromLogChat = Boolean(msg._fromLogChat);
-
-                    const isCliente =
-                      senderRaw === 'user' ||
-                      senderRaw.includes('cli') ||
-                      senderRaw.includes('inbound') ||
-                      msg.from_me === false;
-
-                    const isAgentWeb =
-                      !isCliente && isFromLogChat && (senderRaw === 'agent' || senderRaw.includes('asesor'));
-
-                    const isAsistenteWin =
-                      !isCliente &&
-                      !isAgentWeb &&
-                      (isFromLogChat ||
-                        senderRaw === 'bot' ||
-                        String(msg.emisor || '').toUpperCase() === 'ASISTENTE_WIN' ||
-                        String(msg.rol || '').toLowerCase() === 'bot');
-
-                    const isTemplate =
-                      !isCliente &&
-                      !isAsistenteWin &&
-                      !isAgentWeb &&
-                      (msg.tipo === 'template' ||
-                        Boolean(msg.es_plantilla) ||
-                        /enruta\.win\.pe|confirmaci[oó]n de visita|plantilla preaprobada|\|\s*\[/i.test(
-                          textContent
-                        ));
-
-                    const timeLabel = formatChatDateTime(
-                      msg.timestamp || msg.fecha_utc || msg.fecha || ''
-                    );
-                    const showSosMilestoneHere =
-                      sosTimelineInfo.active && sosTimelineInfo.msgIndex === idx;
-                    const showLogChatBannerHere = Boolean(msg._firstLogChatMsg);
-
-                    const sosMilestoneBanner = showSosMilestoneHere ? (
-                      <div className="my-2.5 flex items-center gap-3 select-none">
-                        <div className="flex-1 h-px bg-gradient-to-r from-transparent via-rose-300 to-rose-400" />
-                        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-50 border border-rose-200 text-rose-800 text-[10.5px] font-extrabold shadow-2xs">
-                          <LifeBuoy size={12} className="text-rose-600 shrink-0" />
-                          <span>SOS</span>
-                          {sosTimelineInfo.timestampLabel && (
-                            <span className="text-[10px] font-medium text-rose-600 pl-1 border-l border-rose-200">
-                              {sosTimelineInfo.timestampLabel}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex-1 h-px bg-gradient-to-l from-transparent via-rose-300 to-rose-400" />
-                      </div>
-                    ) : null;
-
-                    const logChatMilestoneBanner = showLogChatBannerHere ? (
-                      <div className="my-2.5 flex items-center gap-3 select-none">
-                        <div className="flex-1 h-px bg-gradient-to-r from-transparent via-indigo-300 to-indigo-400" />
-                        <div
-                          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-800 text-[10.5px] font-extrabold shadow-2xs"
-                          title={selectedRow.log_motivo_sos || 'Chat Web Tracking'}
-                        >
-                          <Bot size={13} className="text-indigo-600 shrink-0" />
-                          <span>Chat Web Tracking • {selectedRow.log_motivo_sos || 'En Vivo'}</span>
-                          {timeLabel && (
-                            <span className="text-[10px] font-medium text-indigo-600 pl-1 border-l border-indigo-200">
-                              {timeLabel}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex-1 h-px bg-gradient-to-l from-transparent via-indigo-300 to-indigo-400" />
-                      </div>
-                    ) : null;
-
-                    if (isCliente) {
-                      return (
-                        <React.Fragment key={idx}>
-                          {sosMilestoneBanner}
-                          {logChatMilestoneBanner}
-                          <div className="flex flex-col items-start">
-                            <div
-                              className={`max-w-[78%] rounded-2xl rounded-tl-sm p-3.5 shadow-xs space-y-2 ${
-                                isFromLogChat
-                                  ? 'bg-indigo-50/40 border border-indigo-200/90'
-                                  : 'bg-white border border-slate-200'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between gap-4">
-                                <span
-                                  className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                                    isFromLogChat
-                                      ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
-                                      : 'bg-sky-100 text-sky-800 border-sky-200'
-                                  }`}
-                                >
-                                  <User size={11} />
-                                  <span>
-                                    {isFromLogChat ? 'Cliente (Web) • ' : 'Cliente (WSP) • '}
-                                    {selectedRow.cliente}
-                                  </span>
-                                </span>
-                                <span className="text-[10px] text-slate-400">{timeLabel}</span>
-                              </div>
-                              {renderFormattedChatMessage(textContent)}
-                            </div>
-                          </div>
-                        </React.Fragment>
-                      );
-                    }
-
-                    if (isAsistenteWin) {
-                      return (
-                        <React.Fragment key={idx}>
-                          {sosMilestoneBanner}
-                          {logChatMilestoneBanner}
-                          <div className="flex flex-col items-end">
-                            <div className="max-w-[78%] rounded-2xl rounded-tr-sm p-3.5 bg-indigo-50/90 border border-indigo-200 shadow-xs space-y-2">
-                              <div className="flex items-center justify-between gap-4 border-b border-indigo-200/60 pb-1.5">
-                                <span
-                                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-indigo-600 text-white text-[10px] font-bold"
-                                  title="Asistente Virtual WIN (Tracking Web)"
-                                >
-                                  <Bot size={11} />
-                                  <span>Asistente WIN (Web)</span>
-                                </span>
-                                <span className="text-[10px] text-indigo-700 font-semibold">
-                                  {timeLabel}
-                                </span>
-                              </div>
-                              {renderFormattedChatMessage(textContent)}
-                            </div>
-                          </div>
-                        </React.Fragment>
-                      );
-                    }
-
-                    if (isTemplate) {
-                      return (
-                        <React.Fragment key={idx}>
-                          {sosMilestoneBanner}
-                          {logChatMilestoneBanner}
-                          <div className="flex flex-col items-end">
-                            <div className="max-w-[80%] rounded-2xl rounded-tr-sm p-4 bg-purple-50/90 border border-purple-200 shadow-xs space-y-2.5">
-                              <div className="flex items-center justify-between gap-4 border-b border-purple-200/70 pb-2">
-                                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
-                                  <Sparkles size={11} />
-                                  <span>{msg.nombre_plantilla || 'Plantilla Oficial Meta HSM'}</span>
-                                </span>
-                                <span className="inline-flex items-center gap-1 text-[10px] text-purple-800 font-semibold">
-                                  <ShieldCheck size={12} className="text-emerald-600" />
-                                  Disparo Automático HSM
-                                </span>
-                              </div>
-                              {renderFormattedChatMessage(textContent)}
-                              <div className="flex items-center justify-between pt-1 text-[10px] text-slate-500">
-                                <span>{timeLabel}</span>
-                                <span className="inline-flex items-center gap-1 font-bold text-sky-700">
-                                  <CheckCheck size={12} />
-                                  {String(msg.estado || selectedRow.estado_wsp || 'SENT').toUpperCase()}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        </React.Fragment>
-                      );
-                    }
-
-                    return (
-                      <React.Fragment key={idx}>
-                        {sosMilestoneBanner}
-                        {logChatMilestoneBanner}
-                        <div className="flex flex-col items-end">
-                          <div className="max-w-[78%] rounded-2xl rounded-tr-sm p-3.5 bg-[#FFF0E5]/90 border border-orange-200 shadow-xs space-y-2">
-                            <div className="flex items-center justify-between gap-4">
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-white text-[#FF5500] border border-orange-200">
-                                <Headset size={11} />
-                                <span>
-                                  {isAgentWeb ? 'Asesor WIN (Web) • ' : 'Asesor WIN (Mantra) • '}
-                                  {msg.author || msg.agente || msg.usuario || 'Agente WIN'}
-                                </span>
-                              </span>
-                              <span className="text-[10px] text-slate-500">{timeLabel}</span>
-                            </div>
-                            {renderFormattedChatMessage(textContent)}
-                          </div>
-                        </div>
-                      </React.Fragment>
-                    );
-                  })
-                ) : (
+                {mantraMessages.length === 0 && webSessionMessages.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-center py-12 text-slate-400">
                     <MessageSquare size={32} className="text-slate-300 mb-2" />
                     <p className="text-sm font-bold text-slate-600">
@@ -1567,6 +1657,261 @@ export function TrackingView({
                       {selectedRow.ingreso_tracking || 'NO'}
                     </p>
                   </div>
+                ) : (
+                  <>
+                    {/* 1. Hilo de WhatsApp / Mantra */}
+                    {mantraMessages.map((msg, idx) => {
+                      const textContent =
+                        msg.text || msg.texto || msg.mensaje || msg.body || msg.contenido || '';
+                      const senderRaw = String(
+                        msg.sender || msg.emisor || msg.rol || msg.direction || ''
+                      ).toLowerCase();
+
+                      const isCliente =
+                        senderRaw === 'user' ||
+                        senderRaw.includes('cli') ||
+                        senderRaw.includes('inbound') ||
+                        msg.from_me === false;
+                      const isAsistenteWin =
+                        !isCliente &&
+                        (senderRaw === 'bot' ||
+                          String(msg.emisor || '').toUpperCase() === 'ASISTENTE_WIN' ||
+                          String(msg.rol || '').toLowerCase() === 'bot');
+                      const isTemplate =
+                        !isCliente &&
+                        !isAsistenteWin &&
+                        (msg.tipo === 'template' ||
+                          Boolean(msg.es_plantilla) ||
+                          /enruta\.win\.pe|confirmaci[oó]n de visita|plantilla preaprobada|\|\s*\[/i.test(
+                            textContent
+                          ));
+
+                      const timeLabel = formatChatDateTime(
+                        msg.timestamp || msg.fecha_utc || msg.fecha || ''
+                      );
+
+                      const showSosMilestoneHere =
+                        sosTimelineInfo.active && sosTimelineInfo.msgIndex === idx;
+
+                      const sosMilestoneBanner = showSosMilestoneHere ? (
+                        <div className="my-2.5 flex items-center gap-3 select-none">
+                          <div className="flex-1 h-px bg-gradient-to-r from-transparent via-rose-300 to-rose-400" />
+                          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-50 border border-rose-200 text-rose-800 text-[10.5px] font-extrabold shadow-2xs">
+                            <LifeBuoy size={12} className="text-rose-600 shrink-0" />
+                            <span>SOS</span>
+                            {sosTimelineInfo.timestampLabel && (
+                              <span className="text-[10px] font-medium text-rose-600 pl-1 border-l border-rose-200">
+                                {sosTimelineInfo.timestampLabel}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex-1 h-px bg-gradient-to-l from-transparent via-rose-300 to-rose-400" />
+                        </div>
+                      ) : null;
+
+                      if (isCliente) {
+                        return (
+                          <React.Fragment key={`m-${idx}`}>
+                            {sosMilestoneBanner}
+                            <div className="flex flex-col items-start">
+                              <div className="max-w-[78%] rounded-2xl rounded-tl-sm p-3.5 bg-white border border-slate-200 shadow-xs space-y-2">
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 text-sky-800 border border-sky-200">
+                                    <User size={11} />
+                                    <span>Cliente (WSP) • {selectedRow.cliente}</span>
+                                  </span>
+                                  <span className="text-[10px] text-slate-400">{timeLabel}</span>
+                                </div>
+                                {renderFormattedChatMessage(textContent)}
+                              </div>
+                            </div>
+                          </React.Fragment>
+                        );
+                      }
+
+                      if (isTemplate) {
+                        return (
+                          <React.Fragment key={`m-${idx}`}>
+                            {sosMilestoneBanner}
+                            <div className="flex flex-col items-end">
+                              <div className="max-w-[80%] rounded-2xl rounded-tr-sm p-4 bg-purple-50/90 border border-purple-200 shadow-xs space-y-2.5">
+                                <div className="flex items-center justify-between gap-4 border-b border-purple-200/70 pb-2">
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                                    <Sparkles size={11} />
+                                    <span>{msg.nombre_plantilla || 'Plantilla Oficial Meta HSM'}</span>
+                                  </span>
+                                  <span className="inline-flex items-center gap-1 text-[10px] text-purple-800 font-semibold">
+                                    <ShieldCheck size={12} className="text-emerald-600" />
+                                    Disparo Automático HSM
+                                  </span>
+                                </div>
+                                {renderFormattedChatMessage(textContent)}
+                                <div className="flex items-center justify-between pt-1 text-[10px] text-slate-500">
+                                  <span>{timeLabel}</span>
+                                  <span className="inline-flex items-center gap-1 font-bold text-sky-700">
+                                    <CheckCheck size={12} />
+                                    {String(msg.estado || selectedRow.estado_wsp || 'SENT').toUpperCase()}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </React.Fragment>
+                        );
+                      }
+
+                      return (
+                        <React.Fragment key={`m-${idx}`}>
+                          {sosMilestoneBanner}
+                          <div className="flex flex-col items-end">
+                            <div className="max-w-[78%] rounded-2xl rounded-tr-sm p-3.5 bg-[#FFF0E5]/90 border border-orange-200 shadow-xs space-y-2">
+                              <div className="flex items-center justify-between gap-4">
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-white text-[#FF5500] border border-orange-200">
+                                  <Headset size={11} />
+                                  <span>
+                                    Asesor WIN (Mantra) • {msg.author || msg.agente || msg.usuario || 'Agente WIN'}
+                                  </span>
+                                </span>
+                                <span className="text-[10px] text-slate-500">{timeLabel}</span>
+                              </div>
+                              {renderFormattedChatMessage(textContent)}
+                            </div>
+                          </div>
+                        </React.Fragment>
+                      );
+                    })}
+
+                    {/* 2. Contenedor / Burbuja Maestra para la Sesión de Chat Web Tracking */}
+                    {webSessionMessages.length > 0 && (
+                      <div className="my-3 rounded-3xl border-2 border-indigo-200/90 bg-white/95 shadow-sm overflow-hidden">
+                        {/* Cabecera de la Burbuja de Sesión Web */}
+                        <div className="px-4 py-2.5 bg-gradient-to-r from-indigo-600 via-indigo-500 to-violet-600 text-white flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="p-1.5 rounded-xl bg-white/15 backdrop-blur-xs">
+                              <Bot size={14} />
+                            </span>
+                            <div>
+                              <div className="text-xs font-extrabold tracking-tight flex items-center gap-2">
+                                <span>Sesión de Chat Web Tracking</span>
+                                <span className="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-bold">
+                                  {webSessionMessages.length} msjs
+                                </span>
+                              </div>
+                              <div className="text-[10.5px] text-indigo-100">
+                                Motivo: <strong>{selectedRow.log_motivo_sos || 'Consulta en portal de seguimiento'}</strong>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {webAbandonmentInfo.abandoned && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black uppercase shadow-xs">
+                                <Clock size={11} />
+                                <span>Cliente sin respuesta ({webAbandonmentInfo.inactiveMinutes} min)</span>
+                              </span>
+                            )}
+                            <span
+                              className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${
+                                isWebChatResolved
+                                  ? 'bg-emerald-400 text-slate-950'
+                                  : activeLogEstado === 'esperando_asesor'
+                                    ? 'bg-[#FF5500] text-white animate-pulse'
+                                    : 'bg-white/20 text-white'
+                              }`}
+                            >
+                              {isWebChatResolved
+                                ? '✓ Sesión Resuelta'
+                                : activeLogEstado === 'esperando_asesor'
+                                  ? 'Esperando Asesor'
+                                  : 'En Atención'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Mensajes dentro de la Burbuja de Sesión Web */}
+                        <div className="p-4 space-y-3 bg-indigo-50/25">
+                          {webSessionMessages.map((msg, wIdx) => {
+                            const textContent =
+                              msg.text || msg.texto || msg.mensaje || msg.body || msg.contenido || '';
+                            const senderRaw = String(
+                              msg.sender || msg.emisor || msg.rol || msg.direction || ''
+                            ).toLowerCase();
+                            const isCliente =
+                              senderRaw === 'user' ||
+                              senderRaw.includes('cli') ||
+                              senderRaw.includes('inbound') ||
+                              msg.from_me === false;
+                            const isAgentWeb =
+                              !isCliente && (senderRaw === 'agent' || senderRaw.includes('asesor'));
+                            const timeLabel = formatChatDateTime(
+                              msg.timestamp || msg.fecha_utc || msg.fecha || ''
+                            );
+
+                            if (isCliente) {
+                              return (
+                                <div key={`w-${wIdx}`} className="flex flex-col items-start">
+                                  <div className="max-w-[82%] rounded-2xl rounded-tl-sm p-3 bg-white border border-indigo-200/90 shadow-2xs space-y-1.5">
+                                    <div className="flex items-center justify-between gap-4">
+                                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800">
+                                        <User size={10} />
+                                        <span>Cliente (Web) • {selectedRow.cliente}</span>
+                                      </span>
+                                      <span className="text-[10px] text-slate-400">{timeLabel}</span>
+                                    </div>
+                                    {renderFormattedChatMessage(textContent)}
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            if (isAgentWeb) {
+                              return (
+                                <div key={`w-${wIdx}`} className="flex flex-col items-end">
+                                  <div className="max-w-[82%] rounded-2xl rounded-tr-sm p-3 bg-[#FFF0E5] border border-orange-200 shadow-2xs space-y-1.5">
+                                    <div className="flex items-center justify-between gap-4">
+                                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-white text-[#FF5500] border border-orange-200">
+                                        <Headset size={10} />
+                                        <span>
+                                          Asesor WIN (Web) •{' '}
+                                          {msg.author || msg.agente || selectedRow.log_asesor_nombre || 'Asesor WIN'}
+                                        </span>
+                                      </span>
+                                      <span className="text-[10px] text-slate-500">{timeLabel}</span>
+                                    </div>
+                                    {renderFormattedChatMessage(textContent)}
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <div key={`w-${wIdx}`} className="flex flex-col items-end">
+                                <div className="max-w-[82%] rounded-2xl rounded-tr-sm p-3 bg-indigo-100/70 border border-indigo-200 shadow-2xs space-y-1.5">
+                                  <div className="flex items-center justify-between gap-4">
+                                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-indigo-600 text-white text-[10px] font-bold">
+                                      <Bot size={10} />
+                                      <span>Asistente WIN (Web)</span>
+                                    </span>
+                                    <span className="text-[10px] text-indigo-700 font-semibold">{timeLabel}</span>
+                                  </div>
+                                  {renderFormattedChatMessage(textContent)}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* Pie de alerta dentro de la cápsula solo si hay abandono en un chat abierto */}
+                        {webAbandonmentInfo.abandoned && !isWebChatResolved && (
+                          <div className="px-4 py-2 border-t bg-amber-50 border-amber-200 text-amber-900 text-[11px] font-bold flex items-center justify-between">
+                            <span className="flex items-center gap-1.5">
+                              <Clock size={13} className="text-amber-600" />
+                              Posible abandono: el cliente lleva {webAbandonmentInfo.inactiveMinutes} min sin responder al último mensaje del asesor.
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
 
@@ -1584,8 +1929,8 @@ export function TrackingView({
               )}
             </div>
 
-            {/* PIE INTERACTIVO: CAJA DE RESPUESTA EN VIVO (SI TIENE CHAT WEB) O BARRA DE ATAJOS */}
-            {selectedRow.log_chat_id ? (
+            {/* PIE INTERACTIVO: CAJA DE RESPUESTA SOLO SI EL CHAT WEB ESTÁ ACTIVO; SI ESTÁ RESUELTO SE VE IGUAL QUE LOS DEMÁS CHATS */}
+            {selectedRow.log_chat_id && !isWebChatResolved ? (
               <div className="p-3 bg-white border-t border-slate-200 space-y-2">
                 {replyError && (
                   <div className="px-3 py-1.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
@@ -1614,29 +1959,85 @@ export function TrackingView({
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
+                    setShowEmojiPicker(false);
                     handleSendLiveReply('en_atencion');
                   }}
-                  className="flex items-center gap-2"
+                  className="relative flex items-end gap-2"
                 >
-                  <input
-                    type="text"
+                  {/* Selector completo de emojis estilo WhatsApp Web + aviso de atajo Win + . */}
+                  {showEmojiPicker && (
+                    <div
+                      className="absolute bottom-12 left-0 z-40 shadow-2xl rounded-2xl overflow-hidden border border-slate-200"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <EmojiPicker
+                        onEmojiClick={(emojiData: EmojiClickData) => {
+                          setReplyText((prev) => `${prev}${emojiData.emoji}`);
+                          replyInputRef.current?.focus();
+                        }}
+                        theme={
+                          document.documentElement.classList.contains('dark')
+                            ? Theme.DARK
+                            : Theme.LIGHT
+                        }
+                        searchPlaceHolder="Buscar emoji..."
+                        width={320}
+                        height={380}
+                        lazyLoadEmojis={true}
+                        previewConfig={{ showPreview: false }}
+                      />
+                    </div>
+                  )}
+
+                  {/* Botón selector de emojis */}
+                  <button
+                    type="button"
+                    onClick={() => setShowEmojiPicker((prev) => !prev)}
+                    title="Insertar emoji"
+                    className={`w-9 h-9 rounded-xl border flex items-center justify-center transition cursor-pointer shrink-0 ${
+                      showEmojiPicker
+                        ? 'bg-[#FFF0E5] text-[#FF5500] border-orange-200'
+                        : 'bg-slate-50 hover:bg-slate-100 text-slate-500 border-slate-200'
+                    }`}
+                  >
+                    <Smile size={17} />
+                  </button>
+
+                  <textarea
+                    ref={replyInputRef}
+                    rows={1}
                     value={replyText}
-                    onChange={(e) => setReplyText(e.target.value)}
+                    onFocus={() => setShowEmojiPicker(false)}
+                    onChange={(e) => {
+                      setReplyText(e.target.value);
+                      e.target.style.height = 'auto';
+                      e.target.style.height = `${Math.min(e.target.scrollHeight, 112)}px`;
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        if (!sendingReply && replyText.trim()) {
+                          setShowEmojiPicker(false);
+                          handleSendLiveReply('en_atencion');
+                          e.currentTarget.style.height = 'auto';
+                        }
+                      }
+                    }}
                     disabled={sendingReply}
-                    placeholder={
-                      activeLogEstado === 'resuelto'
-                        ? 'Chat Web resuelto. Escribe para reabrir y responder al cliente...'
-                        : 'Escribe tu respuesta directa al Chat Web de GoWIN | Tracking...'
-                    }
-                    className="flex-1 px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-[#FF5500]"
+                    placeholder="Escribe un mensaje... (Shift + Enter para salto de línea)"
+                    className="flex-1 px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-[#FF5500] resize-none max-h-28 overflow-y-auto leading-relaxed"
                   />
                   <button
                     type="submit"
                     disabled={sendingReply || !replyText.trim()}
-                    className="px-4 py-2 rounded-xl bg-[#FF5500] hover:bg-[#e04b00] disabled:opacity-40 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-sm shadow-orange-500/20 transition cursor-pointer shrink-0"
+                    title="Enviar mensaje (Enter)"
+                    className="w-9 h-9 rounded-xl bg-[#FF5500] hover:bg-[#e04b00] disabled:opacity-40 text-white flex items-center justify-center shadow-sm shadow-orange-500/20 transition cursor-pointer shrink-0"
                   >
-                    <Send size={13} />
-                    <span>{sendingReply ? 'Enviando...' : 'Responder Web'}</span>
+                    {sendingReply ? (
+                      <RefreshCw size={15} className="animate-spin" />
+                    ) : (
+                      <Send size={15} />
+                    )}
                   </button>
                 </form>
               </div>
@@ -1645,10 +2046,10 @@ export function TrackingView({
                 <div className="flex items-center gap-3">
                   <span>
                     <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 font-mono">
-                      ↑
+                      ←
                     </kbd>{' '}
                     <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 font-mono">
-                      ↓
+                      →
                     </kbd>{' '}
                     Recorrer casos
                   </span>

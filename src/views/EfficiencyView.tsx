@@ -19,6 +19,7 @@ import {
   X,
   ExternalLink,
   RotateCcw,
+  LifeBuoy,
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
 import { RealOrder } from '../types/dashboard';
@@ -115,6 +116,9 @@ export function EfficiencyView({
   const [filterAccion, setFilterAccion] = useState<string>('Todos');
   const [filterResponsable, setFilterResponsable] = useState<string>('Todos');
   const [filterPartner, setFilterPartner] = useState<string>('Todos');
+  const [soloSos, setSoloSos] = useState<boolean>(() => {
+    return sessionStorage.getItem('eff_soloSos') === 'true';
+  });
   const [selectedAudit, setSelectedAudit] = useState<any | null>(null);
 
   const {
@@ -122,7 +126,7 @@ export function EfficiencyView({
     isFetching: loading,
     refetch,
   } = useQuery<any>({
-    queryKey: ['efficiencyAi', startDate, endDate, service, globalSearch, ignoreDates, consultTrigger],
+    queryKey: ['efficiencyAi', startDate, endDate, service, globalSearch, ignoreDates, soloSos, consultTrigger],
     queryFn: ({ signal }) => {
       const params = new URLSearchParams({
         startDate,
@@ -130,6 +134,7 @@ export function EfficiencyView({
         service,
         q: globalSearch,
         ignoreDates: ignoreDates ? 'true' : 'false',
+        soloSos: soloSos ? 'true' : 'false',
       });
       return apiFetch(`/api/efficiency?${params.toString()}`, { signal });
     },
@@ -215,8 +220,10 @@ export function EfficiencyView({
             startDate,
             endDate,
             service,
+            q: globalSearch,
             ignoreDates,
             forceReaudit,
+            soloSos,
             batchSize: 20,
           }),
         });
@@ -281,36 +288,24 @@ export function EfficiencyView({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-          {onSetDateRange && (
-            <button
-              type="button"
-              onClick={() => handleSetLastDays(3)}
-              className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-xs font-bold text-white flex items-center gap-1.5 transition cursor-pointer"
-            >
-              <CalendarRange size={14} className="text-[#FF5500]" />
-              <span>Últimos 3 Días</span>
-            </button>
-          )}
-
           <button
             type="button"
-            disabled={analyzing}
-            onClick={() => handleRunAiBatch(false, true)}
-            title="Re-analiza un lote de chats actualizando responsable y acción recomendada"
-            className="px-3.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 disabled:opacity-40 border border-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition cursor-pointer"
+            onClick={() =>
+              setSoloSos((prev) => {
+                const next = !prev;
+                sessionStorage.setItem('eff_soloSos', String(next));
+                return next;
+              })
+            }
+            className={`px-3.5 py-2 rounded-xl border text-xs font-extrabold flex items-center gap-1.5 transition cursor-pointer ${
+              soloSos
+                ? 'bg-rose-600 text-white border-rose-500 shadow-md shadow-rose-600/25'
+                : 'bg-white/10 hover:bg-white/15 border-white/15 text-slate-200'
+            }`}
+            title="Filtrar y auditar únicamente casos que vienen de SOS / Botón Soporte"
           >
-            <RotateCcw size={13} className={analyzing ? 'animate-spin' : ''} />
-            <span>Re-auditar (20)</span>
-          </button>
-
-          <button
-            type="button"
-            disabled={analyzing || coverage.pendientes === 0}
-            onClick={() => handleRunAiBatch(false, false)}
-            className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 border border-slate-700 text-xs font-bold text-white flex items-center gap-1.5 transition cursor-pointer"
-          >
-            {analyzing ? <RefreshCw size={14} className="animate-spin" /> : <Play size={14} />}
-            <span>Auditar Lote (20)</span>
+            <LifeBuoy size={14} className={soloSos ? 'text-white' : 'text-rose-400'} />
+            <span>{soloSos ? 'SOS' : 'SOS'}</span>
           </button>
 
           <button
@@ -809,8 +804,14 @@ export function EfficiencyView({
                       className="hover:bg-orange-50/40 transition cursor-pointer"
                     >
                       <td className="py-2.5 whitespace-nowrap">
-                        <div className="font-extrabold text-[#FF5500] flex items-center gap-1">
+                        <div className="font-extrabold text-[#FF5500] flex items-center gap-1.5">
                           <span>#{a.orden_id}</span>
+                          {a.es_sos && (
+                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 text-[9px] font-black uppercase">
+                              <LifeBuoy size={9} />
+                              SOS
+                            </span>
+                          )}
                         </div>
                         <div className="text-[10px] text-slate-400">
                           {a.fecha_fmt} • {a.num_mensajes} msjs

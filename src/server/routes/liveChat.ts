@@ -28,13 +28,36 @@ export interface NormalizedChatMessage {
   timestamp: string;
 }
 
-function normalizeEstadoChat(raw: any): string {
+function normalizeEstadoChat(raw: any, mensajes?: NormalizedChatMessage[]): string {
   const val = String(raw || '').trim();
   const lower = val.toLowerCase();
+  if (
+    lower.includes('resuelto') ||
+    lower.includes('finaliz') ||
+    lower.includes('cerrad') ||
+    lower.includes('complet') ||
+    lower.includes('autogestion')
+  ) {
+    return 'resuelto';
+  }
+  if (Array.isArray(mensajes) && mensajes.length > 0) {
+    for (let i = mensajes.length - 1; i >= 0; i--) {
+      const m = mensajes[i];
+      const t = m.text.toLowerCase();
+      // Si el cliente volvió a escribir después de un cierre previo, prevalece el estado activo
+      if (m.sender === 'user') break;
+      if (
+        t.includes('actualizado tu ticket a resuelto') ||
+        t.includes('dado por finalizada esta consulta') ||
+        t.includes('marcada como resuelta')
+      ) {
+        return 'resuelto';
+      }
+    }
+  }
   if (lower === 'esperando_asesor' || lower === 'derivado a asesor') return 'esperando_asesor';
   if (lower === 'en_atencion' || lower === 'en atención') return 'en_atencion';
   if (lower === 'en_curso' || lower === 'en curso') return 'en_curso';
-  if (lower === 'resuelto' || lower === 'finalizado') return 'resuelto';
   if (lower === 'iniciado') return 'iniciado';
   return val || 'iniciado';
 }
@@ -176,7 +199,7 @@ router.get(
 
     const data = (rows || []).map((r: any) => {
       const mensajes = normalizeMessages(r.mensajes_json);
-      const estadoNorm = normalizeEstadoChat(r.estado_chat);
+      const estadoNorm = normalizeEstadoChat(r.estado_chat, mensajes);
       const lastMsg = mensajes.length > 0 ? mensajes[mensajes.length - 1] : null;
       const ultimoPor =
         r.ultimo_mensaje_por ||
@@ -203,7 +226,6 @@ router.get(
         mensajes,
         created_at: r.created_at,
         updated_at: r.updated_at,
-        // Datos enriquecidos para la vista unificada de Seguimiento
         cliente: r.cliente || (inferredName ? `${inferredName} (Tracking Web)` : `Cliente OT #${r.orden_id}`),
         numero_documento: r.numero_documento || r.codisegui || '-',
         codi_segui_ot: r.codisegui || r.ticket || '-',
@@ -245,7 +267,7 @@ router.get(
 
 /**
  * POST /api/chat-log/:id/mensaje
- * Permite al asesor enviar un mensaje al cliente o marcar el chat como resuelto.
+ * Permite al asesor enviar un mensaje al cliente o marcar el chat como resuelto (sin reapertura manual).
  */
 router.post(
   '/chat-log/:id/mensaje',
@@ -287,6 +309,16 @@ router.post(
 
     const currentRow = rows[0];
     const currentMessages = normalizeMessages(currentRow.mensajes_json);
+    const estadoActual = normalizeEstadoChat(currentRow.estado_chat, currentMessages);
+
+    if (estadoActual === 'resuelto') {
+      res.status(409).json({
+        ok: false,
+        success: false,
+        error: 'Esta sesión de Chat Web ya se encuentra resuelta y finalizada.',
+      });
+      return;
+    }
 
     if (text) {
       currentMessages.push({

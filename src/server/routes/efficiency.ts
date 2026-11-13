@@ -187,52 +187,49 @@ router.get('/efficiency', async (req: Request, res: Response) => {
       service: rawService = 'Todos los servicios',
       q = '',
       ignoreDates = 'false',
+      soloSos = 'false',
     } = req.query as Record<string, string>;
 
     const service = enforceRoleServiceScope(req, rawService);
     const searchQ = String(q || '').trim();
+    const isSoloSos = soloSos === 'true';
 
-    const whereAudit: string[] = [];
-    const paramsAudit: any[] = [];
-    const whereUniverse: string[] = [];
-    const paramsUniverse: any[] = [];
+    // Aplicamos exactamente los mismos filtros base sobre mat_funnel_casos_360 (v) tanto para el universo como para los auditados
+    const whereBase: string[] = [];
+    const paramsBase: any[] = [];
 
     if (ignoreDates !== 'true') {
-      whereAudit.push(`a.fecha_solicitud_dia >= ? AND a.fecha_solicitud_dia <= ?`);
-      paramsAudit.push(startDate, endDate);
-
-      whereUniverse.push(`v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?`);
-      paramsUniverse.push(startDate, endDate);
+      whereBase.push(`v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?`);
+      paramsBase.push(startDate, endDate);
     }
 
-    const srvAuditFilter = buildStrictOrderTypeSql(service, getServicioToTipoMap(), 'a.tipo_operacion');
-    if (srvAuditFilter.params.length > 0) {
-      whereAudit.push(srvAuditFilter.sql);
-      paramsAudit.push(...srvAuditFilter.params);
+    const srvFilter = buildStrictOrderTypeSql(service, getServicioToTipoMap(), 'v.tipo_operacion');
+    if (srvFilter.params.length > 0) {
+      whereBase.push(srvFilter.sql);
+      paramsBase.push(...srvFilter.params);
     }
 
-    const srvUnivFilter = buildStrictOrderTypeSql(service, getServicioToTipoMap(), 'v.tipo_operacion');
-    if (srvUnivFilter.params.length > 0) {
-      whereUniverse.push(srvUnivFilter.sql);
-      paramsUniverse.push(...srvUnivFilter.params);
+    if (isSoloSos) {
+      whereBase.push(`(
+        UPPER(TRIM(COALESCE(v.pulso_soporte, 'NO'))) IN ('SI', 'SÍ', '1', 'TRUE')
+        OR lc.orden_id IS NOT NULL
+      )`);
     }
 
     if (searchQ) {
       const likeQ = `%${searchQ}%`;
-      whereAudit.push(`(
-        CAST(a.orden_id AS CHAR) LIKE ? OR
-        a.ticket LIKE ? OR
-        a.resumen_ejecutivo LIKE ? OR
-        a.motivo_homologado LIKE ? OR
-        a.partner LIKE ? OR
-        a.accion_recomendada LIKE ? OR
-        a.responsable_quiebre LIKE ?
+      whereBase.push(`(
+        CAST(v.orden_id AS CHAR) LIKE ? OR
+        v.ticket LIKE ? OR
+        v.cliente LIKE ? OR
+        v.telefono LIKE ? OR
+        v.partner LIKE ? OR
+        v.ops_partner LIKE ?
       )`);
-      paramsAudit.push(likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ);
+      paramsBase.push(likeQ, likeQ, likeQ, likeQ, likeQ, likeQ);
     }
 
-    const whereAuditSql = whereAudit.length > 0 ? `WHERE ${whereAudit.join(' AND ')}` : '';
-    const whereUnivSql = whereUniverse.length > 0 ? `WHERE ${whereUniverse.join(' AND ')}` : '';
+    const whereBaseSql = whereBase.length > 0 ? `WHERE ${whereBase.join(' AND ')}` : '';
 
     const [universeRes, auditRowsRes]: any = await Promise.all([
       pool.query(
@@ -242,44 +239,48 @@ router.get('/efficiency', async (req: Request, res: Response) => {
         FROM mat_funnel_casos_360 v
         LEFT JOIN historial_chats_mantra h ON h.orden_id = v.orden_id
         LEFT JOIN (SELECT DISTINCT orden_id FROM logs_chat) lc ON lc.orden_id = v.orden_id
-        ${whereUnivSql ? `${whereUnivSql} AND` : 'WHERE'} (
+        ${whereBaseSql ? `${whereBaseSql} AND` : 'WHERE'} (
           JSON_LENGTH(h.ultimos_mensajes_json) > 1
           OR lc.orden_id IS NOT NULL
           OR UPPER(TRIM(COALESCE(v.pulso_soporte, 'NO'))) IN ('SI', 'SÍ', '1', 'TRUE')
         )
         `,
-        paramsUniverse
+        paramsBase
       ),
       pool.query(
         `
         SELECT
           a.*,
-          DATE_FORMAT(a.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_fmt,
+          DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_fmt,
           DATE_FORMAT(a.analyzed_at, '%d/%m %H:%i') AS analyzed_fmt,
           COALESCE(NULLIF(TRIM(v.cliente), ''), 'Cliente WIN') AS cliente,
           v.telefono,
+          v.pulso_soporte,
+          COALESCE(NULLIF(TRIM(v.tipo_operacion), ''), a.tipo_operacion, 'OTROS') AS tipo_operacion_real,
+          COALESCE(NULLIF(TRIM(v.ops_partner), ''), NULLIF(TRIM(v.partner), ''), a.partner, 'SIN PARTNER') AS partner_real,
           COALESCE(NULLIF(TRIM(v.ops_estado), ''), v.estado_ot, 'Sin estado') AS estado_ot,
           COALESCE(NULLIF(TRIM(v.ops_cuadrilla), ''), v.cuadrilla, 'SIN CUADRILLA') AS cuadrilla,
           h.estado_chat AS mantra_estado_chat,
           h.semaforo_sla AS mantra_sla,
           h.quien_tiene_la_palabra AS mantra_turno,
           h.ultimos_mensajes_json AS chat_json_mantra,
+          lc.orden_id AS lc_orden_id,
           lc.motivo AS log_motivo_sos,
           lc.mensajes_json AS log_mensajes_json
         FROM chat_ai_audits a
-        LEFT JOIN mat_funnel_casos_360 v ON v.orden_id = a.orden_id
-        LEFT JOIN historial_chats_mantra h ON h.orden_id = a.orden_id
+        INNER JOIN mat_funnel_casos_360 v ON v.orden_id = a.orden_id
+        LEFT JOIN historial_chats_mantra h ON h.orden_id = v.orden_id
         LEFT JOIN (
           SELECT l1.orden_id, l1.motivo, l1.mensajes_json
           FROM logs_chat l1
           INNER JOIN (SELECT orden_id, MAX(id) AS max_id FROM logs_chat GROUP BY orden_id) l2
             ON l1.id = l2.max_id
-        ) lc ON lc.orden_id = a.orden_id
-        ${whereAuditSql}
+        ) lc ON lc.orden_id = v.orden_id
+        ${whereBaseSql}
         ORDER BY a.severidad_score DESC, a.orden_id DESC
         LIMIT 500
         `,
-        paramsAudit
+        paramsBase
       ),
     ]);
 
@@ -335,7 +336,7 @@ router.get('/efficiency', async (req: Request, res: Response) => {
       const mot = String(a.motivo_homologado || 'OTRO').toUpperCase();
       const respQuiebre = String(a.responsable_quiebre || 'NINGUNO').toUpperCase();
       const accionRec = String(a.accion_recomendada || 'NO_ACCIONAR').toUpperCase();
-      const partnerClean = cleanPartnerName(a.partner);
+      const partnerClean = cleanPartnerName(a.partner_real || a.partner);
       const sev = Number(a.severidad_score || 1);
       const nota = Number(a.nota_asesor || 0);
 
@@ -408,7 +409,7 @@ router.get('/efficiency', async (req: Request, res: Response) => {
         analyzed_fmt: a.analyzed_fmt,
         cliente: a.cliente,
         telefono: a.telefono,
-        tipo_operacion: a.tipo_operacion,
+        tipo_operacion: a.tipo_operacion_real || a.tipo_operacion,
         sector_operativo: a.sector_operativo,
         partner: partnerClean,
         cuadrilla: a.cuadrilla,
@@ -429,6 +430,11 @@ router.get('/efficiency', async (req: Request, res: Response) => {
         mantra_sla: a.mantra_sla,
         mantra_turno: a.mantra_turno,
         log_motivo_sos: a.log_motivo_sos,
+        pulso_soporte: a.pulso_soporte,
+        es_sos:
+          ['SI', 'SÍ', '1', 'TRUE'].includes(String(a.pulso_soporte || '').trim().toUpperCase()) ||
+          Boolean(a.lc_orden_id) ||
+          Boolean(a.log_motivo_sos),
         messages,
       };
     });
@@ -519,7 +525,7 @@ router.get('/efficiency', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/efficiency/analyze-batch -> Audita con Gemini un lote de chats pendientes (o re-audita si forceReaudit=true)
+// POST /api/efficiency/analyze-batch -> Audita con Gemini un lote de chats pendientes respetando todos los filtros
 router.post('/efficiency/analyze-batch', async (req: Request, res: Response) => {
   try {
     if (!GEMINI_API_KEY) {
@@ -535,8 +541,10 @@ router.post('/efficiency/analyze-batch', async (req: Request, res: Response) => 
     const startDate = String(req.body?.startDate || todayDefault).trim();
     const endDate = String(req.body?.endDate || todayDefault).trim();
     const rawService = String(req.body?.service || 'Todos los servicios').trim();
+    const searchQ = String(req.body?.q || '').trim();
     const ignoreDates = Boolean(req.body?.ignoreDates);
     const forceReaudit = Boolean(req.body?.forceReaudit);
+    const soloSos = Boolean(req.body?.soloSos);
     const batchSize = Math.min(30, Math.max(5, Number(req.body?.batchSize) || 15));
 
     const service = enforceRoleServiceScope(req, rawService);
@@ -553,6 +561,26 @@ router.post('/efficiency/analyze-batch', async (req: Request, res: Response) => 
     if (srvFilter.params.length > 0) {
       whereClauses.push(srvFilter.sql);
       params.push(...srvFilter.params);
+    }
+
+    if (soloSos) {
+      whereClauses.push(`(
+        UPPER(TRIM(COALESCE(v.pulso_soporte, 'NO'))) IN ('SI', 'SÍ', '1', 'TRUE')
+        OR lc.orden_id IS NOT NULL
+      )`);
+    }
+
+    if (searchQ) {
+      const likeQ = `%${searchQ}%`;
+      whereClauses.push(`(
+        CAST(v.orden_id AS CHAR) LIKE ? OR
+        v.ticket LIKE ? OR
+        v.cliente LIKE ? OR
+        v.telefono LIKE ? OR
+        v.partner LIKE ? OR
+        v.ops_partner LIKE ?
+      )`);
+      params.push(likeQ, likeQ, likeQ, likeQ, likeQ, likeQ);
     }
 
     const whereSql = whereClauses.length > 0 ? `${whereClauses.join(' AND ')} AND` : '';
@@ -603,7 +631,7 @@ router.post('/efficiency/analyze-batch', async (req: Request, res: Response) => 
       return res.json({
         ok: true,
         processed: 0,
-        message: 'No hay chats pendientes por auditar en este rango.',
+        message: 'No hay chats pendientes por auditar con los filtros actuales.',
       });
     }
 
