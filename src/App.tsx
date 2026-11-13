@@ -89,6 +89,16 @@ export default function App() {
   });
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem('win_sidebar_collapsed') === 'true';
+  });
+  const toggleSidebarCollapse = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem('win_sidebar_collapsed', String(next));
+      return next;
+    });
+  };
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     return localStorage.getItem('win_theme') === 'dark';
   });
@@ -752,37 +762,19 @@ export default function App() {
         onClose={() => setMobileMenuOpen(false)}
         allowedViews={authUser.permisos?.vistas || ['*']}
         allowedSubviews={authUser.permisos?.subvistas || ['*']}
+        authUser={authUser}
+        onLogout={handleLogout}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={toggleSidebarCollapse}
       />
 
-      <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto space-y-5 max-w-full min-w-0">
-        {/* Barra superior de sesión activa y rol */}
-        <div className="flex flex-wrap items-center justify-between gap-2 bg-white border border-slate-100 rounded-2xl px-4 py-2 shadow-2xs text-xs">
-          <div className="flex items-center gap-2.5">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#FFF0E5] text-[#FF5500] border border-orange-200 font-extrabold text-[11px]">
-              <Shield size={12} />
-              <span>{authUser.permisos?.rolNombre || 'Usuario'}</span>
-            </span>
-            <span className="text-slate-700 font-bold">{authUser.nombre}</span>
-            <span className="text-slate-400 text-[11px]">({authUser.documento})</span>
-          </div>
-
-          <div className="flex items-center gap-3">
-            {!isAllServicesAllowed && (
-              <span className="text-[11px] text-slate-500 hidden sm:inline">
-                Alcance:{' '}
-                <strong className="text-slate-800">{serviceOptions.join(' • ')}</strong>
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-700 hover:text-rose-700 font-bold text-[11px] transition cursor-pointer"
-            >
-              <LogOut size={12} />
-              <span>Salir</span>
-            </button>
-          </div>
-        </div>
+      <main
+        className={`flex-1 max-w-full min-w-0 ${
+          activeNav === 'Seguimiento'
+            ? 'p-3 sm:p-4 lg:p-5 h-screen overflow-hidden flex flex-col gap-3'
+            : 'p-4 sm:p-6 lg:p-8 overflow-y-auto space-y-5'
+        }`}
+      >
 
         {errorMsg && (
           <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-2xl text-xs flex items-center justify-between shadow-xs">

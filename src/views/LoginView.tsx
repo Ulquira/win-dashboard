@@ -66,12 +66,16 @@ export function LoginView({ onLoginSuccess }: LoginViewProps) {
                 {/* Logo Superior */}
                 <div className="relative z-10 flex items-center justify-between">
                     <div className="flex items-center gap-3.5">
-                        <div className="w-11 h-11 rounded-2xl bg-[#FF5500] flex items-center justify-center font-black text-white text-2xl shadow-lg shadow-[#FF5500]/30">
-                            W
+                        <div className="h-11 px-3.5 rounded-2xl bg-[#FF5500] flex items-center justify-center shadow-lg shadow-[#FF5500]/30 shrink-0">
+                            <img
+                                src="/winlogo.png"
+                                alt="WIN"
+                                className="h-5 w-auto object-contain select-none"
+                            />
                         </div>
                         <div>
                             <span className="font-extrabold text-lg tracking-tight text-white block leading-none">
-                                Control WIN
+                                Control
                             </span>
                             <span className="text-[11px] font-bold text-[#FF5500] tracking-widest uppercase mt-1 block">
                                 en RUTA
@@ -133,12 +137,16 @@ export function LoginView({ onLoginSuccess }: LoginViewProps) {
                 <div className="w-full max-w-[360px] space-y-7">
                     {/* Logo visible solo en móvil */}
                     <div className="flex lg:hidden items-center gap-3">
-                        <div className="w-10 h-10 rounded-2xl bg-[#FF5500] flex items-center justify-center font-black text-white text-xl shadow-md shadow-[#FF5500]/25">
-                            W
+                        <div className="h-10 px-3 rounded-2xl bg-[#FF5500] flex items-center justify-center shadow-md shadow-[#FF5500]/25 shrink-0">
+                            <img
+                                src="/winlogo.png"
+                                alt="WIN"
+                                className="h-4 w-auto object-contain select-none"
+                            />
                         </div>
                         <div>
                             <span className="font-extrabold text-base text-slate-900 block leading-none">
-                                Control WIN
+                                Control
                             </span>
                             <span className="text-[10px] font-bold text-[#FF5500] uppercase tracking-wider">
                                 en RUTA

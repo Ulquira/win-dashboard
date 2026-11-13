@@ -1037,9 +1037,9 @@ export function TrackingView({
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 lg:h-[calc(100vh-140px)] min-h-[640px]">
+    <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-4 overflow-hidden">
       {/* PANEL IZQUIERDO: BANDEJA UNIFICADA (MANTRA + CHAT WEB TRACKING) */}
-      <div className="lg:col-span-4 bg-white border border-slate-100 rounded-2xl flex flex-col overflow-hidden shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)]">
+      <div className="lg:col-span-4 h-full min-h-0 bg-white border border-slate-100 rounded-2xl flex flex-col overflow-hidden shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)]">
         <div className="p-3 border-b border-slate-100 space-y-2.5">
           <div className="flex items-center justify-between gap-2 min-w-0">
             <div className="flex items-center gap-1.5 shrink-0">
@@ -1381,7 +1381,7 @@ export function TrackingView({
       </div>
 
       {/* PANEL DERECHO: FICHA TÉCNICA + VISOR CONVERSACIONAL OMNICANAL + CAJA DE RESPUESTA */}
-      <div className="lg:col-span-8 bg-white border border-slate-100 rounded-2xl flex flex-col overflow-hidden shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)]">
+      <div className="lg:col-span-8 h-full min-h-0 bg-white border border-slate-100 rounded-2xl flex flex-col overflow-hidden shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)]">
         {selectedRow ? (
           <>
             {/* Cabecera Limpia */}

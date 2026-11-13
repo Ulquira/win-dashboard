@@ -575,9 +575,9 @@ export function EfficiencyView({
       </div>
 
       {/* 4. MOTIVOS HOMOLOGADOS + RANKING DE PARTNERS CON INCUMPLIMIENTOS EN CHAT */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
         {/* Motivos Homologados */}
-        <div className="lg:col-span-6 bg-white border border-slate-100 rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)]">
+        <div className="lg:col-span-6 bg-white border border-slate-100 rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] flex flex-col">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
             <h3 className="font-bold text-sm text-slate-900">
               Motivos de Contacto
@@ -593,7 +593,7 @@ export function EfficiencyView({
             )}
           </div>
 
-          <div className="space-y-2.5">
+          <div className="space-y-2.5 max-h-[540px] overflow-y-auto pr-1">
             {byMotivo.length > 0 ? (
               byMotivo.map((m) => (
                 <div
@@ -639,7 +639,7 @@ export function EfficiencyView({
         </div>
 
         {/* Ranking de Partners por Reclamos / Incumplimiento en Chat */}
-        <div className="lg:col-span-6 bg-white border border-slate-100 rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)]">
+        <div className="lg:col-span-6 bg-white border border-slate-100 rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] flex flex-col">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
             <div className="flex items-center gap-2">
               <Building2 size={16} className="text-[#FF5500]" />
@@ -663,9 +663,9 @@ export function EfficiencyView({
             )}
           </div>
 
-          <div className="overflow-x-auto max-h-[320px]">
+          <div className="overflow-x-auto overflow-y-auto max-h-[540px] pr-1">
             <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-white">
+              <thead className="sticky top-0 bg-white z-10">
                 <tr className="text-slate-400 border-b border-slate-100 text-[10px] font-bold uppercase">
                   <th className="py-2 text-left">Partner</th>
                   <th className="py-2 text-center">Chats</th>
@@ -675,7 +675,7 @@ export function EfficiencyView({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 tabular-nums">
-                {byPartner.slice(0, 10).map((p) => {
+                {byPartner.map((p) => {
                   const selected = filterPartner === p.partner;
                   return (
                     <tr
