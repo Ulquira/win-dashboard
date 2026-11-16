@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
 import { OperationsKpis } from '../types/dashboard';
+import { ExpandableCard } from '../components/ExpandableCard';
 
 interface OperationsDashboardViewProps {
     startDate: string;

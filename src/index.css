@@ -135,3 +135,40 @@ select {
 .dark svg line[stroke="#F1F5F9"] {
   stroke: #1E293B !important;
 }
+
+/* Modo Enfoque Embebido en Pantalla (Estilo Power BI Focus Mode sin Pop-up) */
+main:has(.bi-focus-active) > :not(header):not(:has(.bi-focus-active)):not(.bi-focus-active) {
+  display: none !important;
+}
+
+main :has(.bi-focus-active) > :not(:has(.bi-focus-active)):not(.bi-focus-active) {
+  display: none !important;
+}
+
+main :has(> .bi-focus-active) {
+  display: block !important;
+}
+
+.bi-focus-active {
+  width: 100% !important;
+  min-height: calc(100vh - 135px) !important;
+  padding: 1.75rem 2.25rem !important;
+}
+
+.bi-focus-active .h-44,
+.bi-focus-active .h-48 {
+  height: 62vh !important;
+  min-height: 420px !important;
+}
+
+.bi-focus-active .w-32.h-32 {
+  width: 15rem !important;
+  height: 15rem !important;
+}
+
+.bi-focus-active .max-h-64,
+.bi-focus-active .max-h-72,
+.bi-focus-active .max-h-80,
+.bi-focus-active .max-h-96 {
+  max-height: 70vh !important;
+}

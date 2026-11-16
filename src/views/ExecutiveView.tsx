@@ -1,10 +1,11 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Filter, Info, ClipboardList, Send, CheckCheck, MapPin,
   TrendingUp, Settings, Laptop, Crown, Gem, Award,
   AlertTriangle, CheckCircle, LifeBuoy
 } from 'lucide-react';
 import { CalculatedMetrics, EvolutionPoint, PartnerRankItem } from '../types/dashboard';
+import { ExpandableCard } from '../components/ExpandableCard';
 
 interface ExecutiveViewProps {
   calc: CalculatedMetrics;
@@ -12,7 +13,26 @@ interface ExecutiveViewProps {
   partners: PartnerRankItem[];
 }
 
+interface ChartPointItem {
+  x: number;
+  fecha: string;
+  tot: number;
+  env: number;
+  lei: number;
+  trk: number;
+  yWhs: number;
+  yLec: number;
+  yTrkLei: number;
+  yTrk: number;
+  vWhs: string;
+  vLec: string;
+  vTrkLei: string;
+  vTrk: string;
+}
+
 export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps) {
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+
   const chartPolylines = useMemo(() => {
     if (!evolution || evolution.length === 0) {
       return {
@@ -20,18 +40,7 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
         lectura: '20,130 380,130',
         tracking: '20,130 380,130',
         trackingLeidos: '20,130 380,130',
-        points: [] as {
-          x: number;
-          fecha: string;
-          yWhs: number;
-          yLec: number;
-          yTrkLei: number;
-          yTrk: number;
-          vWhs: string;
-          vLec: string;
-          vTrkLei: string;
-          vTrk: string;
-        }[],
+        points: [] as ChartPointItem[],
       };
     }
 
@@ -47,7 +56,7 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
     const trkPts: string[] = [];
     const trkLeiPts: string[] = [];
 
-    const points = evolution.map((pt, idx) => {
+    const points: ChartPointItem[] = evolution.map((pt, idx) => {
       const x = evolution.length === 1 ? 200 : Math.round(22 + (idx / maxIdx) * 356);
       const tot = Number(pt.total || 0);
       const env = Number(pt.enviados || 0);
@@ -72,6 +81,10 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
       return {
         x,
         fecha: pt.fecha,
+        tot,
+        env,
+        lei,
+        trk,
         yWhs,
         yLec,
         yTrk,
@@ -97,8 +110,8 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
       {/* FILA 1: EMBUDO + GRÁFICO + EFICIENCIA */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* 1. Embudo de Interacción */}
-        <div className="lg:col-span-4 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 flex flex-col justify-between overflow-hidden">
-          <div className="border-b border-slate-100 pb-3 mb-4">
+        <ExpandableCard className="lg:col-span-4 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 flex flex-col justify-between overflow-hidden">
+          <div className="border-b border-slate-100 pb-3 mb-4 pr-8">
             <div className="flex items-center gap-2">
               <div className="p-1.5 rounded-lg bg-orange-50 text-[#FF5500]">
                 <Filter size={15} />
@@ -109,7 +122,7 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
             <p className="text-[11px] text-slate-500 mt-1">Desde la orden hasta el ingreso a tracking</p>
           </div>
 
-          <div className="space-y-2.5 my-auto py-1">
+          <div className="space-y-3 my-auto py-2 max-w-4xl mx-auto w-full">
             {/* Paso 1: Órdenes */}
             <div className="flex items-center gap-3">
               <div className="relative flex-1 h-12 flex items-center justify-center">
@@ -208,120 +221,217 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
               </div>
             </div>
           </div>
-        </div>
+        </ExpandableCard>
 
-        {/* 2. Gráfico de Evolución de Indicadores */}
-        <div className="lg:col-span-5 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 flex flex-col justify-between overflow-hidden">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-3">
-            <div className="flex items-center gap-2">
-              <div className="p-1.5 rounded-lg bg-orange-50 text-[#FF5500]">
-                <TrendingUp size={15} />
+        {/* 2. Gráfico de Evolución de Indicadores (Con lienzo panorámico embebido) */}
+        <ExpandableCard className="lg:col-span-5 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 flex flex-col justify-between overflow-hidden">
+          {(isExpanded) => {
+            const svgW = isExpanded ? 960 : 400;
+            const padX = isExpanded ? 36 : 22;
+            const usableW = svgW - padX * 2;
+            const totalPts = chartPolylines.points.length;
+            const maxIdx = Math.max(1, totalPts - 1);
+
+            const scaledPoints = chartPolylines.points.map((pt, idx) => ({
+              ...pt,
+              x: totalPts === 1 ? Math.round(svgW / 2) : Math.round(padX + (idx / maxIdx) * usableW),
+            }));
+
+            const polyWhs = scaledPoints.map((p) => `${p.x},${p.yWhs}`).join(' ');
+            const polyLec = scaledPoints.map((p) => `${p.x},${p.yLec}`).join(' ');
+            const polyTrkLei = scaledPoints.map((p) => `${p.x},${p.yTrkLei}`).join(' ');
+            const polyTrk = scaledPoints.map((p) => `${p.x},${p.yTrk}`).join(' ');
+
+            const maxLabels = isExpanded ? 16 : 6;
+            const step = Math.max(1, Math.ceil(totalPts / maxLabels));
+            const isDense = isExpanded ? totalPts > 35 : totalPts > 16;
+
+            return (
+              <div className="flex flex-col justify-between h-full">
+                <div className={`flex items-center justify-between border-b border-slate-100 pb-3 mb-3 ${isExpanded ? 'pr-44' : 'pr-8'}`}>
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 rounded-lg bg-orange-50 text-[#FF5500]">
+                      <TrendingUp size={15} />
+                    </div>
+                    <h3 className="font-bold text-sm text-slate-900">Evolución de Indicadores Clave</h3>
+                  </div>
+                  <span className="text-[11px] font-medium text-slate-500">
+                    Diario (Últimos {totalPts || 7} días)
+                  </span>
+                </div>
+
+                <div className="relative flex items-center gap-2 h-48 my-auto">
+                  {hoverIdx !== null && scaledPoints[hoverIdx] && (() => {
+                    const activePt = scaledPoints[hoverIdx];
+                    const isRightHalf = activePt.x > svgW / 2;
+                    return (
+                      <div
+                        className={`pointer-events-none absolute top-1 z-30 bg-slate-900/95 text-white rounded-xl px-3.5 py-2.5 shadow-xl border border-slate-700/80 text-xs space-y-1 backdrop-blur-xs transition-all ${
+                          isRightHalf ? 'left-10' : 'right-4'
+                        }`}
+                      >
+                        <div className="font-extrabold text-amber-300 border-b border-white/10 pb-1 flex items-center justify-between gap-4">
+                          <span>Fecha: {activePt.fecha}</span>
+                          <span className="text-slate-300 font-mono">{activePt.tot} OTs</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums">
+                          <span className="text-emerald-400 font-bold">● Envío: {activePt.vWhs}</span>
+                          <span className="text-sky-400 font-bold">● Lectura: {activePt.vLec}</span>
+                          <span className="text-amber-400 font-bold">● Trk s/Lei: {activePt.vTrkLei}</span>
+                          <span className="text-[#FF5500] font-bold">● Trk s/Env: {activePt.vTrk}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  <div className="flex flex-col justify-between h-full py-4 text-[10px] text-slate-400 pr-1 text-right self-stretch">
+                    <span>100%</span><span>80%</span><span>60%</span><span>40%</span><span>20%</span><span>0%</span>
+                  </div>
+
+                  <div
+                    className="flex-1 h-full flex items-center"
+                    onMouseLeave={() => setHoverIdx(null)}
+                  >
+                    <svg viewBox={`0 0 ${svgW} 152`} className="w-full h-44 overflow-visible select-none">
+                      {[15, 38, 61, 84, 107, 130].map((y, idx) => (
+                        <line key={idx} x1="10" y1={y} x2={svgW - 10} y2={y} stroke="#F1F5F9" strokeDasharray="3 3" />
+                      ))}
+
+                      {scaledPoints.map((pt, idx) => {
+                        const isHovered = hoverIdx === idx;
+                        const isStepTick = idx % step === 0 || idx === totalPts - 1;
+                        if (!isStepTick && !isHovered) return null;
+                        return (
+                          <line
+                            key={`v-${idx}`}
+                            x1={pt.x}
+                            y1="15"
+                            x2={pt.x}
+                            y2="130"
+                            stroke={isHovered ? '#94A3B8' : '#F1F5F9'}
+                            strokeWidth={isHovered ? '1.2' : '0.8'}
+                            strokeDasharray={isHovered ? '3 2' : '2 2'}
+                          />
+                        );
+                      })}
+
+                      <polyline fill="none" stroke="#10B981" strokeWidth={isDense ? '2' : '2.4'} points={polyWhs} />
+                      <polyline fill="none" stroke="#0284C7" strokeWidth={isDense ? '2' : '2.4'} points={polyLec} />
+                      <polyline fill="none" stroke="#EAB308" strokeWidth={isDense ? '1.8' : '2'} strokeDasharray="4 3" points={polyTrkLei} />
+                      <polyline fill="none" stroke="#FF5500" strokeWidth={isDense ? '2' : '2.4'} points={polyTrk} />
+
+                      {scaledPoints.map((pt, idx) => {
+                        const isHovered = hoverIdx === idx;
+                        const farEnoughFromEnd = totalPts - 1 - idx >= Math.max(1, Math.floor(step / 2));
+                        const isStepMatch =
+                          idx === 0 ||
+                          idx === totalPts - 1 ||
+                          (idx % step === 0 && farEnoughFromEnd);
+
+                        const showDate = isStepMatch || isHovered;
+                        const showValueLabel = isHovered || (hoverIdx === null && isStepMatch);
+                        const dotRadius = isHovered ? 4.2 : isDense ? 2.2 : 3.2;
+
+                        const closeToBlue = Math.abs(pt.yTrkLei - pt.yLec) < 14;
+                        const closeToOrange = Math.abs(pt.yTrk - pt.yTrkLei) < 14;
+
+                        const yLabelLec = closeToBlue && pt.yLec <= pt.yTrkLei ? pt.yLec - 8 : pt.yLec - 6;
+                        const yLabelTrkLei =
+                          closeToBlue && !closeToOrange ? pt.yTrkLei + 11 : pt.yTrkLei - 6;
+                        const yLabelTrk =
+                          yLabelTrkLei > pt.yTrkLei && Math.abs(pt.yTrk - yLabelTrkLei) < 10
+                            ? pt.yTrk + 14
+                            : pt.yTrk + 12;
+
+                        const labelHalo: React.CSSProperties = {
+                          paintOrder: 'stroke',
+                          stroke: '#FFFFFF',
+                          strokeWidth: '3px',
+                          strokeLinecap: 'round',
+                          strokeLinejoin: 'round',
+                        };
+
+                        const hitWidth = Math.max(6, Math.floor(usableW / Math.max(1, totalPts)));
+                        const fontSizeVal = isExpanded ? '7.5' : '8.2';
+
+                        return (
+                          <g
+                            key={idx}
+                            onMouseEnter={() => setHoverIdx(idx)}
+                            className="cursor-pointer"
+                          >
+                            <rect
+                              x={pt.x - hitWidth / 2}
+                              y={10}
+                              width={hitWidth}
+                              height={138}
+                              fill="transparent"
+                            />
+
+                            {showDate && (
+                              <text
+                                x={pt.x}
+                                y={146}
+                                textAnchor="middle"
+                                fill={isHovered ? '#0F172A' : '#64748B'}
+                                fontSize={isExpanded ? '8' : '9'}
+                                fontWeight={isHovered ? '800' : '600'}
+                                style={labelHalo}
+                              >
+                                {pt.fecha}
+                              </text>
+                            )}
+
+                            <circle cx={pt.x} cy={pt.yWhs} r={dotRadius} fill="#10B981" stroke="#FFFFFF" strokeWidth="1.2" />
+                            <circle cx={pt.x} cy={pt.yLec} r={dotRadius} fill="#0284C7" stroke="#FFFFFF" strokeWidth="1.2" />
+                            <circle cx={pt.x} cy={pt.yTrkLei} r={dotRadius} fill="#EAB308" stroke="#FFFFFF" strokeWidth="1.2" />
+                            <circle cx={pt.x} cy={pt.yTrk} r={dotRadius} fill="#FF5500" stroke="#FFFFFF" strokeWidth="1.2" />
+
+                            {showValueLabel && (
+                              <>
+                                <text x={pt.x} y={pt.yWhs - 6} textAnchor="middle" fill="#047857" fontSize={fontSizeVal} fontWeight="700" style={labelHalo}>
+                                  {pt.vWhs}
+                                </text>
+                                <text x={pt.x} y={yLabelLec} textAnchor="middle" fill="#0369A1" fontSize={fontSizeVal} fontWeight="700" style={labelHalo}>
+                                  {pt.vLec}
+                                </text>
+                                <text x={pt.x} y={yLabelTrkLei} textAnchor="middle" fill="#B45309" fontSize={fontSizeVal} fontWeight="700" style={labelHalo}>
+                                  {pt.vTrkLei}
+                                </text>
+                                <text x={pt.x} y={yLabelTrk} textAnchor="middle" fill="#C2410C" fontSize={fontSizeVal} fontWeight="700" style={labelHalo}>
+                                  {pt.vTrk}
+                                </text>
+                              </>
+                            )}
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-center gap-4 text-xs pt-3 border-t border-slate-100">
+                  <div className="flex items-center gap-1.5 font-medium text-slate-600">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span><span>Envío WHS</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 font-medium text-slate-600">
+                    <span className="w-2.5 h-2.5 rounded-full bg-sky-600"></span><span>Lectura</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 font-medium text-slate-600">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span><span>Tracking (% s/Leído)</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 font-medium text-slate-600">
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#FF5500]"></span><span>Tracking (% s/Env.)</span>
+                  </div>
+                </div>
               </div>
-              <h3 className="font-bold text-sm text-slate-900">Evolución de Indicadores Clave</h3>
-            </div>
-            <span className="text-[11px] font-medium text-slate-500">Diario (Últimos {chartPolylines.points.length || 7} días)</span>
-          </div>
-
-          <div className="flex items-center gap-2 h-48 my-auto">
-            <div className="flex flex-col justify-between h-36 text-[10px] text-slate-400 pr-1 text-right self-start mt-2">
-              <span>100%</span><span>80%</span><span>60%</span><span>40%</span><span>20%</span><span>0%</span>
-            </div>
-
-            <div className="flex-1 h-full flex items-center">
-              <svg viewBox="0 0 400 152" className="w-full h-44 overflow-visible">
-                {[15, 38, 61, 84, 107, 130].map((y, idx) => (
-                  <line key={idx} x1="10" y1={y} x2="390" y2={y} stroke="#F1F5F9" strokeDasharray="3 3" />
-                ))}
-
-                {chartPolylines.points.map((pt, idx) => (
-                  <line key={`v-${idx}`} x1={pt.x} y1="15" x2={pt.x} y2="130" stroke="#F1F5F9" strokeWidth="0.8" strokeDasharray="2 2" />
-                ))}
-
-                <polyline fill="none" stroke="#10B981" strokeWidth="2.4" points={chartPolylines.whs} />
-                <polyline fill="none" stroke="#0284C7" strokeWidth="2.4" points={chartPolylines.lectura} />
-                <polyline fill="none" stroke="#EAB308" strokeWidth="2" strokeDasharray="4 3" points={chartPolylines.trackingLeidos} />
-                <polyline fill="none" stroke="#FF5500" strokeWidth="2.4" points={chartPolylines.tracking} />
-
-                {chartPolylines.points.map((pt, idx) => {
-                  const showLabel = chartPolylines.points.length <= 10 || idx % 2 === 0 || idx === chartPolylines.points.length - 1;
-
-                  // Anti-colisión vertical entre Lectura (azul), Tracking s/Leído (amarillo) y Tracking s/Env (naranja)
-                  const closeToBlue = Math.abs(pt.yTrkLei - pt.yLec) < 14;
-                  const closeToOrange = Math.abs(pt.yTrk - pt.yTrkLei) < 14;
-
-                  const yLabelLec = closeToBlue && pt.yLec <= pt.yTrkLei ? pt.yLec - 8 : pt.yLec - 6;
-                  const yLabelTrkLei =
-                    closeToBlue && !closeToOrange
-                      ? pt.yTrkLei + 11 // Si está pegado al azul, poner el texto amarillo debajo de su punto
-                      : pt.yTrkLei - 6;
-                  const yLabelTrk =
-                    yLabelTrkLei > pt.yTrkLei && Math.abs(pt.yTrk - yLabelTrkLei) < 10
-                      ? pt.yTrk + 14
-                      : pt.yTrk + 12;
-
-                  const labelHalo: React.CSSProperties = {
-                    paintOrder: 'stroke',
-                    stroke: '#FFFFFF',
-                    strokeWidth: '3px',
-                    strokeLinecap: 'round',
-                    strokeLinejoin: 'round',
-                  };
-
-                  return (
-                    <g key={idx}>
-                      <text x={pt.x} y={146} textAnchor="middle" fill="#64748B" fontSize="9.5" fontWeight="600">
-                        {pt.fecha}
-                      </text>
-                      <circle cx={pt.x} cy={pt.yWhs} r="3.5" fill="#10B981" stroke="#FFFFFF" strokeWidth="1.5" />
-                      {showLabel && (
-                        <text x={pt.x} y={pt.yWhs - 6} textAnchor="middle" fill="#047857" fontSize="8.5" fontWeight="700" style={labelHalo}>
-                          {pt.vWhs}
-                        </text>
-                      )}
-                      <circle cx={pt.x} cy={pt.yLec} r="3.5" fill="#0284C7" stroke="#FFFFFF" strokeWidth="1.5" />
-                      {showLabel && (
-                        <text x={pt.x} y={yLabelLec} textAnchor="middle" fill="#0369A1" fontSize="8.5" fontWeight="700" style={labelHalo}>
-                          {pt.vLec}
-                        </text>
-                      )}
-                      <circle cx={pt.x} cy={pt.yTrkLei} r="3.2" fill="#EAB308" stroke="#FFFFFF" strokeWidth="1.5" />
-                      {showLabel && (
-                        <text x={pt.x} y={yLabelTrkLei} textAnchor="middle" fill="#B45309" fontSize="8.5" fontWeight="700" style={labelHalo}>
-                          {pt.vTrkLei}
-                        </text>
-                      )}
-                      <circle cx={pt.x} cy={pt.yTrk} r="3.5" fill="#FF5500" stroke="#FFFFFF" strokeWidth="1.5" />
-                      {showLabel && (
-                        <text x={pt.x} y={yLabelTrk} textAnchor="middle" fill="#C2410C" fontSize="8.5" fontWeight="700" style={labelHalo}>
-                          {pt.vTrk}
-                        </text>
-                      )}
-                    </g>
-                  );
-                })}
-              </svg>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-center gap-4 text-xs pt-3 border-t border-slate-100">
-            <div className="flex items-center gap-1.5 font-medium text-slate-600">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span><span>Envío WHS</span>
-            </div>
-            <div className="flex items-center gap-1.5 font-medium text-slate-600">
-              <span className="w-2.5 h-2.5 rounded-full bg-sky-600"></span><span>Lectura</span>
-            </div>
-            <div className="flex items-center gap-1.5 font-medium text-slate-600">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span><span>Tracking (% s/Leído)</span>
-            </div>
-            <div className="flex items-center gap-1.5 font-medium text-slate-600">
-              <span className="w-2.5 h-2.5 rounded-full bg-[#FF5500]"></span><span>Tracking (% s/Env.)</span>
-            </div>
-          </div>
-        </div>
+            );
+          }}
+        </ExpandableCard>
 
         {/* 3. Eficiencia Operativa */}
-        <div className="lg:col-span-3 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 flex flex-col justify-between space-y-2.5 overflow-hidden">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+        <ExpandableCard className="lg:col-span-3 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 flex flex-col justify-between space-y-2.5 overflow-hidden">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-2.5 pr-8">
             <div className="flex items-center gap-2">
               <div className="p-1.5 rounded-lg bg-orange-50 text-[#FF5500]">
                 <Settings size={15} />
@@ -330,7 +440,6 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
             </div>
           </div>
 
-          {/* Tarjeta 1: SOS (Botón Pulso Soporte) */}
           <div className="bg-rose-50/70 border border-rose-100 rounded-xl p-3 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="p-2 rounded-xl bg-rose-100 text-rose-600">
@@ -356,7 +465,6 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
             </div>
           </div>
 
-          {/* Tarjeta 2: Autogestión Web Real (Tracking sin pulsar SOS) */}
           <div className="bg-sky-50/60 border border-sky-100 rounded-xl p-3 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="p-2 rounded-xl bg-sky-100 text-sky-700">
@@ -380,7 +488,6 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
             </div>
           </div>
 
-          {/* Tarjeta 3: Sin envío WSP / Gestión interna */}
           <div className="bg-emerald-50/60 border border-emerald-100 rounded-xl p-2.5 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="p-1.5 rounded-lg bg-emerald-100 text-emerald-700">
@@ -403,20 +510,19 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
               <strong>Autogestión:</strong> ingresaron al tracking sin requerir soporte.
             </span>
           </div>
-        </div>
+        </ExpandableCard>
       </div>
 
       {/* FILA 2: DISTRIBUCIÓN ESTADO + SEGMENTOS + RANKING PARTNERS */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-6">
-        {/* 1. Donut Distribución */}
-        <div className="lg:col-span-4 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 overflow-hidden">
-          <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
+        <ExpandableCard className="lg:col-span-4 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 overflow-hidden">
+          <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-4 pr-8">
             <div className="p-1.5 rounded-lg bg-orange-50 text-[#FF5500]">
               <Send size={15} />
             </div>
             <h3 className="font-bold text-sm text-slate-900">Distribución por Estado del Mensaje</h3>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-6 my-auto">
             <div className="relative w-32 h-32 flex items-center justify-center shrink-0">
               <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
                 <circle cx="18" cy="18" r="14" fill="none" stroke="#10B981" strokeWidth="4.5" strokeDasharray="45 100" />
@@ -438,11 +544,10 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
               <StatusRow color="bg-rose-500" label="Fallido (failed)" count={calc.failed} pct={`${calc.failedPct}%`} />
             </div>
           </div>
-        </div>
+        </ExpandableCard>
 
-        {/* 2. Ingreso por Segmento */}
-        <div className="lg:col-span-4 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 flex flex-col justify-between overflow-hidden">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+        <ExpandableCard className="lg:col-span-4 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 flex flex-col justify-between overflow-hidden">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3 pr-8">
             <div className="flex items-center gap-2">
               <div className="p-1.5 rounded-lg bg-orange-50 text-[#FF5500]">
                 <MapPin size={15} />
@@ -453,7 +558,6 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
           </div>
 
           <div className="space-y-4 my-auto py-2">
-            {/* Alto Valor */}
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <div className="flex items-center gap-2">
@@ -478,7 +582,6 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
               </div>
             </div>
 
-            {/* Preferente */}
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <div className="flex items-center gap-2">
@@ -503,11 +606,10 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
               </div>
             </div>
           </div>
-        </div>
+        </ExpandableCard>
 
-        {/* 3. Ranking de Partners (CSAT) */}
-        <div className="md:col-span-2 lg:col-span-4 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 overflow-hidden">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-3">
+        <ExpandableCard className="md:col-span-2 lg:col-span-4 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 overflow-hidden">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-3 pr-8">
             <div className="flex items-center gap-2">
               <div className="p-1.5 rounded-lg bg-orange-50 text-[#FF5500]">
                 <Award size={15} />
@@ -541,13 +643,13 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
               </tbody>
             </table>
           </div>
-        </div>
+        </ExpandableCard>
       </div>
 
       {/* FILA 3: ALERTAS OPERATIVAS & OPORTUNIDADES */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-8 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 overflow-hidden">
-          <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-3">
+        <ExpandableCard className="lg:col-span-8 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 overflow-hidden">
+          <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-3 pr-8">
             <div className="p-1.5 rounded-lg bg-rose-50 text-rose-600">
               <AlertTriangle size={15} />
             </div>
@@ -591,10 +693,10 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
               </tbody>
             </table>
           </div>
-        </div>
+        </ExpandableCard>
 
-        <div className="lg:col-span-4 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 flex flex-col justify-between overflow-hidden">
-          <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-3">
+        <ExpandableCard className="lg:col-span-4 bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-5 sm:p-6 flex flex-col justify-between overflow-hidden">
+          <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-3 pr-8">
             <div className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600">
               <CheckCircle size={15} />
             </div>
@@ -614,7 +716,7 @@ export function ExecutiveView({ calc, evolution, partners }: ExecutiveViewProps)
               <span>Mantener la satisfacción de partners ≥ 4,5 (≥ 92% CSAT).</span>
             </li>
           </ul>
-        </div>
+        </ExpandableCard>
       </div>
     </div>
   );

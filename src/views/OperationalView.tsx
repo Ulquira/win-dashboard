@@ -1,6 +1,7 @@
 import React from 'react';
 import { Calendar, Send, Activity, MapPin, Layers } from 'lucide-react';
 import { CalculatedMetrics, KpiData } from '../types/dashboard';
+import { ExpandableCard } from '../components/ExpandableCard';
 
 interface OperationalViewProps {
   calc: CalculatedMetrics;
