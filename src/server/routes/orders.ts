@@ -185,36 +185,55 @@ router.get('/orders/search', async (req: Request, res: Response) => {
 
     if (pageIds.length > 0) {
       const idPh = pageIds.map(() => '?').join(',');
-      rowsResult = await pool.query(
-        `
-        SELECT 
-          v.*,
-          DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_solicitud_fmt,
-          w.\`Número Documento\` AS numero_documento,
-          w.\`Tipo Documento\` AS tipo_documento,
-          w.CodiSeguiClien AS codi_segui_clien,
-          w.CodiClien AS codi_clien,
-          w.CodiSegui AS codi_segui_ot,
-          w.Cuadrilla AS cuadrilla_completa,
-          w.Proveedeor AS proveedor_ot,
-          w.Direccion AS direccion_cliente,
-          w.IdenServi AS plan_contratado,
-          w.Email AS email_cliente,
-          w.\`Diagnóstico Técnico\` AS diagnostico_tecnico,
-          w.\`Observaciones Tareas\` AS observaciones_tareas,
-          w.\`Historial Estados\` AS historial_estados,
-          w.\`Datos Técnicos\` AS datos_tecnicos,
-          w.Georeferencia AS georeferencia_cliente,
-          w.Georeferencia_tecnico AS georeferencia_tecnico,
-          w.\`Motivo Finalización\` AS motivo_finalizacion,
-          w.\`Usuario Asignó\` AS usuario_asigno
-        FROM mat_funnel_casos_360 v
-        LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
-        WHERE v.orden_id IN (${idPh})
-        ORDER BY FIELD(v.orden_id, ${idPh})
-        `,
-        [...pageIds, ...pageIds]
-      );
+      try {
+        rowsResult = await pool.query(
+          `
+          SELECT 
+            v.*,
+            DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_solicitud_fmt,
+            COALESCE(w.\`Número Documento\`, v.ops_num_doc) AS numero_documento,
+            w.\`Tipo Documento\` AS tipo_documento,
+            COALESCE(w.CodiSeguiClien, v.ops_codi_segui_clien) AS codi_segui_clien,
+            COALESCE(w.CodiClien, v.ops_codi_clien) AS codi_clien,
+            w.CodiSegui AS codi_segui_ot,
+            COALESCE(w.Cuadrilla, v.ops_cuadrilla, v.cuadrilla) AS cuadrilla_completa,
+            COALESCE(w.Proveedeor, v.ops_partner, v.partner) AS proveedor_ot,
+            w.Direccion AS direccion_cliente,
+            w.IdenServi AS plan_contratado,
+            w.Email AS email_cliente,
+            w.\`Diagnóstico Técnico\` AS diagnostico_tecnico,
+            w.\`Observaciones Tareas\` AS observaciones_tareas,
+            w.\`Historial Estados\` AS historial_estados,
+            w.\`Datos Técnicos\` AS datos_tecnicos,
+            w.Georeferencia AS georeferencia_cliente,
+            w.\`Motivo Finalización\` AS motivo_finalizacion,
+            w.\`Usuario Asignó\` AS usuario_asigno
+          FROM mat_funnel_casos_360 v
+          LEFT JOIN vw_winordetraba w ON w.OrdenId = v.orden_id
+          WHERE v.orden_id IN (${idPh})
+          ORDER BY FIELD(v.orden_id, ${idPh})
+          `,
+          [...pageIds, ...pageIds]
+        );
+      } catch (joinErr: any) {
+        console.warn('⚠️ Fallback sin JOIN a vw_winordetraba en /api/orders/search:', joinErr.message);
+        rowsResult = await pool.query(
+          `
+          SELECT 
+            v.*,
+            DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_solicitud_fmt,
+            v.ops_num_doc AS numero_documento,
+            v.ops_codi_segui_clien AS codi_segui_clien,
+            v.ops_codi_clien AS codi_clien,
+            COALESCE(v.ops_cuadrilla, v.cuadrilla) AS cuadrilla_completa,
+            COALESCE(v.ops_partner, v.partner) AS proveedor_ot
+          FROM mat_funnel_casos_360 v
+          WHERE v.orden_id IN (${idPh})
+          ORDER BY FIELD(v.orden_id, ${idPh})
+          `,
+          [...pageIds, ...pageIds]
+        );
+      }
     }
 
     const rows = (rowsResult?.[0] || []).map((o: any) => ({
@@ -237,8 +256,8 @@ router.get('/orders/search', async (req: Request, res: Response) => {
 });
 
 async function loadTipoServicioCacheIfNeeded(): Promise<void> {
-  const { loadTipoServicioCache } = await import('../services/matFunnel.sync');
-  await loadTipoServicioCache();
+  const { loadTipoServicioCacheIfNeeded: loadIfNeeded } = await import('../services/matFunnel.sync');
+  await loadIfNeeded();
 }
 
 export default router;

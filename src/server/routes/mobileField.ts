@@ -58,9 +58,12 @@ router.post('/mobile/login', async (req: Request, res: Response) => {
 });
 
 // 2. Obtener órdenes reales desde vw_winordetraba mapeadas para la App Móvil
-router.get('/orders/:documentNumber', async (req: Request, res: Response) => {
+router.get('/orders/:documentNumber', async (req: Request, res: Response, next) => {
   try {
     const doc = String(req.params.documentNumber || '').trim();
+    if (doc.toLowerCase() === 'search') {
+      return next();
+    }
 
     const [orders]: any = await pool.query(
       `SELECT

@@ -54,6 +54,8 @@ app.use('/api', csatRoutes);
 app.use('/api', efficiencyRoutes);
 app.use('/api', filtersRoutes);
 app.use('/api', liveChatRoutes);
+app.use('/api', ordersRoutes);
+app.use('/api', mobileFieldRoutes);
 
 // Middleware global de manejo de errores
 app.use(errorHandler);
