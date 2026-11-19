@@ -51,15 +51,25 @@ export function CsatView({
 
   const responses: any[] = csatData?.responses || [];
 
-  // Recalculo reactivo en memoria (0 ms) al alternar Servicio, Partner o Comentarios
+  // Recalculo reactivo en memoria (0 ms) al alternar 1 o varios Servicios, Partner o Comentarios
   const { kpis, distribution, byPartner, filteredResponses } = useMemo(() => {
-    const isSpecificService = Boolean(
-      service && service !== 'Todos los servicios' && !service.includes(',')
+    const selectedSet = new Set(
+      !service || service === 'Todos los servicios' || service === 'Todos'
+        ? []
+        : service
+            .split(',')
+            .map((s) => s.trim().toUpperCase())
+            .filter(Boolean)
     );
+    const isSpecificService = selectedSet.size > 0;
 
     const serviceFiltered = isSpecificService
-      ? responses.filter(
-          (r) => String(r.servicio_tipo || r.tipo_operacion_calc || '').toUpperCase() === service.toUpperCase()
+      ? responses.filter((r) =>
+          selectedSet.has(
+            String(r.servicio_tipo || r.tipo_operacion_calc || '')
+              .trim()
+              .toUpperCase()
+          )
         )
       : responses;
 

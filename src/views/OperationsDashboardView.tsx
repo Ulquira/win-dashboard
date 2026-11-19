@@ -65,19 +65,218 @@ export function OperationsDashboardView({
             ? opsData.error || 'No se pudo cargar /api/operations'
             : null;
 
-    // Selección reactiva en memoria (0 ms) al alternar entre Servicios
+    // Selección reactiva en memoria (0 ms) al alternar 1 o múltiples Servicios
     const activeSlice = useMemo(() => {
         if (!opsData) return null;
-        if (
-            service &&
-            service !== 'Todos los servicios' &&
-            !service.includes(',') &&
-            opsData.byService &&
-            opsData.byService[service]
-        ) {
-            return opsData.byService[service];
+        if (!opsData.byService || !service || service === 'Todos los servicios' || service === 'Todos') {
+            return opsData;
         }
-        return opsData;
+
+        const selectedList = service
+            .split(',')
+            .map((s) => s.trim().toUpperCase())
+            .filter((s) => Boolean(s) && Boolean(opsData.byService[s]));
+
+        if (selectedList.length === 0) return opsData;
+        if (selectedList.length === 1) return opsData.byService[selectedList[0]];
+
+        // Combinar en memoria los slices de los 2 o más servicios seleccionados
+        const slices = selectedList.map((s) => opsData.byService[s]);
+
+        let total_ordenes = 0;
+        let finalizadas = 0;
+        let en_curso = 0;
+        let agendadas = 0;
+        let canceladas = 0;
+        let cuadrillas_activas = 0;
+
+        const estadoMap = new Map<string, { estado: string; total: number; cuadrillas: number }>();
+        const dailyMap = new Map<string, any>();
+        const partnerMap = new Map<string, any>();
+        const zonaMap = new Map<string, any>();
+        const cuadMap = new Map<string, any>();
+        const motivoTrabMap = new Map<string, any>();
+        const motivoFinMap = new Map<string, any>();
+
+        for (const sl of slices) {
+            const k = sl?.kpis;
+            if (k) {
+                total_ordenes += Number(k.total_ordenes || 0);
+                finalizadas += Number(k.finalizadas || 0);
+                en_curso += Number(k.en_curso || 0);
+                agendadas += Number(k.agendadas || 0);
+                canceladas += Number(k.canceladas || 0);
+                cuadrillas_activas += Number(k.cuadrillas_activas || 0);
+            }
+
+            for (const st of sl?.byEstado || []) {
+                const prev = estadoMap.get(st.estado) || { estado: st.estado, total: 0, cuadrillas: 0 };
+                prev.total += Number(st.total || 0);
+                prev.cuadrillas += Number(st.cuadrillas || 0);
+                estadoMap.set(st.estado, prev);
+            }
+
+            for (const d of sl?.daily || []) {
+                const prev = dailyMap.get(d.raw_date) || {
+                    raw_date: d.raw_date,
+                    fecha: d.fecha,
+                    fecha_full: d.fecha_full,
+                    total: 0,
+                    finalizadas: 0,
+                    en_curso: 0,
+                    agendadas: 0,
+                    canceladas: 0,
+                    cuadrillas: 0,
+                };
+                prev.total += Number(d.total || 0);
+                prev.finalizadas += Number(d.finalizadas || 0);
+                prev.en_curso += Number(d.en_curso || 0);
+                prev.agendadas += Number(d.agendadas || 0);
+                prev.canceladas += Number(d.canceladas || 0);
+                prev.cuadrillas += Number(d.cuadrillas || 0);
+                dailyMap.set(d.raw_date, prev);
+            }
+
+            for (const p of sl?.byPartner || []) {
+                const prev = partnerMap.get(p.partner) || {
+                    partner: p.partner,
+                    total: 0,
+                    finalizadas: 0,
+                    en_curso: 0,
+                    agendadas: 0,
+                    canceladas: 0,
+                    cuadrillas: 0,
+                };
+                prev.total += Number(p.total || 0);
+                prev.finalizadas += Number(p.finalizadas || 0);
+                prev.en_curso += Number(p.en_curso || 0);
+                prev.agendadas += Number(p.agendadas || 0);
+                prev.canceladas += Number(p.canceladas || 0);
+                prev.cuadrillas += Number(p.cuadrillas || 0);
+                partnerMap.set(p.partner, prev);
+            }
+
+            for (const z of sl?.byZona || []) {
+                const prev = zonaMap.get(z.zona) || {
+                    zona: z.zona,
+                    total: 0,
+                    finalizadas: 0,
+                    en_curso: 0,
+                    agendadas: 0,
+                    canceladas: 0,
+                    cuadrillas: 0,
+                };
+                prev.total += Number(z.total || 0);
+                prev.finalizadas += Number(z.finalizadas || 0);
+                prev.en_curso += Number(z.en_curso || 0);
+                prev.agendadas += Number(z.agendadas || 0);
+                prev.canceladas += Number(z.canceladas || 0);
+                prev.cuadrillas += Number(z.cuadrillas || 0);
+                zonaMap.set(z.zona, prev);
+            }
+
+            for (const c of sl?.topCuadrillas || []) {
+                const prev = cuadMap.get(c.cuadrilla) || {
+                    cuadrilla: c.cuadrilla,
+                    partner: c.partner,
+                    total: 0,
+                    finalizadas: 0,
+                    en_curso: 0,
+                    canceladas: 0,
+                };
+                prev.total += Number(c.total || 0);
+                prev.finalizadas += Number(c.finalizadas || 0);
+                prev.en_curso += Number(c.en_curso || 0);
+                prev.canceladas += Number(c.canceladas || 0);
+                cuadMap.set(c.cuadrilla, prev);
+            }
+
+            for (const mt of sl?.byMotivoTrabajo || []) {
+                const prev = motivoTrabMap.get(mt.motivo_trabajo) || {
+                    motivo_trabajo: mt.motivo_trabajo,
+                    segmento: mt.segmento,
+                    tipo_operacion: mt.tipo_operacion,
+                    total: 0,
+                    finalizadas: 0,
+                    canceladas: 0,
+                    cuadrillas: 0,
+                };
+                prev.total += Number(mt.total || 0);
+                prev.finalizadas += Number(mt.finalizadas || 0);
+                prev.canceladas += Number(mt.canceladas || 0);
+                prev.cuadrillas += Number(mt.cuadrillas || 0);
+                motivoTrabMap.set(mt.motivo_trabajo, prev);
+            }
+
+            for (const mf of sl?.byMotivoFin || []) {
+                const prev = motivoFinMap.get(mf.motivo_fin) || {
+                    motivo_fin: mf.motivo_fin,
+                    total: 0,
+                    finalizadas: 0,
+                    canceladas: 0,
+                };
+                prev.total += Number(mf.total || 0);
+                prev.finalizadas += Number(mf.finalizadas || 0);
+                prev.canceladas += Number(mf.canceladas || 0);
+                motivoFinMap.set(mf.motivo_fin, prev);
+            }
+        }
+
+        return {
+            ...opsData,
+            kpis: {
+                total_ordenes,
+                finalizadas,
+                en_curso,
+                agendadas,
+                canceladas,
+                cuadrillas_activas,
+                partners_activos: partnerMap.size,
+                zonas_activas: zonaMap.size,
+                efectividad_pct: total_ordenes > 0 ? Number(((finalizadas / total_ordenes) * 100).toFixed(1)) : 0,
+                cancelacion_pct: total_ordenes > 0 ? Number(((canceladas / total_ordenes) * 100).toFixed(1)) : 0,
+                prod_ot_por_cuadrilla: cuadrillas_activas > 0 ? Number((total_ordenes / cuadrillas_activas).toFixed(1)) : 0,
+                prod_fin_por_cuadrilla: cuadrillas_activas > 0 ? Number((finalizadas / cuadrillas_activas).toFixed(1)) : 0,
+            },
+            byEstado: Array.from(estadoMap.values()).sort((a, b) => b.total - a.total),
+            daily: Array.from(dailyMap.values())
+                .sort((a, b) => String(a.raw_date).localeCompare(String(b.raw_date)))
+                .map((d) => ({
+                    ...d,
+                    efectividad_pct: d.total > 0 ? Number(((d.finalizadas / d.total) * 100).toFixed(1)) : 0,
+                    prod_total: d.cuadrillas > 0 ? Number((d.total / d.cuadrillas).toFixed(1)) : 0,
+                    prod_fin: d.cuadrillas > 0 ? Number((d.finalizadas / d.cuadrillas).toFixed(1)) : 0,
+                })),
+            byPartner: Array.from(partnerMap.values())
+                .map((p) => ({
+                    ...p,
+                    efectividad_pct: p.total > 0 ? Number(((p.finalizadas / p.total) * 100).toFixed(1)) : 0,
+                    prod_total: p.cuadrillas > 0 ? Number((p.total / p.cuadrillas).toFixed(1)) : 0,
+                    prod_fin: p.cuadrillas > 0 ? Number((p.finalizadas / p.cuadrillas).toFixed(1)) : 0,
+                }))
+                .sort((a, b) => b.total - a.total),
+            byZona: Array.from(zonaMap.values())
+                .map((z) => ({
+                    ...z,
+                    efectividad_pct: z.total > 0 ? Number(((z.finalizadas / z.total) * 100).toFixed(1)) : 0,
+                    prod_fin: z.cuadrillas > 0 ? Number((z.finalizadas / z.cuadrillas).toFixed(1)) : 0,
+                }))
+                .sort((a, b) => b.total - a.total)
+                .slice(0, 30),
+            topCuadrillas: Array.from(cuadMap.values())
+                .map((c) => ({
+                    ...c,
+                    efectividad_pct: c.total > 0 ? Number(((c.finalizadas / c.total) * 100).toFixed(1)) : 0,
+                }))
+                .sort((a, b) => b.finalizadas - a.finalizadas || b.total - a.total)
+                .slice(0, 15),
+            byMotivoTrabajo: Array.from(motivoTrabMap.values())
+                .sort((a, b) => b.total - a.total)
+                .slice(0, 15),
+            byMotivoFin: Array.from(motivoFinMap.values())
+                .sort((a, b) => b.total - a.total)
+                .slice(0, 10),
+        };
     }, [opsData, service]);
 
     const kpis: OperationsKpis | null = activeSlice?.kpis || null;
