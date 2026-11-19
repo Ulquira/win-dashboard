@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../config/db';
 import { cacheGet, cacheSet } from '../config/cache';
-import { buildStrictOrderTypeSql } from '../domain/index';
+import { buildStrictOrderTypeSql, getVirtualTipoOperacionSql } from '../domain/index';
 import { requireAuth, enforceRoleServiceScope } from '../auth/middleware';
 import { getServicioToTipoMap } from '../services/matFunnel.sync';
 import { loadTipoServicioCacheIfNeeded, syncMatFunnelIncremental } from '../services/matFunnel.sync';
@@ -107,12 +107,14 @@ router.get('/operations', async (req: Request, res: Response) => {
         const rangeDays = Math.max(1, Math.round((endTarget.getTime() - startTarget.getTime()) / 86400000) + 1);
         const useDirectIndexStream = ignoreDates !== 'true' && rangeDays <= 7 && !searchQ;
 
+        const virtualTipoSql = getVirtualTipoOperacionSql('v');
+
         const [rangeRes, dailyRes, dailyBySrvRes]: any = await Promise.all([
           pool.query(
             useDirectIndexStream
               ? `
             SELECT
-              v.tipo_operacion AS tipo_operacion,
+              ${virtualTipoSql} AS tipo_operacion,
               v.ops_estado AS estado,
               v.ops_partner AS partner,
               v.ops_cuadrilla AS cuadrilla,
@@ -126,7 +128,7 @@ router.get('/operations', async (req: Request, res: Response) => {
             `
               : `
             SELECT
-              v.tipo_operacion AS tipo_operacion,
+              ${virtualTipoSql} AS tipo_operacion,
               v.ops_estado AS estado,
               v.ops_partner AS partner,
               v.ops_cuadrilla AS cuadrilla,
@@ -138,7 +140,7 @@ router.get('/operations', async (req: Request, res: Response) => {
             FROM mat_funnel_casos_360 v ${indexHint}
             ${whereSql}
             GROUP BY
-              v.tipo_operacion,
+              tipo_operacion,
               v.ops_estado,
               v.ops_partner,
               v.ops_cuadrilla,
@@ -174,7 +176,7 @@ router.get('/operations', async (req: Request, res: Response) => {
           pool.query(
             `
             SELECT
-              v.tipo_operacion AS tipo_operacion,
+              ${virtualTipoSql} AS tipo_operacion,
               DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
               MAX(DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m')) AS fecha,
               MAX(DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y')) AS fecha_full,
@@ -186,7 +188,7 @@ router.get('/operations', async (req: Request, res: Response) => {
               COUNT(DISTINCT ${colCuadrilla}) AS cuadrillas
             FROM mat_funnel_casos_360 v ${indexHint}
             ${chartWhereSql}
-            GROUP BY v.fecha_solicitud_dia, v.tipo_operacion
+            GROUP BY v.fecha_solicitud_dia, tipo_operacion
             HAVING raw_date IS NOT NULL
             ORDER BY raw_date ASC
             `,
@@ -537,6 +539,8 @@ router.get('/operations', async (req: Request, res: Response) => {
           'AVER - LIMA',
           'AVER - PROV',
           'POSTVENTA',
+          'GARANTIA',
+          'REITERADA',
         ];
 
         for (const srvName of SERVICIOS_PERMITIDOS) {

@@ -80,6 +80,8 @@ export async function loadTipoServicioCache(): Promise<void> {
     console.warn('⚠️ Aviso leyendo tabla tiposervicio:', err.message);
   }
 
+  map.set('GARANTIA', 'GARANTIA');
+  map.set('REITERADA', 'REITERADA');
   servicioToTipoMap = map;
   tiposUnicosList = [...SERVICIOS_PERMITIDOS];
   queryCache.flushAll();

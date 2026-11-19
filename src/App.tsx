@@ -39,6 +39,8 @@ const DEFAULT_SERVICES = [
   'AVER - LIMA',
   'AVER - PROV',
   'POSTVENTA',
+  'GARANTIA',
+  'REITERADA',
 ];
 
 const EMPTY_ARRAY: any[] = [];

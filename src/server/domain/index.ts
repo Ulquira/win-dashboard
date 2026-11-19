@@ -3,9 +3,8 @@ export {
   type ServicioPermitido,
   HOMOLOGACION_INVERSA_DB,
   homologarTipoServicio,
-} from './homologacion';
-
-export { cleanPartnerName } from './partners';
+  cleanPartnerName,
+} from '../domain';
 
 export {
   type ServiceFilterResult,
@@ -13,4 +12,5 @@ export {
   classifyOrderServiceType,
   resolveProductosFromServiceFilter,
   buildStrictOrderTypeSql,
+  getVirtualTipoOperacionSql,
 } from './serviceTypes';

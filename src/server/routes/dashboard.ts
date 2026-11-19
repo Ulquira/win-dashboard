@@ -104,33 +104,38 @@ router.get('/dashboard', async (req: Request, res: Response) => {
               DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
               DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m') AS fecha,
               DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_full,
-              v.estado_ot,
-              v.sector_operativo,
-              v.tipo_operacion,
-              v.total,
-              v.enviados,
-              v.leidos,
-              v.sent,
-              v.delivered,
-              v.failed,
-              v.no_enviado,
-              v.tracking,
-              v.sos_soporte,
-              v.autogestionados,
-              v.reprogramaciones,
-              v.encuestas,
-              v.leidos_sin_ingreso,
-              v.av_total,
-              v.av_enviados,
-              v.av_leidos,
-              v.av_tracking,
-              v.pref_total,
-              v.pref_enviados,
-              v.pref_leidos,
-              v.pref_tracking
-            FROM mat_daily_kpis_rollup v
+              COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'SIN ESTADO') AS estado_ot,
+              COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR') AS sector_operativo,
+              CASE
+                WHEN UPPER(COALESCE(v.producto, '')) LIKE '%GARANTI%' OR UPPER(COALESCE(v.tipo_trabajo, '')) LIKE '%GARANTI%' THEN 'GARANTIA'
+                WHEN UPPER(COALESCE(v.producto, '')) LIKE '%REITERAD%' OR UPPER(COALESCE(v.tipo_trabajo, '')) LIKE '%REITERAD%' THEN 'REITERADA'
+                ELSE COALESCE(NULLIF(TRIM(v.tipo_operacion), ''), 'OTROS')
+              END AS tipo_operacion,
+              COUNT(*) AS total,
+              SUM(CASE WHEN v.se_envio_wsp = 'SI' THEN 1 ELSE 0 END) AS enviados,
+              SUM(CASE WHEN LOWER(TRIM(COALESCE(v.estado_wsp, ''))) = 'read' THEN 1 ELSE 0 END) AS leidos,
+              SUM(CASE WHEN LOWER(TRIM(COALESCE(v.estado_wsp, ''))) = 'sent' THEN 1 ELSE 0 END) AS sent,
+              SUM(CASE WHEN LOWER(TRIM(COALESCE(v.estado_wsp, ''))) = 'delivered' THEN 1 ELSE 0 END) AS delivered,
+              SUM(CASE WHEN LOWER(TRIM(COALESCE(v.estado_wsp, ''))) = 'failed' THEN 1 ELSE 0 END) AS failed,
+              SUM(CASE WHEN v.se_envio_wsp != 'SI' OR v.estado_wsp IS NULL OR TRIM(v.estado_wsp) = '' OR UPPER(TRIM(v.estado_wsp)) = 'NO ENVIADO' THEN 1 ELSE 0 END) AS no_enviado,
+              SUM(CASE WHEN v.ingreso_tracking = 'SI' THEN 1 ELSE 0 END) AS tracking,
+              SUM(CASE WHEN UPPER(TRIM(COALESCE(v.pulso_soporte, 'NO'))) IN ('SI', 'SÍ', '1', 'TRUE') THEN 1 ELSE 0 END) AS sos_soporte,
+              SUM(CASE WHEN v.ingreso_tracking = 'SI' AND UPPER(TRIM(COALESCE(v.pulso_soporte, 'NO'))) NOT IN ('SI', 'SÍ', '1', 'TRUE') THEN 1 ELSE 0 END) AS autogestionados,
+              SUM(CASE WHEN v.reprogramo = 'SI' THEN 1 ELSE 0 END) AS reprogramaciones,
+              SUM(CASE WHEN v.respondio_encuesta = 'SI' THEN 1 ELSE 0 END) AS encuestas,
+              SUM(CASE WHEN LOWER(TRIM(COALESCE(v.estado_wsp, ''))) = 'read' AND COALESCE(v.ingreso_tracking, 'NO') != 'SI' THEN 1 ELSE 0 END) AS leidos_sin_ingreso,
+              SUM(CASE WHEN UPPER(COALESCE(v.producto, '')) LIKE '%ALTO VALOR%' THEN 1 ELSE 0 END) AS av_total,
+              SUM(CASE WHEN UPPER(COALESCE(v.producto, '')) LIKE '%ALTO VALOR%' AND v.se_envio_wsp = 'SI' THEN 1 ELSE 0 END) AS av_enviados,
+              SUM(CASE WHEN UPPER(COALESCE(v.producto, '')) LIKE '%ALTO VALOR%' AND LOWER(TRIM(COALESCE(v.estado_wsp, ''))) = 'read' THEN 1 ELSE 0 END) AS av_leidos,
+              SUM(CASE WHEN UPPER(COALESCE(v.producto, '')) LIKE '%ALTO VALOR%' AND v.ingreso_tracking = 'SI' THEN 1 ELSE 0 END) AS av_tracking,
+              SUM(CASE WHEN UPPER(COALESCE(v.producto, '')) NOT LIKE '%ALTO VALOR%' THEN 1 ELSE 0 END) AS pref_total,
+              SUM(CASE WHEN UPPER(COALESCE(v.producto, '')) NOT LIKE '%ALTO VALOR%' AND v.se_envio_wsp = 'SI' THEN 1 ELSE 0 END) AS pref_enviados,
+              SUM(CASE WHEN UPPER(COALESCE(v.producto, '')) NOT LIKE '%ALTO VALOR%' AND LOWER(TRIM(COALESCE(v.estado_wsp, ''))) = 'read' THEN 1 ELSE 0 END) AS pref_leidos,
+              SUM(CASE WHEN UPPER(COALESCE(v.producto, '')) NOT LIKE '%ALTO VALOR%' AND v.ingreso_tracking = 'SI' THEN 1 ELSE 0 END) AS pref_tracking
+            FROM mat_funnel_casos_360 v
             WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
             ${filterSql}
+            GROUP BY v.fecha_solicitud_dia, estado_ot, sector_operativo, tipo_operacion
             `,
             [chartStartDate, endDate, ...extraParams]
           ),

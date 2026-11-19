@@ -64,13 +64,14 @@ export function Header({
     } else {
       setSelectedServices([...selectedServices, srv]);
     }
+
   };
 
   const serviceSummaryLabel =
     serviceOptions.length === 1
       ? serviceOptions[0]
       : selectedServices.length === 0
-        ? serviceOptions.length < 5
+        ? serviceOptions.length < 7
           ? `Mis servicios (${serviceOptions.length})`
           : 'Todos los servicios'
         : selectedServices.length === 1

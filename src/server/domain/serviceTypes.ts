@@ -1,8 +1,7 @@
 import {
-  SERVICIOS_PERMITIDOS,
   HOMOLOGACION_INVERSA_DB,
   homologarTipoServicio,
-} from './homologacion';
+} from '../domain';
 
 export interface ServiceFilterResult {
   srvList: string[];
@@ -16,22 +15,37 @@ export interface StrictOrderTypeSqlResult {
 }
 
 /**
- * Clasifica cualquier nombre de producto/motivo de trabajo en uno de los 5 tipos oficiales.
- * Usa primero el mapa cargado desde la tabla `tiposervicio` y, si no está, aplica reglas de negocio.
+ * Expresión SQL virtual que separa GARANTIA y REITERADA leyendo v.producto / v.tipo_trabajo
+ * sin modificar ninguna columna ni tabla de MySQL.
  */
+export function getVirtualTipoOperacionSql(alias: string = 'v'): string {
+  return `CASE
+    WHEN UPPER(COALESCE(${alias}.producto, '')) LIKE '%GARANTI%' OR UPPER(COALESCE(${alias}.tipo_trabajo, '')) LIKE '%GARANTI%' THEN 'GARANTIA'
+    WHEN UPPER(COALESCE(${alias}.producto, '')) LIKE '%REITERAD%' OR UPPER(COALESCE(${alias}.tipo_trabajo, '')) LIKE '%REITERAD%' THEN 'REITERADA'
+    ELSE COALESCE(NULLIF(TRIM(${alias}.tipo_operacion), ''), 'OTROS')
+  END`;
+}
+
 export function classifyOrderServiceType(
   productoRaw?: any,
   tipoOperacionRaw?: any,
-  servicioToTipoMap?: Map<string, string>
+  servicioToTipoMap?: Map<string, string>,
+  tipoTrabajoRaw?: any
 ): string {
-  const tipoOpKey = String(tipoOperacionRaw || '').trim().toUpperCase();
   const prodKey = String(productoRaw || '').trim().toUpperCase();
+  const trabKey = String(tipoTrabajoRaw || '').trim().toUpperCase();
+  const tipoOpKey = String(tipoOperacionRaw || '').trim().toUpperCase();
 
-  // 1. Prioridad: Lo que calculó la vista limpia en tipo_operacion
+  if (prodKey.includes('GARANTI') || trabKey.includes('GARANTI') || tipoOpKey.includes('GARANTI')) {
+    return 'GARANTIA';
+  }
+  if (prodKey.includes('REITERAD') || trabKey.includes('REITERAD') || tipoOpKey.includes('REITERAD')) {
+    return 'REITERADA';
+  }
+
   const fromTipoOp = homologarTipoServicio(tipoOpKey);
   if (fromTipoOp) return fromTipoOp;
 
-  // 2. Si no viene tipo_operacion o no es canónico, consultar mapa
   if (prodKey && servicioToTipoMap?.has(prodKey)) {
     return servicioToTipoMap.get(prodKey)!;
   }
@@ -42,10 +56,6 @@ export function classifyOrderServiceType(
   return 'OTROS';
 }
 
-/**
- * Resuelve estrictamente la lista de productos (de la tabla `tiposervicio`)
- * que pertenecen al tipo de servicio seleccionado.
- */
 export function resolveProductosFromServiceFilter(
   serviceParam: string,
   servicioToTipoMap: Map<string, string>
@@ -58,9 +68,9 @@ export function resolveProductosFromServiceFilter(
   const rawSelected = isAll
     ? []
     : serviceParam
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
 
   const canonicalSet = new Set<string>();
   const dbSrvEquivalents = new Set<string>();
@@ -81,6 +91,12 @@ export function resolveProductosFromServiceFilter(
         productosDelTipo.push(prodKey);
       }
     });
+    if (canonicalSet.has('GARANTIA') && !productosDelTipo.includes('GARANTIA')) {
+      productosDelTipo.push('GARANTIA');
+    }
+    if (canonicalSet.has('REITERADA') && !productosDelTipo.includes('REITERADA')) {
+      productosDelTipo.push('REITERADA');
+    }
   }
 
   return {
@@ -90,10 +106,6 @@ export function resolveProductosFromServiceFilter(
   };
 }
 
-/**
- * Construye el filtro SQL exacto por Tipo de Orden homologado en `tiposervicio`
- * (sin usar `w.TipoTraba` para que nunca se mezclen órdenes de Provincia en Lima)
- */
 export function buildStrictOrderTypeSql(
   serviceParam: string,
   servicioToTipoMap: Map<string, string>,
@@ -111,7 +123,14 @@ export function buildStrictOrderTypeSql(
     return { sql: '1=1', params: [] };
   }
 
-  // Si filtramos sobre v.tipo_operacion (la vista ya calculó canonical: INSTA - LIMA, AVER - LIMA, etc.)
+  if (colTipoOrden === 'v.tipo_operacion') {
+    const placeholders = canonicalList.map(() => '?').join(',');
+    return {
+      sql: `(${getVirtualTipoOperacionSql('v')}) IN (${placeholders})`,
+      params: canonicalList.map((x) => x.toUpperCase()),
+    };
+  }
+
   if (colTipoOrden.includes('tipo_operacion')) {
     const placeholders = canonicalList.map(() => '?').join(',');
     return {
@@ -120,7 +139,6 @@ export function buildStrictOrderTypeSql(
     };
   }
 
-  // Para columnas de producto genérico (como en vw_winordetraba)
   const targetList = productosDelTipo.length > 0 ? productosDelTipo : srvList;
   if (targetList.length === 0) {
     return { sql: '1=1', params: [] };
