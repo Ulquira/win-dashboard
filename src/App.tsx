@@ -429,12 +429,20 @@ export default function App() {
     }
 
     const isFiltering = validSelectedServices.length > 0;
-    const filterSet = new Set(validSelectedServices.map((s) => s.toUpperCase()));
+    const filterSet = new Set(validSelectedServices.map((s) => s.trim().toUpperCase()));
+
+    // Normalizar nombres de campos por si el backend envía *_calc
+    const normalizedAgg = rawAggregated.map((r) => ({
+      ...r,
+      estado_ot: r.estado_ot || r.estado_ot_calc || 'Sin estado',
+      sector_operativo: r.sector_operativo || r.sector_operativo_calc || 'SIN SECTOR',
+      tipo_operacion: String(r.tipo_operacion || r.tipo_operacion_calc || 'OTROS').trim().toUpperCase(),
+    }));
 
     // 1. Filtrar filas agregadas si hay selección específica de tipos de servicio
     const activeRows = isFiltering
-      ? rawAggregated.filter((r) => filterSet.has(String(r.tipo_operacion || '').toUpperCase()))
-      : rawAggregated;
+      ? normalizedAgg.filter((r) => filterSet.has(r.tipo_operacion))
+      : normalizedAgg;
 
     const dailyMap = new Map<string, any>();
     const estadoOtMap = new Map<string, any>();

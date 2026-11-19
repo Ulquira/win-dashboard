@@ -1,8 +1,12 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../config/db';
-import { buildStrictOrderTypeSql, classifyOrderServiceType, cleanPartnerName, homologarTipoServicio, HOMOLOGACION_INVERSA_DB } from '../domain/index';
-import { requireAuth, enforceRoleServiceScope } from '../auth/middleware';
-import { cacheGet, cacheSet } from '../config/cache';
+import {
+  buildStrictOrderTypeSql,
+  classifyOrderServiceType,
+  cleanPartnerName,
+  getVirtualTipoOperacionSql,
+} from '../domain/index';
+import { enforceRoleServiceScope } from '../auth/middleware';
 import {
   loadTipoServicioCacheIfNeeded,
   getServicioToTipoMap,
@@ -26,7 +30,8 @@ router.get('/dashboard', async (req: Request, res: Response) => {
   } = req.query as Record<string, string>;
   const service = enforceRoleServiceScope(req, rawService);
 
-  const cacheKey = `dash_${startDate}_${endDate}_${service}_${zone}`;
+  // Clave v4 para invalidar cualquier caché anterior sin GARANTIA / REITERADA
+  const cacheKey = `dash_v4_${startDate}_${endDate}_${service}_${zone}`;
 
   try {
     const responsePayload = await withSingleFlightSwr(
@@ -39,7 +44,6 @@ router.get('/dashboard', async (req: Request, res: Response) => {
           await syncMatFunnelIncremental(startDate, endDate);
         }
 
-        // Garantizar siempre mínimo 7 días hacia atrás desde endDate para la gráfica evolutiva
         const [ey, em, ed] = endDate.split('-').map(Number);
         const endTarget = new Date(ey, em - 1, ed);
         const min7D = new Date(endTarget);
@@ -91,12 +95,9 @@ router.get('/dashboard', async (req: Request, res: Response) => {
         }
 
         const filterSql = extraFilters.join(' ');
-
-        const virtualTipoSql = `CASE
-          WHEN UPPER(COALESCE(v.producto, '')) LIKE '%GARANTI%' OR UPPER(COALESCE(v.tipo_trabajo, '')) LIKE '%GARANTI%' THEN 'GARANTIA'
-          WHEN UPPER(COALESCE(v.producto, '')) LIKE '%REITERAD%' OR UPPER(COALESCE(v.tipo_trabajo, '')) LIKE '%REITERAD%' THEN 'REITERADA'
-          ELSE COALESCE(NULLIF(TRIM(v.tipo_operacion), ''), 'OTROS')
-        END`;
+        const virtualTipoSql = getVirtualTipoOperacionSql('v');
+        const estadoExpr = `COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'SIN ESTADO')`;
+        const sectorExpr = `COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR')`;
 
         const [
           aggregatedResult,
@@ -110,9 +111,9 @@ router.get('/dashboard', async (req: Request, res: Response) => {
               DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
               MAX(DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m')) AS fecha,
               MAX(DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y')) AS fecha_full,
-              COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'SIN ESTADO') AS estado_ot_calc,
-              COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR') AS sector_operativo_calc,
-              ${virtualTipoSql} AS tipo_operacion_calc,
+              ${estadoExpr} AS estado_ot,
+              ${sectorExpr} AS sector_operativo,
+              ${virtualTipoSql} AS tipo_operacion,
               COUNT(*) AS total,
               SUM(CASE WHEN v.se_envio_wsp = 'SI' THEN 1 ELSE 0 END) AS enviados,
               SUM(CASE WHEN LOWER(TRIM(COALESCE(v.estado_wsp, ''))) = 'read' THEN 1 ELSE 0 END) AS leidos,
@@ -137,7 +138,11 @@ router.get('/dashboard', async (req: Request, res: Response) => {
             FROM mat_funnel_casos_360 v
             WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
             ${filterSql}
-            GROUP BY v.fecha_solicitud_dia, estado_ot_calc, sector_operativo_calc, tipo_operacion_calc
+            GROUP BY
+              v.fecha_solicitud_dia,
+              ${estadoExpr},
+              ${sectorExpr},
+              ${virtualTipoSql}
             `,
             [chartStartDate, endDate, ...extraParams]
           ),
@@ -161,8 +166,8 @@ router.get('/dashboard', async (req: Request, res: Response) => {
               `
               SELECT 
                 COALESCE(NULLIF(TRIM(v.ops_partner), ''), NULLIF(TRIM(v.partner), ''), 'SIN PARTNER') AS partner_raw,
-                ${virtualTipoSql} AS tipo_operacion_calc,
-                COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR') AS sector_operativo_calc,
+                ${virtualTipoSql} AS tipo_operacion,
+                ${sectorExpr} AS sector_operativo,
                 COUNT(DISTINCT ea.id) AS surveys,
                 AVG(COALESCE(ea.satisfaccion_atencion, ea.satisfaccion_experiencia) + 0) AS avg_score
               FROM encuesta_app ea
@@ -175,7 +180,10 @@ router.get('/dashboard', async (req: Request, res: Response) => {
               WHERE ea.fecha_registro >= CONCAT(?, ' 00:00:00')
                 AND ea.fecha_registro <= CONCAT(?, ' 23:59:59')
               ${encFilters.join(' ')}
-              GROUP BY partner_raw, tipo_operacion_calc, sector_operativo_calc
+              GROUP BY
+                COALESCE(NULLIF(TRIM(v.ops_partner), ''), NULLIF(TRIM(v.partner), ''), 'SIN PARTNER'),
+                ${virtualTipoSql},
+                ${sectorExpr}
               ORDER BY avg_score DESC, surveys DESC
               `,
               [startDate, endDate, ...encParams]
@@ -188,7 +196,7 @@ router.get('/dashboard', async (req: Request, res: Response) => {
 
         const totalReprogReal = Number(reprogResult?.[0]?.[0]?.total_reprog || 0);
 
-        let encRowsRaw: any[] = encResult?.[0] || [];
+        const encRowsRaw: any[] = encResult?.[0] || [];
         const encuestasByService = encRowsRaw.map((r: any) => ({
           partner: cleanPartnerName(r.partner_raw),
           tipo_operacion: classifyOrderServiceType(r.tipo_operacion, r.tipo_operacion),
@@ -266,6 +274,8 @@ router.get('/dashboard', async (req: Request, res: Response) => {
             tracking: 0,
             sos_soporte: 0,
             autogestionados: 0,
+            reprogramaciones: 0,
+            encuestas: 0,
             leidos_sin_ingreso: 0,
             av_total: 0,
             av_enviados: 0,
@@ -286,6 +296,8 @@ router.get('/dashboard', async (req: Request, res: Response) => {
           day.tracking += trk;
           day.sos_soporte += Number(r.sos_soporte || 0);
           day.autogestionados += Number(r.autogestionados || 0);
+          day.reprogramaciones += Number(r.reprogramaciones || 0);
+          day.encuestas += Number(r.encuestas || 0);
           day.leidos_sin_ingreso += Number(r.leidos_sin_ingreso || 0);
           day.av_total += Number(r.av_total || 0);
           day.av_enviados += Number(r.av_enviados || 0);
@@ -379,7 +391,7 @@ router.get('/dashboard', async (req: Request, res: Response) => {
           }
         );
 
-        kpis.reprogramaciones = totalReprogReal;
+        kpis.reprogramaciones = totalReprogReal || kpis.reprogramaciones;
         kpis.encuestas_respondidas = totalEncuestasReal;
         kpis.csat_avg = Number(csatAvgGlobal.toFixed(2));
 
