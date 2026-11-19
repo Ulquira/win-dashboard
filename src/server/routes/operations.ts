@@ -1,14 +1,17 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../config/db';
-import { cacheGet, cacheSet } from '../config/cache';
-import { buildStrictOrderTypeSql, getVirtualTipoOperacionSql } from '../domain/index';
-import { requireAuth, enforceRoleServiceScope } from '../auth/middleware';
-import { getServicioToTipoMap } from '../services/matFunnel.sync';
-import { loadTipoServicioCacheIfNeeded, syncMatFunnelIncremental } from '../services/matFunnel.sync';
+import { buildStrictOrderTypeSql, getVirtualTipoOperacionSql, SERVICIOS_PERMITIDOS } from '../domain/index';
+import { enforceRoleServiceScope } from '../auth/middleware';
+import {
+  getServicioToTipoMap,
+  loadTipoServicioCacheIfNeeded,
+  syncMatFunnelIncremental,
+  withSingleFlightSwr,
+} from '../services/matFunnel.sync';
 
 const router = Router();
 
-// GET /api/operations -> Endpoint exclusivo de Operaciones
+// GET /api/operations -> Endpoint exclusivo de Operaciones de Campo
 router.get('/operations', async (req: Request, res: Response) => {
   const startTime = Date.now();
   const todayDefault = new Date().toLocaleDateString('en-CA');
@@ -23,7 +26,7 @@ router.get('/operations', async (req: Request, res: Response) => {
   const service = enforceRoleServiceScope(req, rawService);
 
   const searchQ = String(q || '').trim();
-  const cacheKey = `ops_raw_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
+  const cacheKey = `ops_v4_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
 
   try {
     await loadTipoServicioCacheIfNeeded();
@@ -38,9 +41,7 @@ router.get('/operations', async (req: Request, res: Response) => {
         }
 
         const colEstado = `v.ops_estado`;
-        const colPartner = `v.ops_partner`;
         const colCuadrilla = `v.ops_cuadrilla`;
-        const colZona = `v.ops_zona`;
 
         const [ey, em, ed] = endDate.split('-').map(Number);
         const endTarget = new Date(ey, em - 1, ed);
@@ -114,7 +115,7 @@ router.get('/operations', async (req: Request, res: Response) => {
             useDirectIndexStream
               ? `
             SELECT
-              ${virtualTipoSql} AS tipo_operacion,
+              ${virtualTipoSql} AS tipo_operacion_virtual,
               v.ops_estado AS estado,
               v.ops_partner AS partner,
               v.ops_cuadrilla AS cuadrilla,
@@ -128,7 +129,7 @@ router.get('/operations', async (req: Request, res: Response) => {
             `
               : `
             SELECT
-              ${virtualTipoSql} AS tipo_operacion,
+              ${virtualTipoSql} AS tipo_operacion_virtual,
               v.ops_estado AS estado,
               v.ops_partner AS partner,
               v.ops_cuadrilla AS cuadrilla,
@@ -140,7 +141,7 @@ router.get('/operations', async (req: Request, res: Response) => {
             FROM mat_funnel_casos_360 v ${indexHint}
             ${whereSql}
             GROUP BY
-              tipo_operacion,
+              tipo_operacion_virtual,
               v.ops_estado,
               v.ops_partner,
               v.ops_cuadrilla,
@@ -176,7 +177,7 @@ router.get('/operations', async (req: Request, res: Response) => {
           pool.query(
             `
             SELECT
-              ${virtualTipoSql} AS tipo_operacion,
+              ${virtualTipoSql} AS tipo_operacion_virtual,
               DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
               MAX(DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m')) AS fecha,
               MAX(DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y')) AS fecha_full,
@@ -188,7 +189,7 @@ router.get('/operations', async (req: Request, res: Response) => {
               COUNT(DISTINCT ${colCuadrilla}) AS cuadrillas
             FROM mat_funnel_casos_360 v ${indexHint}
             ${chartWhereSql}
-            GROUP BY v.fecha_solicitud_dia, tipo_operacion
+            GROUP BY v.fecha_solicitud_dia, tipo_operacion_virtual
             HAVING raw_date IS NOT NULL
             ORDER BY raw_date ASC
             `,
@@ -526,22 +527,18 @@ router.get('/operations', async (req: Request, res: Response) => {
           };
         };
 
-        const allRangeRows: any[] = rangeRes?.[0] || [];
+        const allRangeRows: any[] = (rangeRes?.[0] || []).map((r: any) => ({
+          ...r,
+          tipo_operacion: r.tipo_operacion_virtual || r.tipo_operacion,
+        }));
         const allDailyRows: any[] = dailyRes?.[0] || [];
-        const allDailyBySrvRows: any[] = dailyBySrvRes?.[0] || [];
+        const allDailyBySrvRows: any[] = (dailyBySrvRes?.[0] || []).map((d: any) => ({
+          ...d,
+          tipo_operacion: d.tipo_operacion_virtual || d.tipo_operacion,
+        }));
 
         const mainSlice = buildOpsSlice(allRangeRows, allDailyRows);
         const byService: Record<string, any> = {};
-
-        const SERVICIOS_PERMITIDOS = [
-          'INSTA - LIMA',
-          'INSTA - PROV',
-          'AVER - LIMA',
-          'AVER - PROV',
-          'POSTVENTA',
-          'GARANTIA',
-          'REITERADA',
-        ];
 
         for (const srvName of SERVICIOS_PERMITIDOS) {
           const srvRangeRows = allRangeRows.filter(
@@ -569,15 +566,5 @@ router.get('/operations', async (req: Request, res: Response) => {
     return res.status(500).json({ ok: false, error: error.message });
   }
 });
-
-async function withSingleFlightSwr<T>(
-  key: string,
-  ttlSeconds: number,
-  forceRefresh: boolean,
-  computeFn: () => Promise<T>
-): Promise<T> {
-  const { withSingleFlightSwr: shared } = await import('../services/matFunnel.sync');
-  return shared(key, ttlSeconds, forceRefresh, computeFn);
-}
 
 export default router;
