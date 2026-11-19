@@ -92,6 +92,12 @@ router.get('/dashboard', async (req: Request, res: Response) => {
 
         const filterSql = extraFilters.join(' ');
 
+        const virtualTipoSql = `CASE
+          WHEN UPPER(COALESCE(v.producto, '')) LIKE '%GARANTI%' OR UPPER(COALESCE(v.tipo_trabajo, '')) LIKE '%GARANTI%' THEN 'GARANTIA'
+          WHEN UPPER(COALESCE(v.producto, '')) LIKE '%REITERAD%' OR UPPER(COALESCE(v.tipo_trabajo, '')) LIKE '%REITERAD%' THEN 'REITERADA'
+          ELSE COALESCE(NULLIF(TRIM(v.tipo_operacion), ''), 'OTROS')
+        END`;
+
         const [
           aggregatedResult,
           orderResult,
@@ -102,15 +108,11 @@ router.get('/dashboard', async (req: Request, res: Response) => {
             `
             SELECT 
               DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
-              DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m') AS fecha,
-              DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y') AS fecha_full,
-              COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'SIN ESTADO') AS estado_ot,
-              COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR') AS sector_operativo,
-              CASE
-                WHEN UPPER(COALESCE(v.producto, '')) LIKE '%GARANTI%' OR UPPER(COALESCE(v.tipo_trabajo, '')) LIKE '%GARANTI%' THEN 'GARANTIA'
-                WHEN UPPER(COALESCE(v.producto, '')) LIKE '%REITERAD%' OR UPPER(COALESCE(v.tipo_trabajo, '')) LIKE '%REITERAD%' THEN 'REITERADA'
-                ELSE COALESCE(NULLIF(TRIM(v.tipo_operacion), ''), 'OTROS')
-              END AS tipo_operacion,
+              MAX(DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m')) AS fecha,
+              MAX(DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m/%Y')) AS fecha_full,
+              COALESCE(NULLIF(TRIM(v.estado_ot), ''), 'SIN ESTADO') AS estado_ot_calc,
+              COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR') AS sector_operativo_calc,
+              ${virtualTipoSql} AS tipo_operacion_calc,
               COUNT(*) AS total,
               SUM(CASE WHEN v.se_envio_wsp = 'SI' THEN 1 ELSE 0 END) AS enviados,
               SUM(CASE WHEN LOWER(TRIM(COALESCE(v.estado_wsp, ''))) = 'read' THEN 1 ELSE 0 END) AS leidos,
@@ -135,7 +137,7 @@ router.get('/dashboard', async (req: Request, res: Response) => {
             FROM mat_funnel_casos_360 v
             WHERE v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?
             ${filterSql}
-            GROUP BY v.fecha_solicitud_dia, estado_ot, sector_operativo, tipo_operacion
+            GROUP BY v.fecha_solicitud_dia, estado_ot_calc, sector_operativo_calc, tipo_operacion_calc
             `,
             [chartStartDate, endDate, ...extraParams]
           ),
@@ -159,8 +161,8 @@ router.get('/dashboard', async (req: Request, res: Response) => {
               `
               SELECT 
                 COALESCE(NULLIF(TRIM(v.ops_partner), ''), NULLIF(TRIM(v.partner), ''), 'SIN PARTNER') AS partner_raw,
-                COALESCE(NULLIF(TRIM(v.tipo_operacion), ''), 'OTROS') AS tipo_operacion,
-                COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR') AS sector_operativo,
+                ${virtualTipoSql} AS tipo_operacion_calc,
+                COALESCE(NULLIF(TRIM(v.sector_operativo), ''), 'SIN SECTOR') AS sector_operativo_calc,
                 COUNT(DISTINCT ea.id) AS surveys,
                 AVG(COALESCE(ea.satisfaccion_atencion, ea.satisfaccion_experiencia) + 0) AS avg_score
               FROM encuesta_app ea
@@ -173,7 +175,7 @@ router.get('/dashboard', async (req: Request, res: Response) => {
               WHERE ea.fecha_registro >= CONCAT(?, ' 00:00:00')
                 AND ea.fecha_registro <= CONCAT(?, ' 23:59:59')
               ${encFilters.join(' ')}
-              GROUP BY partner_raw, tipo_operacion, sector_operativo
+              GROUP BY partner_raw, tipo_operacion_calc, sector_operativo_calc
               ORDER BY avg_score DESC, surveys DESC
               `,
               [startDate, endDate, ...encParams]
