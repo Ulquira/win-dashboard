@@ -315,9 +315,9 @@ async function queryCohortDataset(
         DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m') AS fecha_corta,
         DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m') AS mes,
         YEARWEEK(v.fecha_solicitud_dia, 1) AS yw,
-        ${virtualTipoSql} AS tipo_operacion,
-        COALESCE(NULLIF(TRIM(v.ambito), ''), IF(UPPER(TRIM(COALESCE(v.sector_operativo, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(v.region, ''))) = 'LIMA', 'LIMA', 'PROVINCIA')) AS ambito,
-        COALESCE(v.ingreso_tracking, 'NO') AS ingreso_tracking,
+        ${virtualTipoSql} AS tipo_operacion_virtual,
+        COALESCE(NULLIF(TRIM(v.ambito), ''), IF(UPPER(TRIM(COALESCE(v.sector_operativo, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(v.region, ''))) = 'LIMA', 'LIMA', 'PROVINCIA')) AS ambito_clean,
+        COALESCE(v.ingreso_tracking, 'NO') AS ingreso_trk_clean,
         COUNT(*) AS total,
         COALESCE(SUM(v.se_envio_wsp = 'SI'), 0) AS con_wsp,
         COALESCE(SUM(${isFin}), 0) AS finalizadas,
@@ -339,9 +339,9 @@ async function queryCohortDataset(
       ${whereSql}
       GROUP BY
         v.fecha_solicitud_dia,
-        tipo_operacion,
-        ambito,
-        v.ingreso_tracking
+        tipo_operacion_virtual,
+        ambito_clean,
+        ingreso_trk_clean
       ORDER BY raw_date ASC
       `,
       queryParams
@@ -349,39 +349,39 @@ async function queryCohortDataset(
     pool.query(
       `
       SELECT
-        ${virtualTipoSql} AS tipo_operacion,
-        COALESCE(NULLIF(TRIM(v.ambito), ''), IF(UPPER(TRIM(COALESCE(v.sector_operativo, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(v.region, ''))) = 'LIMA', 'LIMA', 'PROVINCIA')) AS ambito,
-        COALESCE(v.ingreso_tracking, 'NO') AS ingreso_tracking,
-        COALESCE(NULLIF(TRIM(v.ops_estado), ''), 'SIN ESTADO') AS estado,
+        ${virtualTipoSql} AS tipo_operacion_virtual,
+        COALESCE(NULLIF(TRIM(v.ambito), ''), IF(UPPER(TRIM(COALESCE(v.sector_operativo, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(v.region, ''))) = 'LIMA', 'LIMA', 'PROVINCIA')) AS ambito_clean,
+        COALESCE(v.ingreso_tracking, 'NO') AS ingreso_trk_clean,
+        COALESCE(NULLIF(TRIM(v.ops_estado), ''), 'SIN ESTADO') AS estado_clean,
         COUNT(*) AS total,
         COALESCE(SUM(v.se_envio_wsp = 'SI'), 0) AS con_wsp
       FROM mat_funnel_casos_360 v
       ${whereSql}
       GROUP BY
-        tipo_operacion,
-        ambito,
-        v.ingreso_tracking,
-        v.ops_estado
+        tipo_operacion_virtual,
+        ambito_clean,
+        ingreso_trk_clean,
+        estado_clean
       `,
       queryParams
     ),
     pool.query(
       `
       SELECT
-        ${virtualTipoSql} AS tipo_operacion,
-        COALESCE(NULLIF(TRIM(v.ambito), ''), IF(UPPER(TRIM(COALESCE(v.sector_operativo, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(v.region, ''))) = 'LIMA', 'LIMA', 'PROVINCIA')) AS ambito,
-        COALESCE(v.ingreso_tracking, 'NO') AS ingreso_tracking,
-        COALESCE(NULLIF(TRIM(v.ops_motivo_fin), ''), 'Sin especificar') AS motivo_fin,
+        ${virtualTipoSql} AS tipo_operacion_virtual,
+        COALESCE(NULLIF(TRIM(v.ambito), ''), IF(UPPER(TRIM(COALESCE(v.sector_operativo, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(v.region, ''))) = 'LIMA', 'LIMA', 'PROVINCIA')) AS ambito_clean,
+        COALESCE(v.ingreso_tracking, 'NO') AS ingreso_trk_clean,
+        COALESCE(NULLIF(TRIM(v.ops_motivo_fin), ''), 'Sin especificar') AS motivo_fin_clean,
         COUNT(*) AS total,
         COALESCE(SUM(v.se_envio_wsp = 'SI'), 0) AS con_wsp
       FROM mat_funnel_casos_360 v
       ${whereSql}
       ${whereSql ? 'AND' : 'WHERE'} (${isCancel} OR ${isRegestion})
       GROUP BY
-        tipo_operacion,
-        ambito,
-        v.ingreso_tracking,
-        v.ops_motivo_fin
+        tipo_operacion_virtual,
+        ambito_clean,
+        ingreso_trk_clean,
+        motivo_fin_clean
       `,
       queryParams
     ),
@@ -396,9 +396,9 @@ async function queryCohortDataset(
       fecha_corta: r.fecha_corta,
       mes: r.mes,
       yw: Number(r.yw || 0),
-      tipo_operacion: String(r.tipo_operacion || 'OTROS'),
-      ambito: String(r.ambito || 'LIMA'),
-      ingreso_tracking: r.ingreso_tracking === 'SI' ? 'SI' : 'NO',
+      tipo_operacion: String(r.tipo_operacion_virtual || 'OTROS'),
+      ambito: String(r.ambito_clean || 'LIMA'),
+      ingreso_tracking: r.ingreso_trk_clean === 'SI' ? 'SI' : 'NO',
       total: Number(r.total || 0),
       con_wsp: Number(r.con_wsp || 0),
       finalizadas: Number(r.finalizadas || 0),
@@ -418,18 +418,18 @@ async function queryCohortDataset(
       agendadas: Number(r.agendadas || 0),
     })),
     estadosCells: (estadosRes?.[0] || []).map((r: any) => ({
-      tipo_operacion: String(r.tipo_operacion || 'OTROS'),
-      ambito: String(r.ambito || 'LIMA'),
-      ingreso_tracking: r.ingreso_tracking === 'SI' ? 'SI' : 'NO',
-      estado: String(r.estado || 'SIN ESTADO'),
+      tipo_operacion: String(r.tipo_operacion_virtual || 'OTROS'),
+      ambito: String(r.ambito_clean || 'LIMA'),
+      ingreso_tracking: r.ingreso_trk_clean === 'SI' ? 'SI' : 'NO',
+      estado: String(r.estado_clean || 'SIN ESTADO'),
       total: Number(r.total || 0),
       con_wsp: Number(r.con_wsp || 0),
     })),
     motivosCells: (motivosRes?.[0] || []).map((r: any) => ({
-      tipo_operacion: String(r.tipo_operacion || 'OTROS'),
-      ambito: String(r.ambito || 'LIMA'),
-      ingreso_tracking: r.ingreso_tracking === 'SI' ? 'SI' : 'NO',
-      motivo_fin: String(r.motivo_fin || 'Sin especificar'),
+      tipo_operacion: String(r.tipo_operacion_virtual || 'OTROS'),
+      ambito: String(r.ambito_clean || 'LIMA'),
+      ingreso_tracking: r.ingreso_trk_clean === 'SI' ? 'SI' : 'NO',
+      motivo_fin: String(r.motivo_fin_clean || 'Sin especificar'),
       total: Number(r.total || 0),
       con_wsp: Number(r.con_wsp || 0),
     })),
@@ -451,7 +451,7 @@ router.get('/cohorts', async (req: Request, res: Response) => {
 
   const service = enforceRoleServiceScope(req, rawService);
   const searchQ = String(q || '').trim();
-  const cacheKey = `cohorts_v1_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
+  const cacheKey = `cohorts_v2_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
 
   try {
     await loadTipoServicioCacheIfNeeded();
@@ -489,7 +489,7 @@ router.get('/cohorts/export', async (req: Request, res: Response) => {
 
   const service = enforceRoleServiceScope(req, rawService);
   const searchQ = String(q || '').trim();
-  const cacheKey = `cohorts_v1_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
+  const cacheKey = `cohorts_v2_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
 
   try {
     await loadTipoServicioCacheIfNeeded();
