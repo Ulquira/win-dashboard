@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, lazy, Suspense } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Activity, ClipboardList, Wrench, LogOut, Shield } from 'lucide-react';
+import { Activity, ClipboardList, Wrench, GitCompare, LogOut, Shield } from 'lucide-react';
 import {
   ViewMode, NavSection, KpiData, EvolutionPoint,
   RealOrder, PartnerRankItem, CalculatedMetrics, AuthUser
@@ -21,6 +21,7 @@ const OrdersView = lazy(() => import('./views/OrdersView').then((m) => ({ defaul
 const UsersRolesView = lazy(() => import('./views/UsersRolesView').then((m) => ({ default: m.UsersRolesView })));
 const CsatView = lazy(() => import('./views/CsatView').then((m) => ({ default: m.CsatView })));
 const EfficiencyView = lazy(() => import('./views/EfficiencyView').then((m) => ({ default: m.EfficiencyView })));
+const CohortComparisonView = lazy(() => import('./views/CohortComparisonView').then((m) => ({ default: m.CohortComparisonView })));
 
 const VALID_NAVS: NavSection[] = [
   'Inicio',
@@ -31,7 +32,7 @@ const VALID_NAVS: NavSection[] = [
   'Experiencia (CSAT)',
   'Accesos',
 ];
-const VALID_VIEWS: ViewMode[] = ['ejecutiva', 'operativa', 'operaciones'];
+const VALID_VIEWS: ViewMode[] = ['ejecutiva', 'operativa', 'operaciones', 'impacto'];
 
 const DEFAULT_SERVICES = [
   'INSTA - LIMA',
@@ -204,7 +205,7 @@ export default function App() {
 
   const allowedSubviews = authUser?.permisos?.subvistas || ['*'];
   const canSeeSubview = (sv: ViewMode) =>
-    allowedSubviews.includes('*') || allowedSubviews.includes(sv);
+    sv === 'impacto' || allowedSubviews.includes('*') || allowedSubviews.includes(sv);
 
   // Sincronizar permisos y renovar token JWT desde la BD al montar
   useEffect(() => {
@@ -312,6 +313,12 @@ export default function App() {
       queryClient.prefetchQuery({
         queryKey: ['operationsDashboard', startDate, endDate, baseServiceScope, globalSearch, ignoreDates, 0],
         queryFn: () => apiFetch(`/api/operations?${opsParams.toString()}`),
+        staleTime: 1000 * 60 * 5,
+      });
+
+      queryClient.prefetchQuery({
+        queryKey: ['cohortsDashboard', startDate, endDate, baseServiceScope, globalSearch, ignoreDates, 0],
+        queryFn: () => apiFetch(`/api/cohorts?${opsParams.toString()}`),
         staleTime: 1000 * 60 * 5,
       });
 
@@ -883,6 +890,18 @@ export default function App() {
                       <span>Operaciones Campo</span>
                     </button>
                   )}
+                  {canSeeSubview('impacto') && (
+                    <button
+                      onClick={() => setViewMode('impacto')}
+                      className={`flex items-center gap-2 px-4 py-2 font-bold text-xs rounded-xl transition ${viewMode === 'impacto'
+                        ? 'bg-white text-[#FF5500] shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                    >
+                      <GitCompare size={14} className={viewMode === 'impacto' ? 'text-[#FF5500]' : 'text-slate-400'} />
+                      <span>Impacto WIN en Ruta (A/B)</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -895,6 +914,20 @@ export default function App() {
                   globalSearch={globalSearch}
                   ignoreDates={ignoreDates}
                   consultTrigger={consultTrigger}
+                />
+              ) : viewMode === 'impacto' ? (
+                <CohortComparisonView
+                  startDate={startDate}
+                  endDate={endDate}
+                  service={service}
+                  serviceScope={baseServiceScope}
+                  globalSearch={globalSearch}
+                  ignoreDates={ignoreDates}
+                  consultTrigger={consultTrigger}
+                  onSetDateRange={(s, e) => {
+                    setStartDate(s);
+                    setEndDate(e);
+                  }}
                 />
               ) : (
                 <>

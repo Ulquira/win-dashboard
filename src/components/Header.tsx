@@ -95,7 +95,9 @@ export function Header({
                   ? 'Vista Ejecutiva'
                   : viewMode === 'operativa'
                     ? 'Vista Operativa'
-                    : 'Operaciones de Campo';
+                    : viewMode === 'impacto'
+                      ? 'Impacto WIN en Ruta (Comparativo A/B)'
+                      : 'Operaciones de Campo';
 
   return (
     <header className="flex flex-col sm:flex-row flex-wrap items-start sm:items-center justify-between gap-4 border-b border-slate-200/80 pb-4">

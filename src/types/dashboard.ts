@@ -1,4 +1,4 @@
-export type ViewMode = 'ejecutiva' | 'operativa' | 'operaciones';
+export type ViewMode = 'ejecutiva' | 'operativa' | 'operaciones' | 'impacto';
 export type NavSection =
   | 'Inicio'
   | 'Dashboard'
