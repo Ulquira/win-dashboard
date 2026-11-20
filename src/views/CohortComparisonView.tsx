@@ -92,8 +92,6 @@ export function CohortComparisonView({
 }: CohortComparisonViewProps) {
   const [debouncedQuery, setDebouncedQuery] = useState<string>(globalSearch);
   const onlyWspBase = false;
-  const macroFilter: MacroFilter = 'TODOS';
-  const ambitoFilter: AmbitoFilter = 'TODOS';
   const [granularity, setGranularity] = useState<PeriodGranularity>('SEMANAL');
   const [exporting, setExporting] = useState<boolean>(false);
 
@@ -198,17 +196,9 @@ export function CohortComparisonView({
           )
         : null;
 
-    const matchesFilters = (tipoOp: string, ambito: string) => {
+    const matchesFilters = (tipoOp: string) => {
       const tUpper = String(tipoOp || '').toUpperCase();
-      const aUpper = String(ambito || '').toUpperCase();
       if (selectedSrvSet && !selectedSrvSet.has(tUpper)) return false;
-
-      const isInsta = tUpper.startsWith('INSTA');
-      if (macroFilter === 'INSTALACION' && !isInsta) return false;
-      if (macroFilter === 'VISITA_TECNICA' && isInsta) return false;
-
-      if (ambitoFilter === 'LIMA' && aUpper !== 'LIMA') return false;
-      if (ambitoFilter === 'PROVINCIA' && aUpper !== 'PROVINCIA') return false;
       return true;
     };
 
@@ -278,7 +268,7 @@ export function CohortComparisonView({
         );
       }
 
-      if (!matchesFilters(c.tipo_operacion, c.ambito)) continue;
+      if (!matchesFilters(c.tipo_operacion)) continue;
 
       if (c.ingreso_tracking === 'SI') {
         addCellToCounters(globalSi, c, onlyWspBase);
@@ -340,7 +330,7 @@ export function CohortComparisonView({
     // Estados OT filtrados
     const estMap = new Map<string, { estado: string; si: number; no: number }>();
     for (const e of estadosCells) {
-      if (!matchesFilters(e.tipo_operacion, e.ambito)) continue;
+      if (!matchesFilters(e.tipo_operacion)) continue;
       const cur = estMap.get(e.estado) || { estado: e.estado, si: 0, no: 0 };
       if (e.ingreso_tracking === 'SI') {
         cur.si += e.total;
@@ -353,7 +343,7 @@ export function CohortComparisonView({
     // Motivos de Cancelación / Quiebre filtrados
     const motMap = new Map<string, { motivo: string; si: number; no: number }>();
     for (const m of motivosCells) {
-      if (!matchesFilters(m.tipo_operacion, m.ambito)) continue;
+      if (!matchesFilters(m.tipo_operacion)) continue;
       const cur = motMap.get(m.motivo_fin) || { motivo: m.motivo_fin, si: 0, no: 0 };
       if (m.ingreso_tracking === 'SI') {
         cur.si += m.total;
@@ -384,7 +374,7 @@ export function CohortComparisonView({
       estadosList,
       motivosList,
     };
-  }, [cohortData, service, macroFilter, ambitoFilter, onlyWspBase, granularity]);
+  }, [cohortData, service, onlyWspBase, granularity]);
 
   const { globalSi, globalNo, quadrants, timelineList, estadosList, motivosList } = computed;
 
