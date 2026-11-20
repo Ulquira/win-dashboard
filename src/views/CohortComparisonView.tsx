@@ -89,12 +89,11 @@ export function CohortComparisonView({
   globalSearch,
   ignoreDates,
   consultTrigger = 0,
-  onSetDateRange,
 }: CohortComparisonViewProps) {
   const [debouncedQuery, setDebouncedQuery] = useState<string>(globalSearch);
-  const [onlyWspBase, setOnlyWspBase] = useState<boolean>(true);
-  const [macroFilter, setMacroFilter] = useState<MacroFilter>('TODOS');
-  const [ambitoFilter, setAmbitoFilter] = useState<AmbitoFilter>('TODOS');
+  const onlyWspBase = false;
+  const macroFilter: MacroFilter = 'TODOS';
+  const ambitoFilter: AmbitoFilter = 'TODOS';
   const [granularity, setGranularity] = useState<PeriodGranularity>('SEMANAL');
   const [exporting, setExporting] = useState<boolean>(false);
 
@@ -418,16 +417,16 @@ export function CohortComparisonView({
         </div>
       )}
 
-      {/* BARRA DE CONTROL DE SEGMENTACIÓN (0 ms EN MEMORIA) + ATAJOS DE PERIODO + EXPORTACIÓN EXCEL */}
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-4 sm:p-5 space-y-4">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+      {/* CABECERA LIMPIA REGIDA 100% POR LOS FILTROS DEL HEADER SUPERIOR + EXPORTACIÓN EXCEL */}
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-4 sm:p-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="px-2.5 py-0.5 rounded-full bg-orange-50 text-[#FF5500] text-[11px] font-extrabold uppercase tracking-wider">
-                Estudio A/B en Tiempo Real
+                Estudio A/B • Universo Total
               </span>
               <span className="text-xs font-semibold text-slate-400">
-                Adopción sobre WhatsApp: <strong className="text-slate-700">{fmtPct(adoptionRateWsp)}</strong> ({fmt(globalSi.orders)} ingresaron de {fmt(totalWspNotified)} notificados)
+                Total evaluado: <strong className="text-slate-700">{fmt(globalSi.orders + globalNo.orders)} órdenes</strong> ({fmt(globalSi.orders)} con ingreso vs. {fmt(globalNo.orders)} sin ingreso • Adopción s/WSP: <strong className="text-slate-700">{fmtPct(adoptionRateWsp)}</strong>)
               </span>
             </div>
             <h3 className="text-base sm:text-lg font-extrabold text-slate-900 mt-1">
@@ -435,216 +434,14 @@ export function CohortComparisonView({
             </h3>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Atajos rápidos de meses cerrados */}
-            {onSetDateRange && (
-              <div className="flex flex-wrap items-center gap-1.5 bg-slate-100/80 p-1 rounded-xl border border-slate-200/60">
-                <button
-                  onClick={() => onSetDateRange('2026-09-01', yesterdayStr)}
-                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition ${
-                    startDate === '2026-09-01' && endDate === yesterdayStr
-                      ? 'bg-white text-[#FF5500] shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                  title="Septiembre, Octubre y Noviembre días cerrados (hasta ayer)"
-                >
-                  Sep–Nov (Hasta Ayer)
-                </button>
-                <button
-                  onClick={() => onSetDateRange('2026-09-01', '2026-09-30')}
-                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition ${
-                    startDate === '2026-09-01' && endDate === '2026-09-30'
-                      ? 'bg-white text-[#FF5500] shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Septiembre
-                </button>
-                <button
-                  onClick={() => onSetDateRange('2026-10-01', '2026-10-31')}
-                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition ${
-                    startDate === '2026-10-01' && endDate === '2026-10-31'
-                      ? 'bg-white text-[#FF5500] shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Octubre
-                </button>
-                <button
-                  onClick={() => onSetDateRange('2026-11-01', yesterdayStr)}
-                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition ${
-                    startDate === '2026-11-01' && endDate === yesterdayStr
-                      ? 'bg-white text-[#FF5500] shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Nov (Cerrado)
-                </button>
-              </div>
-            )}
-
-            <button
-              onClick={handleExportExcel}
-              disabled={exporting}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs shadow-xs transition cursor-pointer"
-            >
-              <Download size={14} />
-              <span>{exporting ? 'Generando Excel...' : 'Exportar Excel (.xlsx)'}</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Selectores de Segmentación Instantánea (0 ms) */}
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-          {/* 1. Base de comparación */}
-          <div className="bg-slate-50/80 border border-slate-200/70 rounded-xl p-2.5 flex flex-col justify-between">
-            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 mb-1.5 flex items-center gap-1">
-              <ShieldCheck size={12} className="text-[#FF5500]" />
-              1. Base Cohorte "Sin Ingreso"
-            </span>
-            <div className="grid grid-cols-2 gap-1 bg-slate-200/70 p-0.5 rounded-lg">
-              <button
-                onClick={() => setOnlyWspBase(true)}
-                className={`px-2 py-1.5 rounded-md text-[11px] font-bold transition ${
-                  onlyWspBase
-                    ? 'bg-white text-slate-900 shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Solo Notificados WSP
-              </button>
-              <button
-                onClick={() => setOnlyWspBase(false)}
-                className={`px-2 py-1.5 rounded-md text-[11px] font-bold transition ${
-                  !onlyWspBase
-                    ? 'bg-white text-slate-900 shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Universo Total OT
-              </button>
-            </div>
-          </div>
-
-          {/* 2. Tipo de Intervención (Instalaciones vs Visita Técnica) */}
-          <div className="bg-slate-50/80 border border-slate-200/70 rounded-xl p-2.5 flex flex-col justify-between">
-            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 mb-1.5 flex items-center gap-1">
-              <Layers size={12} className="text-[#FF5500]" />
-              2. Tipo de Intervención
-            </span>
-            <div className="grid grid-cols-3 gap-1 bg-slate-200/70 p-0.5 rounded-lg">
-              <button
-                onClick={() => setMacroFilter('TODOS')}
-                className={`px-2 py-1.5 rounded-md text-[11px] font-bold transition ${
-                  macroFilter === 'TODOS'
-                    ? 'bg-white text-[#FF5500] shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Todos
-              </button>
-              <button
-                onClick={() => setMacroFilter('INSTALACION')}
-                className={`px-2 py-1.5 rounded-md text-[11px] font-bold transition ${
-                  macroFilter === 'INSTALACION'
-                    ? 'bg-white text-[#FF5500] shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Instalación
-              </button>
-              <button
-                onClick={() => setMacroFilter('VISITA_TECNICA')}
-                className={`px-2 py-1.5 rounded-md text-[11px] font-bold transition ${
-                  macroFilter === 'VISITA_TECNICA'
-                    ? 'bg-white text-[#FF5500] shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Visita Técnica
-              </button>
-            </div>
-          </div>
-
-          {/* 3. Ámbito Geográfico (Lima vs Provincia) */}
-          <div className="bg-slate-50/80 border border-slate-200/70 rounded-xl p-2.5 flex flex-col justify-between">
-            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 mb-1.5 flex items-center gap-1">
-              <MapPin size={12} className="text-[#FF5500]" />
-              3. Ámbito Geográfico
-            </span>
-            <div className="grid grid-cols-3 gap-1 bg-slate-200/70 p-0.5 rounded-lg">
-              <button
-                onClick={() => setAmbitoFilter('TODOS')}
-                className={`px-2 py-1.5 rounded-md text-[11px] font-bold transition ${
-                  ambitoFilter === 'TODOS'
-                    ? 'bg-white text-[#FF5500] shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Lima + Prov.
-              </button>
-              <button
-                onClick={() => setAmbitoFilter('LIMA')}
-                className={`px-2 py-1.5 rounded-md text-[11px] font-bold transition ${
-                  ambitoFilter === 'LIMA'
-                    ? 'bg-white text-[#FF5500] shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Solo Lima
-              </button>
-              <button
-                onClick={() => setAmbitoFilter('PROVINCIA')}
-                className={`px-2 py-1.5 rounded-md text-[11px] font-bold transition ${
-                  ambitoFilter === 'PROVINCIA'
-                    ? 'bg-white text-[#FF5500] shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Solo Provincia
-              </button>
-            </div>
-          </div>
-
-          {/* 4. Granularidad Temporal */}
-          <div className="bg-slate-50/80 border border-slate-200/70 rounded-xl p-2.5 flex flex-col justify-between">
-            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 mb-1.5 flex items-center gap-1">
-              <Calendar size={12} className="text-[#FF5500]" />
-              4. Corte Evolutivo
-            </span>
-            <div className="grid grid-cols-3 gap-1 bg-slate-200/70 p-0.5 rounded-lg">
-              <button
-                onClick={() => setGranularity('MENSUAL')}
-                className={`px-2 py-1.5 rounded-md text-[11px] font-bold transition ${
-                  granularity === 'MENSUAL'
-                    ? 'bg-white text-[#FF5500] shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Por Mes
-              </button>
-              <button
-                onClick={() => setGranularity('SEMANAL')}
-                className={`px-2 py-1.5 rounded-md text-[11px] font-bold transition ${
-                  granularity === 'SEMANAL'
-                    ? 'bg-white text-[#FF5500] shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Por Semana
-              </button>
-              <button
-                onClick={() => setGranularity('DIARIO')}
-                className={`px-2 py-1.5 rounded-md text-[11px] font-bold transition ${
-                  granularity === 'DIARIO'
-                    ? 'bg-white text-[#FF5500] shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Por Día
-              </button>
-            </div>
-          </div>
+          <button
+            onClick={handleExportExcel}
+            disabled={exporting}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs shadow-xs transition cursor-pointer self-start sm:self-auto"
+          >
+            <Download size={14} />
+            <span>{exporting ? 'Generando Excel...' : 'Exportar Excel (.xlsx)'}</span>
+          </button>
         </div>
       </div>
 
@@ -995,9 +792,40 @@ export function CohortComparisonView({
               </p>
             </div>
           </div>
-          <span className="text-xs font-bold text-slate-500">
-            {timelineList.length} {granularity === 'MENSUAL' ? 'meses' : granularity === 'SEMANAL' ? 'semanas' : 'días'} en rango
-          </span>
+          <div className="flex items-center gap-2">
+            <div className="inline-flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/70">
+              <button
+                onClick={() => setGranularity('MENSUAL')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                  granularity === 'MENSUAL'
+                    ? 'bg-white text-[#FF5500] shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Por Mes
+              </button>
+              <button
+                onClick={() => setGranularity('SEMANAL')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                  granularity === 'SEMANAL'
+                    ? 'bg-white text-[#FF5500] shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Por Semana
+              </button>
+              <button
+                onClick={() => setGranularity('DIARIO')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                  granularity === 'DIARIO'
+                    ? 'bg-white text-[#FF5500] shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Por Día
+              </button>
+            </div>
+          </div>
         </div>
 
         <div className="overflow-x-auto max-h-96">
