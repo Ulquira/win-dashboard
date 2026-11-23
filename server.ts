@@ -59,6 +59,7 @@ app.use('/api', liveChatRoutes);
 app.use('/api', cohortsRoutes);
 app.use('/api', ordersRoutes);
 app.use('/api', mobileFieldRoutes);
+app.use('/api', atcLlamadasRoutes);
 
 // Middleware global de manejo de errores
 app.use(errorHandler);
