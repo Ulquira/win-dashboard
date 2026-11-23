@@ -65,16 +65,16 @@ function emptyCounters(): CohortCounters {
 }
 
 function addCellToCounters(acc: CohortCounters, cell: any, onlyWspBase: boolean) {
-  const isSi = cell.ingreso_tracking === 'SI';
-  // Para la cohorte SI usamos siempre el universo real (o con_wsp si se filtra base WSP); para NO usamos *_wsp cuando onlyWspBase está activo
-  const useWsp = onlyWspBase && !isSi;
+  const useWsp = onlyWspBase;
   acc.orders += useWsp ? Number(cell.con_wsp || 0) : Number(cell.total || 0);
   acc.conWsp += Number(cell.con_wsp || 0);
   acc.finalizadas += useWsp ? Number(cell.fin_wsp || 0) : Number(cell.finalizadas || 0);
   acc.canceladas += useWsp ? Number(cell.can_wsp || 0) : Number(cell.canceladas || 0);
   acc.regestion += useWsp ? Number(cell.reg_wsp || 0) : Number(cell.regestion || 0);
   acc.reprogTotal += useWsp ? Number(cell.reprog_wsp || 0) : Number(cell.reprog_total || 0);
-  acc.reprogWeb += Number(cell.reprog_web || 0);
+  acc.reprogWeb += useWsp
+    ? Number(cell.reprog_web_wsp ?? cell.reprog_web ?? 0)
+    : Number(cell.reprog_web || 0);
   acc.ausente += useWsp ? Number(cell.ausente_wsp || 0) : Number(cell.ausente || 0);
   acc.sos += useWsp ? Number(cell.sos_wsp || 0) : Number(cell.sos || 0);
   acc.enCurso += Number(cell.en_curso || 0);
@@ -91,7 +91,7 @@ export function CohortComparisonView({
   consultTrigger = 0,
 }: CohortComparisonViewProps) {
   const [debouncedQuery, setDebouncedQuery] = useState<string>(globalSearch);
-  const onlyWspBase = false;
+  const [onlyWspBase, setOnlyWspBase] = useState<boolean>(true);
   const [granularity, setGranularity] = useState<PeriodGranularity>('SEMANAL');
   const [exporting, setExporting] = useState<boolean>(false);
 
@@ -397,7 +397,7 @@ export function CohortComparisonView({
   const relAusReduction = ausNo > 0 ? ((ausNo - ausSi) / ausNo) * 100 : 0;
 
   const totalWspNotified = globalSi.conWsp + globalNo.conWsp;
-  const adoptionRateWsp = calcPct(globalSi.orders, totalWspNotified);
+  const adoptionRateWsp = calcPct(globalSi.conWsp, totalWspNotified);
 
   return (
     <div className={`space-y-6 transition-opacity ${loading ? 'opacity-75' : 'opacity-100'}`}>
@@ -407,16 +407,16 @@ export function CohortComparisonView({
         </div>
       )}
 
-      {/* CABECERA LIMPIA REGIDA 100% POR LOS FILTROS DEL HEADER SUPERIOR + EXPORTACIÓN EXCEL */}
+      {/* CABECERA CON CONMUTADOR DE BASE ESTADÍSTICA + EXPORTACIÓN EXCEL */}
       <div className="bg-white border border-slate-100 rounded-2xl shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] p-4 sm:p-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <span className="px-2.5 py-0.5 rounded-full bg-orange-50 text-[#FF5500] text-[11px] font-extrabold uppercase tracking-wider">
-                Estudio A/B • Universo Total
+                Estudio A/B • {onlyWspBase ? 'Base Notificados WSP' : 'Universo Total'}
               </span>
               <span className="text-xs font-semibold text-slate-400">
-                Total evaluado: <strong className="text-slate-700">{fmt(globalSi.orders + globalNo.orders)} órdenes</strong> ({fmt(globalSi.orders)} con ingreso vs. {fmt(globalNo.orders)} sin ingreso • Adopción s/WSP: <strong className="text-slate-700">{fmtPct(adoptionRateWsp)}</strong>)
+                Evaluado: <strong className="text-slate-700">{fmt(globalSi.orders + globalNo.orders)} OTs</strong> ({fmt(globalSi.orders)} con ingreso vs. {fmt(globalNo.orders)} sin ingreso • Adopción s/WSP: <strong className="text-slate-700">{fmtPct(adoptionRateWsp)}</strong>)
               </span>
             </div>
             <h3 className="text-base sm:text-lg font-extrabold text-slate-900 mt-1">
@@ -424,14 +424,43 @@ export function CohortComparisonView({
             </h3>
           </div>
 
-          <button
-            onClick={handleExportExcel}
-            disabled={exporting}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs shadow-xs transition cursor-pointer self-start sm:self-auto"
-          >
-            <Download size={14} />
-            <span>{exporting ? 'Generando Excel...' : 'Exportar Excel (.xlsx)'}</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2 self-start lg:self-auto">
+            <div className="inline-flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/70">
+              <button
+                type="button"
+                onClick={() => setOnlyWspBase(true)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                  onlyWspBase
+                    ? 'bg-white text-[#FF5500] shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+                title="Compara solo clientes que recibieron notificación WhatsApp (Comparación A/B sin sesgo)"
+              >
+                Solo con WSP
+              </button>
+              <button
+                type="button"
+                onClick={() => setOnlyWspBase(false)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                  !onlyWspBase
+                    ? 'bg-white text-[#FF5500] shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+                title="Incluye órdenes sin envío de WhatsApp en la cohorte Sin Ingreso"
+              >
+                Universo Total
+              </button>
+            </div>
+
+            <button
+              onClick={handleExportExcel}
+              disabled={exporting}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs shadow-xs transition cursor-pointer"
+            >
+              <Download size={14} />
+              <span>{exporting ? 'Generando...' : 'Exportar Excel'}</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -704,27 +733,29 @@ export function CohortComparisonView({
 
                 {/* Barras comparativas de las 4 métricas */}
                 <div className="space-y-2.5 text-xs">
-                  {/* Efectividad */}
-                  <div>
-                    <div className="flex justify-between text-[11px] mb-1">
-                      <span className="font-bold text-slate-700">Efectividad (Finalizada)</span>
+                  {/* Efectividad (Barra doble SI vs NO) */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[11px]">
+                      <span className="font-bold text-slate-700">Efectividad</span>
                       <span className="tabular-nums font-extrabold">
                         <span className="text-emerald-600">{fmtPct(qEffSi)}</span>{' '}
                         <span className="text-slate-400 font-normal">vs</span>{' '}
                         <span className="text-slate-500">{fmtPct(qEffNo)}</span>
                       </span>
                     </div>
-                    <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden flex">
-                      <div
-                        className="h-full bg-emerald-500 rounded-full"
-                        style={{ width: `${Math.min(100, qEffSi)}%` }}
-                      />
+                    <div className="space-y-1">
+                      <div className="w-full h-1.5 bg-slate-200/80 rounded-full overflow-hidden" title={`Con Ingreso: ${fmtPct(qEffSi)}`}>
+                        <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${Math.min(100, qEffSi)}%` }} />
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-200/80 rounded-full overflow-hidden" title={`Sin Ingreso: ${fmtPct(qEffNo)}`}>
+                        <div className="h-full bg-slate-400 rounded-full" style={{ width: `${Math.min(100, qEffNo)}%` }} />
+                      </div>
                     </div>
                   </div>
 
-                  {/* Cancelaciones */}
-                  <div>
-                    <div className="flex justify-between text-[11px] mb-1">
+                  {/* Cancelaciones (Barra doble SI vs NO) */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[11px]">
                       <span className="font-bold text-slate-700">Cancelaciones</span>
                       <span className="tabular-nums font-extrabold">
                         <span className="text-rose-600">{fmtPct(qCanSi)}</span>{' '}
@@ -732,11 +763,13 @@ export function CohortComparisonView({
                         <span className="text-slate-500">{fmtPct(qCanNo)}</span>
                       </span>
                     </div>
-                    <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden flex">
-                      <div
-                        className="h-full bg-rose-500 rounded-full"
-                        style={{ width: `${Math.min(100, qCanSi)}%` }}
-                      />
+                    <div className="space-y-1">
+                      <div className="w-full h-1.5 bg-slate-200/80 rounded-full overflow-hidden" title={`Con Ingreso: ${fmtPct(qCanSi)}`}>
+                        <div className="h-full bg-rose-500 rounded-full" style={{ width: `${Math.min(100, qCanSi)}%` }} />
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-200/80 rounded-full overflow-hidden" title={`Sin Ingreso: ${fmtPct(qCanNo)}`}>
+                        <div className="h-full bg-slate-400 rounded-full" style={{ width: `${Math.min(100, qCanNo)}%` }} />
+                      </div>
                     </div>
                   </div>
 
@@ -851,7 +884,7 @@ export function CohortComparisonView({
                 const rAusNo = calcPct(row.no.ausente, row.no.orders);
 
                 const rWspTot = row.si.conWsp + row.no.conWsp;
-                const rAdopt = calcPct(row.si.orders, rWspTot);
+                const rAdopt = calcPct(row.si.conWsp, rWspTot);
 
                 return (
                   <tr key={row.key} className="hover:bg-slate-50/80 transition">

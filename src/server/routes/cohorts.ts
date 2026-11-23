@@ -281,7 +281,7 @@ async function queryCohortDataset(
     whereClauses.push(`v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?`);
     queryParams.push(startDate, endDate);
   } else {
-    whereClauses.push(`v.fecha_solicitud_dia >= '2026-08-01' AND v.fecha_solicitud_dia <= '2026-12-31'`);
+    whereClauses.push(`v.fecha_solicitud_dia IS NOT NULL`);
   }
 
   const srvFilter = buildStrictOrderTypeSql(service, getServicioToTipoMap(), 'v.tipo_operacion');
@@ -329,6 +329,7 @@ async function queryCohortDataset(
         COALESCE(SUM(${isReprogMotivo}), 0) AS reprog_total,
         COALESCE(SUM(CASE WHEN v.se_envio_wsp = 'SI' THEN ${isReprogMotivo} ELSE 0 END), 0) AS reprog_wsp,
         COALESCE(SUM(v.reprogramo = 'SI' OR v.intento_reprogramar = 'SI'), 0) AS reprog_web,
+        COALESCE(SUM(CASE WHEN v.se_envio_wsp = 'SI' AND (v.reprogramo = 'SI' OR v.intento_reprogramar = 'SI') THEN 1 ELSE 0 END), 0) AS reprog_web_wsp,
         COALESCE(SUM(${isAusente}), 0) AS ausente,
         COALESCE(SUM(CASE WHEN v.se_envio_wsp = 'SI' THEN ${isAusente} ELSE 0 END), 0) AS ausente_wsp,
         COALESCE(SUM(${isSos}), 0) AS sos,
@@ -410,6 +411,7 @@ async function queryCohortDataset(
       reprog_total: Number(r.reprog_total || 0),
       reprog_wsp: Number(r.reprog_wsp || 0),
       reprog_web: Number(r.reprog_web || 0),
+      reprog_web_wsp: Number(r.reprog_web_wsp || 0),
       ausente: Number(r.ausente || 0),
       ausente_wsp: Number(r.ausente_wsp || 0),
       sos: Number(r.sos || 0),
