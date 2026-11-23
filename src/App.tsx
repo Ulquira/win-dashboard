@@ -22,6 +22,7 @@ const UsersRolesView = lazy(() => import('./views/UsersRolesView').then((m) => (
 const CsatView = lazy(() => import('./views/CsatView').then((m) => ({ default: m.CsatView })));
 const EfficiencyView = lazy(() => import('./views/EfficiencyView').then((m) => ({ default: m.EfficiencyView })));
 const CohortComparisonView = lazy(() => import('./views/CohortComparisonView').then((m) => ({ default: m.CohortComparisonView })));
+const AtcLlamadasView = lazy(() => import('./views/AtcLlamadasView').then((m) => ({ default: m.AtcLlamadasView })));
 
 const VALID_NAVS: NavSection[] = [
   'Inicio',
@@ -30,6 +31,7 @@ const VALID_NAVS: NavSection[] = [
   'Seguimiento',
   'Eficiencia',
   'Experiencia (CSAT)',
+  'ATC Llamadas',
   'Accesos',
 ];
 const VALID_VIEWS: ViewMode[] = ['ejecutiva', 'operativa', 'operaciones', 'impacto'];
@@ -201,7 +203,7 @@ export default function App() {
   // Subvistas del Dashboard permitidas por el Rol
   const allowedViews = authUser?.permisos?.vistas || ['*'];
   const canSeeView = (v: NavSection) =>
-    v === 'Inicio' || v === 'Eficiencia' || v === 'Experiencia (CSAT)' || allowedViews.includes('*') || allowedViews.includes(v);
+    v === 'Inicio' || v === 'Eficiencia' || v === 'Experiencia (CSAT)' || v === 'ATC Llamadas' || allowedViews.includes('*') || allowedViews.includes(v);
 
   const allowedSubviews = authUser?.permisos?.subvistas || ['*'];
   const canSeeSubview = (sv: ViewMode) =>
@@ -1005,6 +1007,18 @@ export default function App() {
               ignoreDates={ignoreDates}
               consultTrigger={consultTrigger}
               onSelectOrder={setSelectedOrder}
+            />
+          )}
+
+          {activeNav === 'ATC Llamadas' && (
+            <AtcLlamadasView
+              startDate={startDate}
+              endDate={endDate}
+              globalSearch={globalSearch}
+              ignoreDates={ignoreDates}
+              consultTrigger={consultTrigger}
+              isAdmin={authUser.permisos?.rolCodigo === 'ADMIN' || allowedViews.includes('*')}
+              onEnableHistory={() => setIgnoreDates(true)}
             />
           )}
 

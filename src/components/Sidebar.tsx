@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   Home, BarChart2, Layers, MessageSquare, Sparkles, Star,
   ChevronDown, Activity, ClipboardList, X, Wrench, Shield,
-  LogOut, Menu, TrendingUp
+  LogOut, Menu, TrendingUp, PhoneCall
 } from 'lucide-react';
 import { AuthUser, NavSection, ViewMode } from '../types/dashboard';
 
@@ -41,6 +41,7 @@ export function Sidebar({
     v === 'Inicio' ||
     v === 'Eficiencia' ||
     v === 'Experiencia (CSAT)' ||
+    v === 'ATC Llamadas' ||
     allowedViews.includes('*') ||
     allowedViews.includes(v);
 
@@ -257,6 +258,15 @@ export function Sidebar({
               collapsed={collapsed}
               active={activeNav === 'Experiencia (CSAT)'}
               onClick={() => handleSelectNav('Experiencia (CSAT)')}
+            />
+          )}
+          {canSeeView('ATC Llamadas') && (
+            <NavItem
+              icon={<PhoneCall size={16} />}
+              label="ATC Llamadas"
+              collapsed={collapsed}
+              active={activeNav === 'ATC Llamadas'}
+              onClick={() => handleSelectNav('ATC Llamadas')}
             />
           )}
           {canSeeView('Accesos') && (

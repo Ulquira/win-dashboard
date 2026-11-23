@@ -6,6 +6,7 @@ export type NavSection =
   | 'Seguimiento'
   | 'Eficiencia'
   | 'Experiencia (CSAT)'
+  | 'ATC Llamadas'
   | 'Accesos';
 
 export interface OperationsKpis {

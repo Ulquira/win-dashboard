@@ -23,6 +23,7 @@ import filtersRoutes from './src/server/routes/filters';
 import liveChatRoutes from './src/server/routes/liveChat';
 import mobileFieldRoutes from './src/server/routes/mobileField';
 import cohortsRoutes from './src/server/routes/cohorts';
+import atcLlamadasRoutes from './src/server/routes/atcLlamadas';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
