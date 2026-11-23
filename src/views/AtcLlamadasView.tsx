@@ -51,6 +51,36 @@ function normalizeHeaderKey(raw: string): string {
     .replace(/^_+|_+$/g, '');
 }
 
+function formatExcelDateIfSerial(raw: string): string {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  if (/^\d{5}(\.\d+)?$/.test(s)) {
+    const serial = Math.floor(Number(s));
+    if (serial > 25569 && serial < 70000) {
+      const utcMs = (serial - 25569) * 86400 * 1000;
+      return new Date(utcMs).toISOString().slice(0, 10);
+    }
+  }
+  return s;
+}
+
+function formatExcelTimeIfDecimal(raw: string): string {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  if (/^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(s) && !s.includes(':')) {
+    const num = Number(s);
+    if (Number.isFinite(num) && num >= 0) {
+      const frac = num >= 1 ? num - Math.floor(num) : num;
+      const totalSec = Math.round(frac * 86400) % 86400;
+      const hh = String(Math.floor(totalSec / 3600)).padStart(2, '0');
+      const mm = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
+      const ss = String(totalSec % 60).padStart(2, '0');
+      return `${hh}:${mm}:${ss}`;
+    }
+  }
+  return s;
+}
+
 function mapRawRecordToAtc(rec: Record<string, string>): ParsedAtcRow {
   const get = (...keys: string[]) => {
     for (const k of keys) {
@@ -62,8 +92,8 @@ function mapRawRecordToAtc(rec: Record<string, string>): ParsedAtcRow {
   return {
     id_origen: get('id'),
     id_reg: get('id_reg', 'idreg', 'id_registro', 'codigo_registro'),
-    fecha: get('fecha', 'fecha_llamada', 'fec_llamada'),
-    hora: get('hora', 'hora_llamada'),
+    fecha: formatExcelDateIfSerial(get('fecha', 'fecha_llamada', 'fec_llamada')),
+    hora: formatExcelTimeIfDecimal(get('hora', 'hora_llamada')),
     telf_cliente: get('telf_cliente', 'telefono_cliente', 'telefono', 'celular', 'telf'),
     dni_cliente: get('dni_cliente', 'documento_cliente', 'num_doc', 'dni'),
     dni_asesor: get('dni_asesor', 'doc_asesor', 'asesor_dni'),
@@ -88,11 +118,12 @@ function parseDelimitedText(text: string): ParsedAtcRow[] {
   const tabCount = (firstLine.match(/\t/g) || []).length;
   const semiCount = (firstLine.match(/;/g) || []).length;
   const commaCount = (firstLine.match(/,/g) || []).length;
-  const sep = tabCount >= semiCount && tabCount >= commaCount && tabCount > 0
-    ? '\t'
-    : semiCount >= commaCount && semiCount > 0
-      ? ';'
-      : ',';
+  const sep =
+    tabCount >= semiCount && tabCount >= commaCount && tabCount > 0
+      ? '\t'
+      : semiCount >= commaCount && semiCount > 0
+        ? ';'
+        : ',';
 
   const matrix: string[][] = [];
   let row: string[] = [];
@@ -149,26 +180,11 @@ function parseDelimitedText(text: string): ParsedAtcRow[] {
 }
 
 async function inflateRawBytes(compressed: Uint8Array): Promise<Uint8Array> {
-  const ds = new DecompressionStream('deflate-raw');
-  const writer = ds.writable.getWriter();
-  await writer.write(compressed as unknown as BufferSource);
-  await writer.close();
-  const reader = ds.readable.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    total += value.length;
-  }
-  const result = new Uint8Array(total);
-  let offset = 0;
-  for (const c of chunks) {
-    result.set(c, offset);
-    offset += c.length;
-  }
-  return result;
+  const copy = new Uint8Array(compressed.byteLength);
+  copy.set(compressed);
+  const stream = new Blob([copy]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  const ab = await new Response(stream).arrayBuffer();
+  return new Uint8Array(ab);
 }
 
 function colRefToIndex(cellRef: string): number {
@@ -184,7 +200,6 @@ async function parseXlsxBuffer(buffer: ArrayBuffer): Promise<ParsedAtcRow[]> {
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
 
-  // Buscar End of Central Directory (0x06054b50)
   let eocdPos = -1;
   for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i--) {
     if (view.getUint32(i, true) === 0x06054b50) {
@@ -192,7 +207,7 @@ async function parseXlsxBuffer(buffer: ArrayBuffer): Promise<ParsedAtcRow[]> {
       break;
     }
   }
-  if (eocdPos < 0) throw new Error('Archivo .xlsx inválido o corrupto.');
+  if (eocdPos < 0) throw new Error('El archivo no tiene estructura .xlsx válida.');
 
   const totalEntries = view.getUint16(eocdPos + 10, true);
   let cdOffset = view.getUint32(eocdPos + 16, true);
@@ -200,20 +215,22 @@ async function parseXlsxBuffer(buffer: ArrayBuffer): Promise<ParsedAtcRow[]> {
   const entries = new Map<string, { method: number; compSize: number; localOffset: number }>();
 
   for (let e = 0; e < totalEntries; e++) {
-    if (view.getUint32(cdOffset, true) !== 0x02014b50) break;
+    if (cdOffset + 46 > bytes.length || view.getUint32(cdOffset, true) !== 0x02014b50) break;
     const method = view.getUint16(cdOffset + 10, true);
     const compSize = view.getUint32(cdOffset + 20, true);
     const nameLen = view.getUint16(cdOffset + 28, true);
     const extraLen = view.getUint16(cdOffset + 30, true);
     const commentLen = view.getUint16(cdOffset + 32, true);
     const localOffset = view.getUint32(cdOffset + 42, true);
-    const fileName = decoder.decode(bytes.subarray(cdOffset + 46, cdOffset + 46 + nameLen));
-    entries.set(fileName, { method, compSize, localOffset });
+    const fileName = decoder
+      .decode(bytes.subarray(cdOffset + 46, cdOffset + 46 + nameLen))
+      .replace(/\\/g, '/');
+    entries.set(fileName.toLowerCase(), { method, compSize, localOffset });
     cdOffset += 46 + nameLen + extraLen + commentLen;
   }
 
-  const readXmlEntry = async (name: string): Promise<Document | null> => {
-    const info = entries.get(name);
+  const readXmlEntry = async (lowerName: string): Promise<Document | null> => {
+    const info = entries.get(lowerName.toLowerCase());
     if (!info) return null;
     const lNameLen = view.getUint16(info.localOffset + 26, true);
     const lExtraLen = view.getUint16(info.localOffset + 28, true);
@@ -225,11 +242,11 @@ async function parseXlsxBuffer(buffer: ArrayBuffer): Promise<ParsedAtcRow[]> {
   };
 
   const sharedStrings: string[] = [];
-  const sstDoc = await readXmlEntry('xl/sharedStrings.xml');
+  const sstDoc = await readXmlEntry('xl/sharedstrings.xml');
   if (sstDoc) {
-    const siNodes = sstDoc.getElementsByTagName('si');
+    const siNodes = sstDoc.getElementsByTagNameNS('*', 'si');
     for (let i = 0; i < siNodes.length; i++) {
-      const tNodes = siNodes[i].getElementsByTagName('t');
+      const tNodes = siNodes[i].getElementsByTagNameNS('*', 't');
       let val = '';
       for (let j = 0; j < tNodes.length; j++) {
         val += tNodes[j].textContent || '';
@@ -238,19 +255,20 @@ async function parseXlsxBuffer(buffer: ArrayBuffer): Promise<ParsedAtcRow[]> {
     }
   }
 
-  const sheetName =
+  const sheetKey =
     Array.from(entries.keys())
       .filter((k) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(k))
-      .sort()[0] || 'xl/worksheets/sheet1.xml';
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))[0] ||
+    'xl/worksheets/sheet1.xml';
 
-  const sheetDoc = await readXmlEntry(sheetName);
-  if (!sheetDoc) throw new Error('No se encontró la hoja principal en el archivo .xlsx.');
+  const sheetDoc = await readXmlEntry(sheetKey);
+  if (!sheetDoc) throw new Error('No se encontró ninguna hoja de cálculo dentro del .xlsx.');
 
-  const rowNodes = sheetDoc.getElementsByTagName('row');
+  const rowNodes = sheetDoc.getElementsByTagNameNS('*', 'row');
   if (rowNodes.length < 2) return [];
 
   const extractRowCells = (rNode: Element): string[] => {
-    const cells = rNode.getElementsByTagName('c');
+    const cells = rNode.getElementsByTagNameNS('*', 'c');
     const arr: string[] = [];
     for (let c = 0; c < cells.length; c++) {
       const cell = cells[c];
@@ -260,10 +278,10 @@ async function parseXlsxBuffer(buffer: ArrayBuffer): Promise<ParsedAtcRow[]> {
       let val = '';
 
       if (cellType === 'inlineStr') {
-        const tNodes = cell.getElementsByTagName('t');
+        const tNodes = cell.getElementsByTagNameNS('*', 't');
         for (let k = 0; k < tNodes.length; k++) val += tNodes[k].textContent || '';
       } else {
-        const vNode = cell.getElementsByTagName('v')[0];
+        const vNode = cell.getElementsByTagNameNS('*', 'v')[0];
         const rawV = vNode?.textContent ?? '';
         if (cellType === 's') {
           val = sharedStrings[Number(rawV)] ?? '';
@@ -276,10 +294,26 @@ async function parseXlsxBuffer(buffer: ArrayBuffer): Promise<ParsedAtcRow[]> {
     return arr;
   };
 
-  const headers = extractRowCells(rowNodes[0]).map(normalizeHeaderKey);
-  const out: ParsedAtcRow[] = [];
+  let headerRowIdx = 0;
+  let headers: string[] = [];
+  for (let r = 0; r < Math.min(5, rowNodes.length); r++) {
+    const candidate = extractRowCells(rowNodes[r]).map(normalizeHeaderKey);
+    if (
+      candidate.includes('id_reg') ||
+      candidate.includes('telf_cliente') ||
+      candidate.includes('dni_cliente')
+    ) {
+      headerRowIdx = r;
+      headers = candidate;
+      break;
+    }
+  }
+  if (headers.length === 0) {
+    headers = extractRowCells(rowNodes[0]).map(normalizeHeaderKey);
+  }
 
-  for (let i = 1; i < rowNodes.length; i++) {
+  const out: ParsedAtcRow[] = [];
+  for (let i = headerRowIdx + 1; i < rowNodes.length; i++) {
     const vals = extractRowCells(rowNodes[i]);
     const rec: Record<string, string> = {};
     headers.forEach((h, idx) => {
@@ -305,6 +339,7 @@ export function AtcLlamadasView({
 }: AtcLlamadasViewProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [page, setPage] = useState(1);
+  const [readingFile, setReadingFile] = useState(false);
   const [stagedRows, setStagedRows] = useState<ParsedAtcRow[]>([]);
   const [fileName, setFileName] = useState<string>('');
   const [parseError, setParseError] = useState<string | null>(null);
@@ -334,6 +369,7 @@ export function AtcLlamadasView({
 
   const handleFileChange = async (file?: File | null) => {
     if (!file) return;
+    setReadingFile(true);
     setParseError(null);
     setUploadResult(null);
     setFileName(file.name);
@@ -344,6 +380,8 @@ export function AtcLlamadasView({
       if (ext === 'xlsx') {
         const buf = await file.arrayBuffer();
         parsed = await parseXlsxBuffer(buf);
+      } else if (ext === 'xls') {
+        throw new Error('El archivo es .xls antiguo (97-2003). Guárdalo como .xlsx o .csv en Excel.');
       } else {
         const txt = await file.text();
         parsed = parseDelimitedText(txt);
@@ -351,15 +389,17 @@ export function AtcLlamadasView({
 
       if (parsed.length === 0) {
         setParseError(
-          'No se detectaron registros válidos. Verifica las columnas (id_reg, fecha, hora, telf_cliente, dni_cliente...).'
+          'No se detectaron filas válidas. Verifica los encabezados (id_reg, fecha, hora, telf_cliente, dni_cliente...).'
         );
         setStagedRows([]);
         return;
       }
       setStagedRows(parsed);
     } catch (err: any) {
-      setParseError(err.message || 'Error al leer el archivo.');
+      setParseError(`Error leyendo "${file.name}": ${err?.message || String(err)}`);
       setStagedRows([]);
+    } finally {
+      setReadingFile(false);
     }
   };
 
@@ -369,7 +409,8 @@ export function AtcLlamadasView({
     setProgressPct(0);
     setParseError(null);
 
-    const BATCH_SIZE = 400;
+    // Lotes de 100 filas (~40 KB) para no exceder jamás el límite de payload de Express/Nginx
+    const BATCH_SIZE = 100;
     let totalInserted = 0;
 
     try {
@@ -383,7 +424,7 @@ export function AtcLlamadasView({
         setProgressPct(Math.min(100, Math.round(((i + chunk.length) / stagedRows.length) * 100)));
       }
 
-      setUploadResult(`${totalInserted.toLocaleString('es-PE')} registros importados en atc_llamadas.`);
+      setUploadResult(`${totalInserted.toLocaleString('es-PE')} registros guardados en atc_llamadas.`);
       setStagedRows([]);
       if (onEnableHistory && !ignoreDates) {
         onEnableHistory();
@@ -391,7 +432,7 @@ export function AtcLlamadasView({
       setPage(1);
       await refetch();
     } catch (err: any) {
-      setParseError(`Error en la importación: ${err.message}`);
+      setParseError(`Error al subir al servidor: ${err?.message || String(err)}`);
     } finally {
       setUploading(false);
     }
@@ -417,7 +458,6 @@ export function AtcLlamadasView({
 
   return (
     <div className={`space-y-6 transition-opacity ${loading && !uploading ? 'opacity-75' : 'opacity-100'}`}>
-      {/* 1. PANEL DE IMPORTACIÓN (.XLSX / .CSV / .TXT) */}
       <div className="bg-white border border-slate-100 rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
@@ -427,7 +467,7 @@ export function AtcLlamadasView({
             <div>
               <h3 className="font-bold text-sm text-slate-900">Importar Base ATC Llamadas</h3>
               <p className="text-[11px] text-slate-400">
-                Formatos admitidos: .xlsx, .csv o .txt (id, id_reg, fecha, hora, telf_cliente, dni_cliente, dni_asesor, nom_ape, medio, tipo, motivo, comentario llamada)
+                Formatos admitidos: .xlsx, .csv o .txt
               </p>
             </div>
           </div>
@@ -446,11 +486,11 @@ export function AtcLlamadasView({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#FF5500] hover:bg-[#E04B00] text-white font-bold text-xs shadow-xs transition cursor-pointer"
+              disabled={uploading || readingFile}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#FF5500] hover:bg-[#E04B00] disabled:opacity-50 text-white font-bold text-xs shadow-xs transition cursor-pointer"
             >
-              <FileSpreadsheet size={14} />
-              <span>Seleccionar Archivo</span>
+              {readingFile ? <RefreshCw size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />}
+              <span>{readingFile ? 'Leyendo archivo...' : 'Seleccionar Archivo'}</span>
             </button>
 
             {isAdmin && totalRecords > 0 && (
@@ -480,14 +520,13 @@ export function AtcLlamadasView({
           </div>
         )}
 
-        {/* Previsualización previa a confirmar carga */}
         {stagedRows.length > 0 && (
           <div className="border border-orange-200 bg-[#FFF0E5]/40 rounded-2xl p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-xs">
                 <span className="font-extrabold text-slate-900">{fileName}</span>{' '}
                 <span className="text-slate-500">
-                  • <strong>{fmt(stagedRows.length)}</strong> filas listas para subir
+                  • <strong>{fmt(stagedRows.length)}</strong> filas detectadas
                 </span>
               </div>
 
@@ -508,7 +547,9 @@ export function AtcLlamadasView({
                 >
                   {uploading ? <RefreshCw size={13} className="animate-spin" /> : <UploadCloud size={13} />}
                   <span>
-                    {uploading ? `Importando (${progressPct}%)...` : `Confirmar Importación (${fmt(stagedRows.length)})`}
+                    {uploading
+                      ? `Subiendo a BD (${progressPct}%)...`
+                      : `Subir a Base de Datos (${fmt(stagedRows.length)})`}
                   </span>
                 </button>
               </div>
@@ -553,7 +594,6 @@ export function AtcLlamadasView({
         )}
       </div>
 
-      {/* 2. KPIS DE LA BASE CARGADA */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)]">
           <div className="flex items-center gap-2 text-slate-500 text-xs font-medium">
@@ -591,7 +631,6 @@ export function AtcLlamadasView({
         </div>
       </div>
 
-      {/* 3. TOP MOTIVOS + TABLA DE REGISTROS */}
       {byMotivo.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {byMotivo.map((m, idx) => (

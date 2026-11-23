@@ -70,8 +70,8 @@ function normalizeTimeSql(raw: unknown): string | null {
   const str = String(raw).trim();
   if (!str) return null;
 
-  // Fracción decimal de Excel (ej. 0.58333 o 46346.58333)
-  if (/^\d+(\.\d+)?$/.test(str)) {
+  // Fracción decimal o científica de Excel (ej. 0.58333 o 8.2986E-3 para 00:11:57)
+  if (/^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(str) && !str.includes(':')) {
     const num = Number(str);
     const frac = num >= 1 ? num - Math.floor(num) : num;
     const totalSec = Math.round(frac * 86400) % 86400;
