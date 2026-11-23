@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   Home, BarChart2, Layers, MessageSquare, Sparkles, Star,
   ChevronDown, Activity, ClipboardList, X, Wrench, Shield,
-  LogOut, Menu
+  LogOut, Menu, TrendingUp
 } from 'lucide-react';
 import { AuthUser, NavSection, ViewMode } from '../types/dashboard';
 
@@ -202,6 +202,20 @@ export function Sidebar({
                     >
                       <Wrench size={13} />
                       <span>Operaciones Campo</span>
+                    </button>
+                  )}
+                  {canSeeSubview('impacto') && (
+                    <button
+                      type="button"
+                      onClick={() => handleSelectSubView('impacto')}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left transition ${
+                        activeNav === 'Dashboard' && viewMode === 'impacto'
+                          ? 'bg-[#FF5500] text-white font-semibold shadow-xs'
+                          : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
+                      <TrendingUp size={13} />
+                      <span>Impacto</span>
                     </button>
                   )}
                 </div>

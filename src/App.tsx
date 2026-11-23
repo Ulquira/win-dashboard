@@ -269,7 +269,8 @@ export default function App() {
   const partnerOptions: string[] = filtersData?.partners || EMPTY_ARRAY;
 
   const needsMainDashboard =
-    activeNav === 'Inicio' || (activeNav === 'Dashboard' && viewMode !== 'operaciones');
+    activeNav === 'Inicio' ||
+    (activeNav === 'Dashboard' && viewMode !== 'operaciones' && viewMode !== 'impacto');
 
   const {
     data: dashData,

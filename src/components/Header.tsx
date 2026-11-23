@@ -96,7 +96,7 @@ export function Header({
                   : viewMode === 'operativa'
                     ? 'Vista Operativa'
                     : viewMode === 'impacto'
-                      ? 'Impacto WIN en Ruta (Comparativo A/B)'
+                      ? 'Impacto'
                       : 'Operaciones de Campo';
 
   return (
@@ -217,7 +217,7 @@ export function Header({
                       : 'text-slate-700 hover:bg-slate-50'
                       }`}
                   >
-                    <span>{serviceOptions.length < 5 ? `Todos mis servicios (${serviceOptions.length})` : 'Todos los servicios'}</span>
+                    <span>{serviceOptions.length < 7 ? `Todos mis servicios (${serviceOptions.length})` : 'Todos los servicios'}</span>
                     {selectedServices.length === 0 && <Check size={14} />}
                   </div>
 
