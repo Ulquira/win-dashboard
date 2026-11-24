@@ -504,21 +504,18 @@ async function queryAtcCohortImpact(
   }
 
   const virtualTipoSql = getVirtualTipoOperacionSql('v');
-  const whereClauses: string[] = [
-    `v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?`,
-    `(${virtualTipoSql}) IN ('AVER - LIMA', 'AVER - PROV', 'POSTVENTA', 'GARANTIA', 'REITERADA')`,
-  ];
-  const whereParams: any[] = [effStart, effEnd];
+  const extraWhereClauses: string[] = [];
+  const extraWhereParams: any[] = [];
 
   const srvFilter = buildStrictOrderTypeSql(service, getServicioToTipoMap(), 'v.tipo_operacion');
   if (srvFilter.params.length > 0) {
-    whereClauses.push(srvFilter.sql);
-    whereParams.push(...srvFilter.params);
+    extraWhereClauses.push(srvFilter.sql);
+    extraWhereParams.push(...srvFilter.params);
   }
 
   if (searchQ) {
     const likeQ = `%${searchQ}%`;
-    whereClauses.push(`(
+    extraWhereClauses.push(`(
       CAST(v.orden_id AS CHAR) LIKE ? OR
       v.ticket LIKE ? OR
       v.cliente LIKE ? OR
@@ -527,10 +524,10 @@ async function queryAtcCohortImpact(
       v.ops_cuadrilla LIKE ? OR
       v.ops_partner LIKE ?
     )`);
-    whereParams.push(likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ);
+    extraWhereParams.push(likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ);
   }
 
-  const whereSql = `WHERE ${whereClauses.join(' AND ')}`;
+  const extraWhereSql = extraWhereClauses.length > 0 ? `AND ${extraWhereClauses.join(' AND ')}` : '';
   const vtRegex = `VISITA|VT|INSTAL|TECNIC|TÉCNIC|AVERIA|AVERÍA|AGENDA|ORDEN|REPROGRAM`;
 
   const [orderCellsRes, motivoCellsRes, atcPeriodCntRes]: any = await Promise.all([
@@ -567,16 +564,30 @@ async function queryAtcCohortImpact(
         FROM mat_atc_llamadas_360 m
         WHERE m.orden_id IS NOT NULL
           AND m.tiene_orden = 1
+          AND m.fecha_llamada >= ?
+          AND m.fecha_llamada <= ?
         GROUP BY m.orden_id
       ) a ON a.orden_id = v.orden_id
-      ${whereSql}
+      WHERE (
+        (v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?)
+        OR v.orden_id IN (
+          SELECT DISTINCT m2.orden_id
+          FROM mat_atc_llamadas_360 m2
+          WHERE m2.orden_id IS NOT NULL
+            AND m2.tiene_orden = 1
+            AND m2.fecha_llamada >= ?
+            AND m2.fecha_llamada <= ?
+        )
+      )
+        AND (${virtualTipoSql}) IN ('AVER - LIMA', 'AVER - PROV', 'POSTVENTA', 'GARANTIA', 'REITERADA')
+        ${extraWhereSql}
       GROUP BY
         v.fecha_solicitud_dia,
         tipo_operacion_virtual,
         ambito_clean,
         cohorte_3
       `,
-      whereParams
+      [effStart, effEnd, effStart, effEnd, effStart, effEnd, ...extraWhereParams]
     ),
     pool.query(
       `
@@ -595,15 +606,18 @@ async function queryAtcCohortImpact(
         COUNT(*) AS llamadas
       FROM mat_atc_llamadas_360 m
       INNER JOIN mat_funnel_casos_360 v ON v.orden_id = m.orden_id
-      ${whereSql}
-        AND m.tiene_orden = 1
+      WHERE m.tiene_orden = 1
+        AND m.fecha_llamada >= ?
+        AND m.fecha_llamada <= ?
+        AND (${virtualTipoSql}) IN ('AVER - LIMA', 'AVER - PROV', 'POSTVENTA', 'GARANTIA', 'REITERADA')
+        ${extraWhereSql}
       GROUP BY
         tipo_operacion_virtual,
         cohorte_3,
         motivo_clean,
         is_vt_flag
       `,
-      whereParams
+      [effStart, effEnd, ...extraWhereParams]
     ),
     pool.query(
       `
@@ -1160,7 +1174,7 @@ router.get('/cohorts/atc-impact', async (req: Request, res: Response) => {
   const service = enforceRoleServiceScope(req, rawService);
   const searchQ = String(q || '').trim();
   const windowDays = Math.min(15, Math.max(0, Number(rawWindow) || 3));
-  const cacheKey = `cohorts_atc_v4_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
+  const cacheKey = `cohorts_atc_v5_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
 
   try {
     await loadTipoServicioCacheIfNeeded();
