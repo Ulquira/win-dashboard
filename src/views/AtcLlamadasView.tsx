@@ -873,11 +873,9 @@ export function AtcLlamadasView({
                 className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-700 focus:outline-none focus:border-[#FF5500]"
               >
                 <option value="TODOS">Todos los tramos</option>
-                {byTramo.map((t) => (
-                  <option key={t.tramo_orden} value={t.tramo_orden}>
-                    {t.tramo_orden} ({t.total})
-                  </option>
-                ))}
+                <option value="FRANJA_08">08:00 – 12:00 hrs</option>
+                <option value="FRANJA_12">12:00 – 16:00 hrs</option>
+                <option value="FRANJA_16">16:00 – 20:00 hrs</option>
               </select>
             </div>
 
@@ -907,14 +905,25 @@ export function AtcLlamadasView({
         {byTramo.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-100">
             <span className="text-[11px] font-bold text-slate-400 mr-1">Distribución por Tramo:</span>
-            {byTramo.slice(0, 8).map((t) => {
-              const active = tramoFilter === t.tramo_orden;
+            {[
+              { id: 'FRANJA_08', label: '08:00 hrs', range: [8, 12] },
+              { id: 'FRANJA_12', label: '12:00 hrs', range: [12, 16] },
+              { id: 'FRANJA_16', label: '16:00 hrs', range: [16, 20] },
+            ].map(({ id, label, range }) => {
+              const total = byTramo
+                .filter((t) => {
+                  const h = parseInt(String(t.tramo_orden || '').split(':')[0], 10);
+                  return !isNaN(h) && h >= range[0] && h < range[1];
+                })
+                .reduce((sum, t) => sum + Number(t.total || 0), 0);
+              if (total === 0) return null;
+              const active = tramoFilter === id;
               return (
                 <button
-                  key={t.tramo_orden}
+                  key={id}
                   type="button"
                   onClick={() => {
-                    setTramoFilter(active ? 'TODOS' : t.tramo_orden);
+                    setTramoFilter(active ? 'TODOS' : id);
                     setPage(1);
                   }}
                   className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold border transition cursor-pointer ${active
@@ -922,9 +931,9 @@ export function AtcLlamadasView({
                       : 'bg-indigo-50/70 text-indigo-800 border-indigo-200/80 hover:bg-indigo-100'
                     }`}
                 >
-                  <span>{t.tramo_orden}</span>
+                  <span>{label}</span>
                   <span className={active ? 'text-indigo-100' : 'text-indigo-500'}>
-                    ({fmt(t.total)})
+                    ({fmt(total)})
                   </span>
                 </button>
               );

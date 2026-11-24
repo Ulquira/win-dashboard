@@ -877,6 +877,21 @@ function buildAtc360Filters(query: Record<string, any>, serviceScope?: string) {
   if (tramoFilter && tramoFilter !== 'TODOS') {
     if (tramoFilter === 'SIN TRAMO') {
       baseClauses.push(`(m.tramo_orden IS NULL OR TRIM(m.tramo_orden) = '')`);
+    } else if (tramoFilter === 'FRANJA_08') {
+      // 08:00 – 11:59
+      baseClauses.push(
+        `(CAST(SUBSTRING_INDEX(TRIM(m.tramo_orden), ':', 1) AS UNSIGNED) >= 8 AND CAST(SUBSTRING_INDEX(TRIM(m.tramo_orden), ':', 1) AS UNSIGNED) < 12)`
+      );
+    } else if (tramoFilter === 'FRANJA_12') {
+      // 12:00 – 15:59
+      baseClauses.push(
+        `(CAST(SUBSTRING_INDEX(TRIM(m.tramo_orden), ':', 1) AS UNSIGNED) >= 12 AND CAST(SUBSTRING_INDEX(TRIM(m.tramo_orden), ':', 1) AS UNSIGNED) < 16)`
+      );
+    } else if (tramoFilter === 'FRANJA_16') {
+      // 16:00 – 19:59
+      baseClauses.push(
+        `(CAST(SUBSTRING_INDEX(TRIM(m.tramo_orden), ':', 1) AS UNSIGNED) >= 16 AND CAST(SUBSTRING_INDEX(TRIM(m.tramo_orden), ':', 1) AS UNSIGNED) < 20)`
+      );
     } else {
       baseClauses.push(`m.tramo_orden = ?`);
       baseParams.push(tramoFilter);
