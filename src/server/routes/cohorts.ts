@@ -544,8 +544,14 @@ async function queryAtcCohortImpact(
 
   const motivoDateWhereSql = isAllHistory
     ? ``
-    : `AND v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?`;
+    : `AND m.fecha_llamada >= ? AND m.fecha_llamada <= ?`;
   const motivoDateParams = isAllHistory ? [] : [effStart, effEnd];
+
+  // Homologar el conteo de llamadas con ATC Llamadas (que filtra por fecha_llamada)
+  const subqueryDateSql = isAllHistory
+    ? ``
+    : `AND m.fecha_llamada >= ? AND m.fecha_llamada <= ?`;
+  const subqueryParams = isAllHistory ? [] : [effStart, effEnd];
 
   const [orderCellsRes, motivoCellsRes, atcPeriodCntRes]: any = await Promise.all([
     pool.query(
@@ -582,6 +588,7 @@ async function queryAtcCohortImpact(
         FROM mat_atc_llamadas_360 m
         WHERE m.orden_id IS NOT NULL
           AND m.tiene_orden = 1
+          ${subqueryDateSql}
         GROUP BY m.orden_id
       ) a ON a.orden_id = v.orden_id
       WHERE ${orderScopeWhereSql}
@@ -594,7 +601,7 @@ async function queryAtcCohortImpact(
         con_wsp_flag,
         cohorte_3
       `,
-      [effStart, effEnd, ...extraWhereParams]
+      [...subqueryParams, effStart, effEnd, ...extraWhereParams]
     ),
     pool.query(
       `
