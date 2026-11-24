@@ -585,17 +585,18 @@ export function CohortComparisonView({
   const totalWspNotified = globalSi.conWsp + globalNo.conWsp;
   const adoptionRateWsp = calcPct(globalSi.conWsp, totalWspNotified);
 
-  // KPIs derivados de Deflexión ATC
+  // KPIs derivados de Deflexión ATC (100% basado en volumen total de llamadas, no clientes únicos)
   const { cIngreso, cWspNoIngreso, cSinWsp, cNoIngreso } = atcComputed;
-  const contactRateSi = calcPct(cIngreso.ordersWithCall, cIngreso.orders);
-  const contactRateNo = calcPct(cNoIngreso.ordersWithCall, cNoIngreso.orders);
-  const deltaContactRate = contactRateSi - contactRateNo;
-  const relDeflectionPct =
-    contactRateNo > 0 ? ((contactRateNo - contactRateSi) / contactRateNo) * 100 : 0;
-
   const callsPer100Si = calcPct(cIngreso.totalCalls, cIngreso.orders);
   const callsPer100No = calcPct(cNoIngreso.totalCalls, cNoIngreso.orders);
   const deltaCallsPer100 = callsPer100Si - callsPer100No;
+  const relCallsVarPct =
+    callsPer100No > 0 ? ((callsPer100Si - callsPer100No) / callsPer100No) * 100 : 0;
+
+  const totalCallsCompared = cIngreso.totalCalls + cNoIngreso.totalCalls;
+  const shareCallsSi = calcPct(cIngreso.totalCalls, totalCallsCompared);
+  const shareCallsNo = calcPct(cNoIngreso.totalCalls, totalCallsCompared);
+  const totalCallsAll3 = cIngreso.totalCalls + cWspNoIngreso.totalCalls + cSinWsp.totalCalls;
 
   const callsAvoided = Math.round(
     ((callsPer100No - callsPer100Si) / 100) * cIngreso.orders
@@ -1306,25 +1307,25 @@ export function CohortComparisonView({
             <>
               {/* 1. 4 TARJETAS EJECUTIVAS DE DEFLEXIÓN ATC */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {/* KPI 1: % Contactabilidad ATC (Órdenes que llaman) */}
+                {/* KPI 1: Tasa de Llamadas ATC (Todas las llamadas / Total OTs) */}
                 <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] flex flex-col justify-between">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <div className="p-2 rounded-xl bg-emerald-50 text-emerald-600">
                         <PhoneOff size={18} />
                       </div>
-                      <span className="text-xs font-bold text-slate-700">% Órdenes que Llaman ATC</span>
+                      <span className="text-xs font-bold text-slate-700">Tasa de Llamadas / OTs</span>
                     </div>
                     <span
                       className={`inline-flex items-center gap-0.5 px-2.5 py-0.5 rounded-full text-xs font-extrabold tabular-nums ${
-                        deltaContactRate <= 0
+                        deltaCallsPer100 <= 0
                           ? 'bg-emerald-100 text-emerald-800'
                           : 'bg-rose-100 text-rose-800'
                       }`}
                     >
-                      {deltaContactRate <= 0 ? <ArrowDownRight size={13} /> : <ArrowUpRight size={13} />}
-                      {deltaContactRate > 0 ? '+' : ''}
-                      {deltaContactRate.toFixed(1).replace('.', ',')} pp
+                      {deltaCallsPer100 <= 0 ? <ArrowDownRight size={13} /> : <ArrowUpRight size={13} />}
+                      {deltaCallsPer100 > 0 ? '+' : ''}
+                      {deltaCallsPer100.toFixed(1).replace('.', ',')} pp
                     </span>
                   </div>
 
@@ -1334,10 +1335,15 @@ export function CohortComparisonView({
                         Ingresó Tracking ({fmt(cIngreso.orders)})
                       </div>
                       <div className="text-2xl font-black text-slate-900 tabular-nums mt-0.5">
-                        {fmtPct(contactRateSi)}
+                        {fmtPct(callsPer100Si)}
                       </div>
-                      <div className="text-[11px] text-emerald-700 font-bold">
-                        {fmt(cIngreso.ordersWithCall)} OTs llamaron ({relDeflectionPct > 0 ? `-${relDeflectionPct.toFixed(0)}% rel.` : '0%'})
+                      <div
+                        className={`text-[11px] font-bold ${
+                          relCallsVarPct <= 0 ? 'text-emerald-700' : 'text-rose-600'
+                        }`}
+                      >
+                        {fmt(cIngreso.totalCalls)} llamadas ({relCallsVarPct > 0 ? '+' : ''}
+                        {relCallsVarPct.toFixed(0)}% rel.)
                       </div>
                     </div>
                     <div className="border-l border-slate-100 pl-3">
@@ -1345,33 +1351,26 @@ export function CohortComparisonView({
                         No Ingresó ({fmt(cNoIngreso.orders)})
                       </div>
                       <div className="text-2xl font-bold text-slate-500 tabular-nums mt-0.5">
-                        {fmtPct(contactRateNo)}
+                        {fmtPct(callsPer100No)}
                       </div>
                       <div className="text-[11px] text-slate-400 font-medium">
-                        {fmt(cNoIngreso.ordersWithCall)} OTs llamaron
+                        {fmt(cNoIngreso.totalCalls)} llamadas
                       </div>
                     </div>
                   </div>
                 </div>
 
-                {/* KPI 2: Intensidad de Llamadas (Llamadas por cada 100 Órdenes) */}
+                {/* KPI 2: Volumen Total de Llamadas Registradas */}
                 <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] flex flex-col justify-between">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <div className="p-2 rounded-xl bg-orange-50 text-[#FF5500]">
                         <PhoneCall size={18} />
                       </div>
-                      <span className="text-xs font-bold text-slate-700">Llamadas por cada 100 OTs</span>
+                      <span className="text-xs font-bold text-slate-700">Volumen Total de Llamadas</span>
                     </div>
-                    <span
-                      className={`inline-flex items-center gap-0.5 px-2.5 py-0.5 rounded-full text-xs font-extrabold tabular-nums ${
-                        deltaCallsPer100 <= 0
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : 'bg-rose-100 text-rose-800'
-                      }`}
-                    >
-                      {deltaCallsPer100 > 0 ? '+' : ''}
-                      {deltaCallsPer100.toFixed(1).replace('.', ',')}
+                    <span className="px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 text-[11px] font-extrabold tabular-nums">
+                      {fmt(totalCallsCompared)} total
                     </span>
                   </div>
 
@@ -1381,19 +1380,19 @@ export function CohortComparisonView({
                         Ingresó Tracking
                       </div>
                       <div className="text-2xl font-black text-slate-900 tabular-nums mt-0.5">
-                        {callsPer100Si.toFixed(1).replace('.', ',')}
+                        {fmt(cIngreso.totalCalls)}
                       </div>
                       <div className="text-[11px] text-slate-500 font-medium">
-                        {fmt(cIngreso.totalCalls)} llamadas totales
+                        {fmtPct(shareCallsSi)} del volumen
                       </div>
                     </div>
                     <div className="border-l border-slate-100 pl-3">
                       <div className="text-[10px] font-bold uppercase text-slate-400">No Ingresó</div>
                       <div className="text-2xl font-bold text-slate-500 tabular-nums mt-0.5">
-                        {callsPer100No.toFixed(1).replace('.', ',')}
+                        {fmt(cNoIngreso.totalCalls)}
                       </div>
                       <div className="text-[11px] text-slate-400 font-medium">
-                        {fmt(cNoIngreso.totalCalls)} llamadas totales
+                        {fmtPct(shareCallsNo)} del volumen
                       </div>
                     </div>
                   </div>
@@ -1501,8 +1500,8 @@ export function CohortComparisonView({
                       data: cIngreso,
                     },
                   ].map((item, i) => {
-                    const rate = calcPct(item.data.ordersWithCall, item.data.orders);
-                    const per100 = calcPct(item.data.totalCalls, item.data.orders);
+                    const callsRate = calcPct(item.data.totalCalls, item.data.orders);
+                    const callsShare = calcPct(item.data.totalCalls, totalCallsAll3);
                     return (
                       <div
                         key={i}
@@ -1521,24 +1520,24 @@ export function CohortComparisonView({
                         <div className="grid grid-cols-2 gap-2 bg-white p-3 rounded-xl border border-slate-100">
                           <div>
                             <div className="text-[10px] font-bold text-slate-400 uppercase">
-                              % Llaman al ATC
+                              Total Llamadas
                             </div>
                             <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">
-                              {fmtPct(rate)}
+                              {fmt(item.data.totalCalls)}
                             </div>
                             <div className="text-[10px] text-slate-500">
-                              {fmt(item.data.ordersWithCall)} clientes
+                              {fmtPct(callsShare)} del total
                             </div>
                           </div>
                           <div className="border-l border-slate-100 pl-3">
                             <div className="text-[10px] font-bold text-slate-400 uppercase">
-                              Llamadas / 100 OTs
+                              Tasa (Llam. / OTs)
                             </div>
                             <div className="text-xl font-black text-[#FF5500] tabular-nums mt-0.5">
-                              {per100.toFixed(1).replace('.', ',')}
+                              {fmtPct(callsRate)}
                             </div>
                             <div className="text-[10px] text-slate-500">
-                              {fmt(item.data.totalCalls)} llamadas
+                              {callsRate.toFixed(1).replace('.', ',')} cada 100 OTs
                             </div>
                           </div>
                         </div>
@@ -1546,7 +1545,7 @@ export function CohortComparisonView({
                         <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
                           <div
                             className={`h-full rounded-full ${item.bar}`}
-                            style={{ width: `${Math.min(100, rate * 2)}%` }}
+                            style={{ width: `${Math.min(100, callsRate * 2)}%` }}
                           />
                         </div>
                       </div>
@@ -1576,8 +1575,8 @@ export function CohortComparisonView({
                         <tr>
                           <th className="py-2.5 px-3">Servicio</th>
                           <th className="py-2.5 px-3 text-right">OTs (SI / NO)</th>
-                          <th className="py-2.5 px-3 text-right">% Llama Con Tracking</th>
-                          <th className="py-2.5 px-3 text-right">% Llama Sin Tracking</th>
+                          <th className="py-2.5 px-3 text-right">Llamadas Con Tracking</th>
+                          <th className="py-2.5 px-3 text-right">Llamadas Sin Tracking</th>
                           <th className="py-2.5 px-3 text-right">Deflexión (Δ pp)</th>
                         </tr>
                       </thead>
@@ -1586,12 +1585,12 @@ export function CohortComparisonView({
                           const noOrders = onlyWspBase
                             ? s.wspNoIngreso.orders
                             : s.wspNoIngreso.orders + s.sinWsp.orders;
-                          const noWithCall = onlyWspBase
-                            ? s.wspNoIngreso.ordersWithCall
-                            : s.wspNoIngreso.ordersWithCall + s.sinWsp.ordersWithCall;
+                          const noTotalCalls = onlyWspBase
+                            ? s.wspNoIngreso.totalCalls
+                            : s.wspNoIngreso.totalCalls + s.sinWsp.totalCalls;
 
-                          const rSi = calcPct(s.ingreso.ordersWithCall, s.ingreso.orders);
-                          const rNo = calcPct(noWithCall, noOrders);
+                          const rSi = calcPct(s.ingreso.totalCalls, s.ingreso.orders);
+                          const rNo = calcPct(noTotalCalls, noOrders);
                           const diff = rSi - rNo;
 
                           return (
@@ -1604,13 +1603,13 @@ export function CohortComparisonView({
                               <td className="py-2.5 px-3 text-right tabular-nums font-extrabold text-slate-900">
                                 {fmtPct(rSi)}{' '}
                                 <span className="text-[10px] text-slate-400 font-normal">
-                                  ({fmt(s.ingreso.ordersWithCall)})
+                                  ({fmt(s.ingreso.totalCalls)})
                                 </span>
                               </td>
                               <td className="py-2.5 px-3 text-right tabular-nums font-semibold text-slate-600">
                                 {fmtPct(rNo)}{' '}
                                 <span className="text-[10px] text-slate-400 font-normal">
-                                  ({fmt(noWithCall)})
+                                  ({fmt(noTotalCalls)})
                                 </span>
                               </td>
                               <td className="py-2.5 px-3 text-right tabular-nums">
