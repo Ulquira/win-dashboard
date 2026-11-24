@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../config/db';
 import { requireAuth, requireAdmin } from '../auth/middleware';
+import { cacheFlushAll } from '../config/cache';
 
 const router = Router();
 
@@ -290,6 +291,7 @@ router.post('/atc-llamadas/import', async (req: Request, res: Response) => {
     }
 
     if (placeholders.length === 0) {
+      cacheFlushAll();
       return res.json({ ok: true, processed: 0 });
     }
 
@@ -314,6 +316,7 @@ router.post('/atc-llamadas/import', async (req: Request, res: Response) => {
       values
     );
 
+    cacheFlushAll();
     return res.json({ ok: true, processed: placeholders.length });
   } catch (err: any) {
     console.error('❌ Error en POST /api/atc-llamadas/import:', err.message);
@@ -332,7 +335,9 @@ router.delete('/atc-llamadas', async (req: Request, res: Response) => {
     return res.json({ ok: true });
   } catch (err: any) {
     return res.status(500).json({ ok: false, error: err.message });
+    
   }
 });
+
 
 export default router;

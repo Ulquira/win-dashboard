@@ -438,6 +438,279 @@ async function queryCohortDataset(
   };
 }
 
+async function queryAtcCohortImpact(
+  startDate: string,
+  endDate: string,
+  service: string,
+  searchQ: string,
+  ignoreDates: string,
+  windowDays: number = 3
+) {
+  // Verificar si existe atc_llamadas antes de cruzar
+  try {
+    await pool.query(`SELECT 1 FROM atc_llamadas LIMIT 1`);
+  } catch {
+    return {
+      ok: true,
+      hasAtcData: false,
+      windowDays,
+      orderCells: [],
+      motivoCells: [],
+    };
+  }
+
+  const whereClauses: string[] = [];
+  const queryParams: any[] = [];
+
+  if (ignoreDates !== 'true') {
+    whereClauses.push(`v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?`);
+    queryParams.push(startDate, endDate);
+  } else {
+    whereClauses.push(`v.fecha_solicitud_dia IS NOT NULL`);
+  }
+
+  const srvFilter = buildStrictOrderTypeSql(service, getServicioToTipoMap(), 'v.tipo_operacion');
+  if (srvFilter.params.length > 0) {
+    whereClauses.push(srvFilter.sql);
+    queryParams.push(...srvFilter.params);
+  }
+
+  if (searchQ) {
+    const likeQ = `%${searchQ}%`;
+    whereClauses.push(`(
+      CAST(v.orden_id AS CHAR) LIKE ? OR
+      v.ticket LIKE ? OR
+      v.cliente LIKE ? OR
+      v.ops_num_doc LIKE ? OR
+      v.telefono LIKE ? OR
+      v.ops_cuadrilla LIKE ? OR
+      v.ops_partner LIKE ?
+    )`);
+    queryParams.push(likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ);
+  }
+
+  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+  const virtualTipoSql = getVirtualTipoOperacionSql('v');
+
+  const callWhereSql =
+    ignoreDates !== 'true'
+      ? `WHERE a.fecha >= ? AND a.fecha <= DATE_ADD(?, INTERVAL ? DAY)`
+      : `WHERE a.fecha IS NOT NULL`;
+  const callParams = ignoreDates !== 'true' ? [startDate, endDate, windowDays] : [];
+
+  const [ordersRes, callsRes]: any = await Promise.all([
+    pool.query(
+      `
+      SELECT
+        v.orden_id,
+        DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
+        DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m') AS fecha_corta,
+        DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m') AS mes,
+        YEARWEEK(v.fecha_solicitud_dia, 1) AS yw,
+        ${virtualTipoSql} AS tipo_operacion,
+        COALESCE(NULLIF(TRIM(v.ambito), ''), IF(UPPER(TRIM(COALESCE(v.sector_operativo, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(v.region, ''))) = 'LIMA', 'LIMA', 'PROVINCIA')) AS ambito,
+        CASE
+          WHEN v.ingreso_tracking = 'SI' THEN 'INGRESO'
+          WHEN v.se_envio_wsp = 'SI' THEN 'WSP_SIN_INGRESO'
+          ELSE 'SIN_WSP'
+        END AS cohorte_3,
+        TRIM(COALESCE(v.ops_num_doc, '')) AS dni,
+        RIGHT(REPLACE(REPLACE(TRIM(COALESCE(v.telefono, '')), ' ', ''), '+', ''), 9) AS phone9
+      FROM mat_funnel_casos_360 v
+      ${whereSql}
+      `,
+      queryParams
+    ),
+    pool.query(
+      `
+      SELECT
+        a.id,
+        DATE_FORMAT(a.fecha, '%Y-%m-%d') AS call_date,
+        TRIM(COALESCE(a.dni_cliente, '')) AS dni,
+        RIGHT(REPLACE(REPLACE(TRIM(COALESCE(a.telf_cliente, '')), ' ', ''), '+', ''), 9) AS phone9,
+        COALESCE(NULLIF(TRIM(a.tipo), ''), 'SIN TIPO') AS tipo,
+        COALESCE(NULLIF(TRIM(a.motivo), ''), 'SIN MOTIVO') AS motivo
+      FROM atc_llamadas a
+      ${callWhereSql}
+      `,
+      callParams
+    ),
+  ]);
+
+  const orders: any[] = ordersRes?.[0] || [];
+  const calls: any[] = callsRes?.[0] || [];
+
+  if (calls.length === 0) {
+    return {
+      ok: true,
+      hasAtcData: false,
+      windowDays,
+      totalAtcInPeriod: 0,
+      orderCells: [],
+      motivoCells: [],
+    };
+  }
+
+  const parseDayEpoch = (ymd: string): number => {
+    if (!ymd || ymd.length < 10) return NaN;
+    return Math.floor(Date.parse(`${ymd}T00:00:00Z`) / 86400000);
+  };
+
+  interface CallItem {
+    id: number;
+    dayNum: number;
+    motivo: string;
+    tipo: string;
+    isVtMotivo: boolean;
+  }
+
+  const byDni = new Map<string, CallItem[]>();
+  const byPhone = new Map<string, CallItem[]>();
+
+  for (const c of calls) {
+    const dayNum = parseDayEpoch(c.call_date);
+    if (Number.isNaN(dayNum)) continue;
+
+    const motUpper = `${c.tipo} ${c.motivo}`.toUpperCase();
+    const isVtMotivo =
+      motUpper.includes('VISITA') ||
+      motUpper.includes('VT') ||
+      motUpper.includes('INSTAL') ||
+      motUpper.includes('TECNIC') ||
+      motUpper.includes('TÉCNIC') ||
+      motUpper.includes('AVERIA') ||
+      motUpper.includes('AVERÍA') ||
+      motUpper.includes('AGENDA') ||
+      motUpper.includes('ORDEN') ||
+      motUpper.includes('REPROGRAM');
+
+    const item: CallItem = {
+      id: Number(c.id),
+      dayNum,
+      motivo: c.motivo,
+      tipo: c.tipo,
+      isVtMotivo,
+    };
+
+    const cleanDni = String(c.dni || '').replace(/^0+/, '');
+    if (cleanDni.length >= 6) {
+      let arr = byDni.get(cleanDni);
+      if (!arr) {
+        arr = [];
+        byDni.set(cleanDni, arr);
+      }
+      arr.push(item);
+    }
+
+    const p9 = String(c.phone9 || '').replace(/\D/g, '');
+    if (p9.length === 9) {
+      let arr = byPhone.get(p9);
+      if (!arr) {
+        arr = [];
+        byPhone.set(p9, arr);
+      }
+      arr.push(item);
+    }
+  }
+
+  const cellMap = new Map<string, any>();
+  const motivoMap = new Map<string, any>();
+
+  for (const o of orders) {
+    const ordDay = parseDayEpoch(o.raw_date);
+    if (Number.isNaN(ordDay)) continue;
+
+    const matchedMap = new Map<number, CallItem>();
+    const cleanDni = String(o.dni || '').replace(/^0+/, '');
+    const p9 = String(o.phone9 || '').replace(/\D/g, '');
+
+    if (cleanDni.length >= 6) {
+      const list = byDni.get(cleanDni);
+      if (list) {
+        for (const cl of list) {
+          if (cl.dayNum >= ordDay && cl.dayNum <= ordDay + windowDays) {
+            matchedMap.set(cl.id, cl);
+          }
+        }
+      }
+    }
+
+    if (p9.length === 9) {
+      const list = byPhone.get(p9);
+      if (list) {
+        for (const cl of list) {
+          if (cl.dayNum >= ordDay && cl.dayNum <= ordDay + windowDays) {
+            matchedMap.set(cl.id, cl);
+          }
+        }
+      }
+    }
+
+    let callsAll = 0;
+    let callsVt = 0;
+
+    if (matchedMap.size > 0) {
+      for (const cl of matchedMap.values()) {
+        callsAll++;
+        if (cl.isVtMotivo) callsVt++;
+
+        const mKey = `${o.tipo_operacion}|${o.cohorte_3}|${cl.motivo}|${cl.isVtMotivo ? 1 : 0}`;
+        let mNode = motivoMap.get(mKey);
+        if (!mNode) {
+          mNode = {
+            tipo_operacion: o.tipo_operacion,
+            cohorte_3: o.cohorte_3,
+            motivo: cl.motivo,
+            is_vt: cl.isVtMotivo,
+            llamadas: 0,
+          };
+          motivoMap.set(mKey, mNode);
+        }
+        mNode.llamadas++;
+      }
+    }
+
+    const cKey = `${o.raw_date}|${o.tipo_operacion}|${o.ambito}|${o.cohorte_3}`;
+    let cell = cellMap.get(cKey);
+    if (!cell) {
+      cell = {
+        raw_date: o.raw_date,
+        fecha_corta: o.fecha_corta,
+        mes: o.mes,
+        yw: Number(o.yw || 0),
+        tipo_operacion: o.tipo_operacion,
+        ambito: o.ambito,
+        cohorte_3: o.cohorte_3,
+        total_ordenes: 0,
+        ordenes_llamaron_all: 0,
+        total_llamadas_all: 0,
+        ordenes_llamaron_vt: 0,
+        total_llamadas_vt: 0,
+      };
+      cellMap.set(cKey, cell);
+    }
+
+    cell.total_ordenes++;
+    if (callsAll > 0) {
+      cell.ordenes_llamaron_all++;
+      cell.total_llamadas_all += callsAll;
+    }
+    if (callsVt > 0) {
+      cell.ordenes_llamaron_vt++;
+      cell.total_llamadas_vt += callsVt;
+    }
+  }
+
+  return {
+    ok: true,
+    hasAtcData: true,
+    windowDays,
+    totalAtcInPeriod: calls.length,
+    orderCells: Array.from(cellMap.values()),
+    motivoCells: Array.from(motivoMap.values()),
+  };
+}
+
 // GET /api/cohorts -> Datos del Comparativo A/B WIN en Ruta (Ingresó vs No Ingresó)
 router.get('/cohorts', async (req: Request, res: Response) => {
   const startTime = Date.now();
@@ -844,12 +1117,75 @@ router.get('/cohorts/export', async (req: Request, res: Response) => {
         ]);
       });
 
+    const atcImpact = await queryAtcCohortImpact(startDate, endDate, service, searchQ, ignoreDates, 3);
+    const atcAggMap = new Map<string, any>();
+    for (const ac of atcImpact.orderCells || []) {
+      const k = `${ac.mes}|${ac.tipo_operacion}|${ac.cohorte_3}`;
+      const cur = atcAggMap.get(k) || {
+        mes: ac.mes,
+        tipo_operacion: ac.tipo_operacion,
+        cohorte_3: ac.cohorte_3,
+        total_ordenes: 0,
+        ordenes_llamaron_all: 0,
+        total_llamadas_all: 0,
+        ordenes_llamaron_vt: 0,
+        total_llamadas_vt: 0,
+      };
+      cur.total_ordenes += ac.total_ordenes;
+      cur.ordenes_llamaron_all += ac.ordenes_llamaron_all;
+      cur.total_llamadas_all += ac.total_llamadas_all;
+      cur.ordenes_llamaron_vt += ac.ordenes_llamaron_vt;
+      cur.total_llamadas_vt += ac.total_llamadas_vt;
+      atcAggMap.set(k, cur);
+    }
+
+    const sheet6Rows: (string | number)[][] = [
+      [
+        'Mes',
+        'Servicio',
+        'Cohorte Seguimiento',
+        'Total Órdenes',
+        'Órdenes con Llamada ATC (#)',
+        '% Contactabilidad ATC (Todas)',
+        'Volumen Total Llamadas (#)',
+        'Llamadas por cada 100 OTs',
+        'Órdenes con Llamada VT/Instal (#)',
+        '% Contactabilidad VT/Instal',
+      ],
+    ];
+    Array.from(atcAggMap.values())
+      .sort(
+        (a, b) =>
+          a.mes.localeCompare(b.mes) ||
+          a.tipo_operacion.localeCompare(b.tipo_operacion) ||
+          a.cohorte_3.localeCompare(b.cohorte_3)
+      )
+      .forEach((r) => {
+        sheet6Rows.push([
+          r.mes,
+          r.tipo_operacion,
+          r.cohorte_3 === 'INGRESO'
+            ? '1. INGRESÓ AL TRACKING'
+            : r.cohorte_3 === 'WSP_SIN_INGRESO'
+              ? '2. CON WSP SIN INGRESO'
+              : '3. SIN WSP ENVIADO',
+          r.total_ordenes,
+          r.ordenes_llamaron_all,
+          pct(r.ordenes_llamaron_all, r.total_ordenes),
+          r.total_llamadas_all,
+          pct(r.total_llamadas_all, r.total_ordenes),
+          r.ordenes_llamaron_vt,
+          pct(r.ordenes_llamaron_vt, r.total_ordenes),
+        ]);
+      });
+
     const buf = buildXlsxBuffer([
       { name: '1_Resumen_Mensual', rows: sheet1Rows },
       { name: '2_Mensual_Tipo_Ambito', rows: sheet2Rows },
       { name: '3_Evolucion_Semanal', rows: sheet3Rows },
       { name: '4_Semanal_Tipo_Ambito', rows: sheet4Rows },
       { name: '5_Estados_e_Incidencias', rows: sheet5Rows },
+      { name: '6_Deflexion_ATC', rows: sheet6Rows },
     ]);
 
     res.setHeader(
@@ -863,6 +1199,43 @@ router.get('/cohorts/export', async (req: Request, res: Response) => {
     return res.send(buf);
   } catch (error: any) {
     console.error('❌ Error en /api/cohorts/export:', error.message);
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// GET /api/cohorts/atc-impact -> Estudio de Deflexión de Llamadas ATC vs WIN en Ruta
+router.get('/cohorts/atc-impact', async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  const todayDefault = new Date().toLocaleDateString('en-CA');
+  const {
+    startDate = todayDefault,
+    endDate = todayDefault,
+    service: rawService = 'Todos los servicios',
+    q = '',
+    ignoreDates = 'false',
+    windowDays: rawWindow = '3',
+    refresh = 'false',
+  } = req.query as Record<string, string>;
+
+  const service = enforceRoleServiceScope(req, rawService);
+  const searchQ = String(q || '').trim();
+  const windowDays = Math.min(15, Math.max(0, Number(rawWindow) || 3));
+  const cacheKey = `cohorts_atc_v1_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}_${windowDays}`;
+
+  try {
+    await loadTipoServicioCacheIfNeeded();
+
+    const payload = await withSingleFlightSwr(
+      cacheKey,
+      120,
+      refresh === 'true',
+      () => queryAtcCohortImpact(startDate, endDate, service, searchQ, ignoreDates, windowDays)
+    );
+
+    console.log(`✅ /api/cohorts/atc-impact completado en ${Date.now() - startTime}ms`);
+    return res.json(payload);
+  } catch (error: any) {
+    console.error('❌ Error en /api/cohorts/atc-impact:', error.message);
     return res.status(500).json({ ok: false, error: error.message });
   }
 });
