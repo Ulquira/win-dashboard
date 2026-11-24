@@ -353,7 +353,7 @@ export async function rebuildMatAtcLlamadas360(): Promise<{
             chosenOrd = byTicketNum.get(digits);
             const d = !Number.isNaN(callDay) && !Number.isNaN(chosenOrd._day) ? callDay - chosenOrd._day : null;
             diffDays = d;
-            inWindow = true;
+            inWindow = d !== null && d >= -1 && d <= 5;
             tipoMatch = 'MATCH_TICKET';
             break;
           }
@@ -386,7 +386,7 @@ export async function rebuildMatAtcLlamadas360(): Promise<{
         if (best) {
           chosenOrd = best.ord;
           diffDays = best.diffDays;
-          inWindow = true;
+          inWindow = best.inWindow;
           tipoMatch = best.via === 'DNI' ? 'MATCH_DNI' : 'MATCH_TELF';
         }
       }
@@ -614,8 +614,8 @@ router.get('/atc-llamadas', async (req: Request, res: Response) => {
         `
         SELECT
           COUNT(*) AS total_llamadas,
-          COALESCE(SUM(m.tiene_orden = 1), 0) AS cruzadas_en_ventana,
-          0 AS fuera_ventana,
+          COALESCE(SUM(m.tiene_orden = 1 AND m.en_ventana_operativa = 1), 0) AS cruzadas_en_ventana,
+          COALESCE(SUM(m.tiene_orden = 1 AND m.en_ventana_operativa = 0), 0) AS fuera_ventana,
           COALESCE(SUM(m.tiene_orden = 0), 0) AS sin_orden,
           COALESCE(SUM(m.tiene_orden = 1 AND m.ingreso_tracking = 'SI'), 0) AS llamadas_con_tracking,
           COALESCE(SUM(m.tiene_orden = 1 AND COALESCE(m.ingreso_tracking, 'NO') != 'SI'), 0) AS llamadas_sin_tracking,
