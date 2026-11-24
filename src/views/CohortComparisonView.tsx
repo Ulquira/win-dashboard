@@ -17,6 +17,7 @@ import {
   PhoneCall,
   Headphones,
   Sparkles,
+  MessageSquare,
 } from 'lucide-react';
 import { apiFetch, API_BASE_URL, AUTH_TOKEN_KEY } from '../config/api';
 
@@ -103,12 +104,12 @@ export function CohortComparisonView({
   const [subTab, setSubTab] = useState<ImpactSubTab>('CAMPO');
   const [debouncedQuery, setDebouncedQuery] = useState<string>(globalSearch);
   const [onlyWspBase, setOnlyWspBase] = useState<boolean>(true);
-  const [atcOnlyWspBase, setAtcOnlyWspBase] = useState<boolean>(false);
   const [granularity, setGranularity] = useState<PeriodGranularity>('SEMANAL');
   const [exporting, setExporting] = useState<boolean>(false);
 
   // Controles exclusivos para el análisis de Deflexión ATC
   const [onlyVtMotivos, setOnlyVtMotivos] = useState<boolean>(false);
+  const [atcTramoFilter, setAtcTramoFilter] = useState<'TODOS' | 'FRANJA_08' | 'FRANJA_12' | 'FRANJA_16'>('TODOS');
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(globalSearch), 300);
@@ -416,16 +417,19 @@ export function CohortComparisonView({
     const motivoCells: any[] = atcImpactData?.motivoCells || [];
 
     const cIngresoAll = emptyAtcCounters();
-    const cIngresoWsp = emptyAtcCounters();
     const cWspNoIngreso = emptyAtcCounters();
     const cSinWsp = emptyAtcCounters();
+    const tramoCounts: Record<'FRANJA_08' | 'FRANJA_12' | 'FRANJA_16', number> = {
+      FRANJA_08: 0,
+      FRANJA_12: 0,
+      FRANJA_16: 0,
+    };
 
     const byServiceMap = new Map<
       string,
       {
         servicio: string;
         ingresoAll: AtcCounters;
-        ingresoWsp: AtcCounters;
         wspNoIngreso: AtcCounters;
         sinWsp: AtcCounters;
       }
@@ -445,11 +449,17 @@ export function CohortComparisonView({
       const srv = String(row.tipo_operacion || 'OTROS').toUpperCase();
       if (selectedSrvSet && !selectedSrvSet.has(srv)) continue;
 
-      const hasWsp = row.con_wsp !== false;
+      const franja = String(row.tramo_franja || 'OTRO');
+      if (franja === 'FRANJA_08' || franja === 'FRANJA_12' || franja === 'FRANJA_16') {
+        tramoCounts[franja] += onlyVtMotivos
+          ? Number(row.total_llamadas_vt || 0)
+          : Number(row.total_llamadas_all || 0);
+      }
+
+      if (atcTramoFilter !== 'TODOS' && franja !== atcTramoFilter) continue;
 
       if (row.cohorte_3 === 'INGRESO') {
         addAtc(cIngresoAll, row);
-        if (hasWsp) addAtc(cIngresoWsp, row);
       } else if (row.cohorte_3 === 'WSP_SIN_INGRESO') {
         addAtc(cWspNoIngreso, row);
       } else {
@@ -461,7 +471,6 @@ export function CohortComparisonView({
         sNode = {
           servicio: srv,
           ingresoAll: emptyAtcCounters(),
-          ingresoWsp: emptyAtcCounters(),
           wspNoIngreso: emptyAtcCounters(),
           sinWsp: emptyAtcCounters(),
         };
@@ -470,7 +479,6 @@ export function CohortComparisonView({
 
       if (row.cohorte_3 === 'INGRESO') {
         addAtc(sNode.ingresoAll, row);
-        if (hasWsp) addAtc(sNode.ingresoWsp, row);
       } else if (row.cohorte_3 === 'WSP_SIN_INGRESO') {
         addAtc(sNode.wspNoIngreso, row);
       } else {
@@ -478,21 +486,19 @@ export function CohortComparisonView({
       }
     }
 
-    const cIngreso: AtcCounters = atcOnlyWspBase ? { ...cIngresoWsp } : { ...cIngresoAll };
-    const cNoIngreso: AtcCounters = atcOnlyWspBase
-      ? { ...cWspNoIngreso }
-      : {
-          orders: cWspNoIngreso.orders + cSinWsp.orders,
-          ordersWithCall: cWspNoIngreso.ordersWithCall + cSinWsp.ordersWithCall,
-          totalCalls: cWspNoIngreso.totalCalls + cSinWsp.totalCalls,
-        };
+    const cIngreso: AtcCounters = { ...cIngresoAll };
+    const cNoIngreso: AtcCounters = {
+      orders: cWspNoIngreso.orders + cSinWsp.orders,
+      ordersWithCall: cWspNoIngreso.ordersWithCall + cSinWsp.ordersWithCall,
+      totalCalls: cWspNoIngreso.totalCalls + cSinWsp.totalCalls,
+    };
 
     const motMap = new Map<string, { motivo: string; siCalls: number; noCalls: number }>();
     for (const m of motivoCells) {
       const srv = String(m.tipo_operacion || 'OTROS').toUpperCase();
       if (selectedSrvSet && !selectedSrvSet.has(srv)) continue;
+      if (atcTramoFilter !== 'TODOS' && String(m.tramo_franja || 'OTRO') !== atcTramoFilter) continue;
       if (onlyVtMotivos && !m.is_vt) continue;
-      if (atcOnlyWspBase && m.con_wsp === false) continue;
 
       const cur = motMap.get(m.motivo) || { motivo: m.motivo, siCalls: 0, noCalls: 0 };
       if (m.cohorte_3 === 'INGRESO') cur.siCalls += Number(m.llamadas || 0);
@@ -503,6 +509,7 @@ export function CohortComparisonView({
     return {
       hasAtcData: Boolean(atcImpactData?.hasAtcData),
       totalAtcInPeriod: Number(atcImpactData?.totalAtcInPeriod || 0),
+      tramoCounts,
       cIngresoAll,
       cIngreso,
       cWspNoIngreso,
@@ -511,7 +518,7 @@ export function CohortComparisonView({
       byService: Array.from(byServiceMap.values())
         .map((s) => ({
           servicio: s.servicio,
-          ingreso: atcOnlyWspBase ? s.ingresoWsp : s.ingresoAll,
+          ingreso: s.ingresoAll,
           wspNoIngreso: s.wspNoIngreso,
           sinWsp: s.sinWsp,
         }))
@@ -527,7 +534,7 @@ export function CohortComparisonView({
         .sort((a, b) => b.siCalls + b.noCalls - (a.siCalls + a.noCalls))
         .slice(0, 12),
     };
-  }, [atcImpactData, selectedSrvSet, onlyVtMotivos, atcOnlyWspBase]);
+  }, [atcImpactData, selectedSrvSet, onlyVtMotivos, atcTramoFilter]);
 
   const { globalSi, globalNo, quadrants, timelineList, estadosList, motivosList } = computed;
 
@@ -563,11 +570,8 @@ export function CohortComparisonView({
   const totalCallsCompared = cIngreso.totalCalls + cNoIngreso.totalCalls;
   const shareCallsSi = calcPct(cIngreso.totalCalls, totalCallsCompared);
   const shareCallsNo = calcPct(cNoIngreso.totalCalls, totalCallsCompared);
-  const { cIngresoAll } = atcComputed;
-  const totalCallsAll3 = cIngresoAll.totalCalls + cWspNoIngreso.totalCalls + cSinWsp.totalCalls;
-  const activeOnlyWsp = subTab === 'CAMPO' ? onlyWspBase : atcOnlyWspBase;
-  const setActiveOnlyWsp = (val: boolean) =>
-    subTab === 'CAMPO' ? setOnlyWspBase(val) : setAtcOnlyWspBase(val);
+  const callsPer100SinWsp = calcPct(cSinWsp.totalCalls, cSinWsp.orders);
+  const shareCallsSinWsp = calcPct(cSinWsp.totalCalls, totalCallsCompared);
 
   const callsAvoided = Math.round(
     ((callsPer100No - callsPer100Si) / 100) * cIngreso.orders
@@ -618,34 +622,36 @@ export function CohortComparisonView({
             </button>
           </div>
 
-          {/* Controles Globales: Base WSP vs Total + Exportar Excel */}
+          {/* Controles Globales: Base WSP vs Total (solo Vista Campo) + Exportar Excel */}
           <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/70">
-              <button
-                type="button"
-                onClick={() => setActiveOnlyWsp(true)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
-                  activeOnlyWsp
-                    ? 'bg-white text-[#FF5500] shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-                title="Compara solo órdenes con WhatsApp enviado (excluye Sin WSP)"
-              >
-                Solo con WSP
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveOnlyWsp(false)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
-                  !activeOnlyWsp
-                    ? 'bg-white text-[#FF5500] shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-                title="Incluye todas las órdenes y llamadas con ticket (WSP + Sin WSP)"
-              >
-                Universo Total
-              </button>
-            </div>
+            {subTab === 'CAMPO' && (
+              <div className="inline-flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/70">
+                <button
+                  type="button"
+                  onClick={() => setOnlyWspBase(true)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                    onlyWspBase
+                      ? 'bg-white text-[#FF5500] shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="Compara solo órdenes con WhatsApp enviado (excluye Sin WSP)"
+                >
+                  Solo con WSP
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOnlyWspBase(false)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                    !onlyWspBase
+                      ? 'bg-white text-[#FF5500] shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="Incluye todas las órdenes y llamadas con ticket (WSP + Sin WSP)"
+                >
+                  Universo Total
+                </button>
+              </div>
+            )}
 
             <button
               onClick={handleExportExcel}
@@ -669,27 +675,64 @@ export function CohortComparisonView({
             </span>
           </div>
         ) : (
-          <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100 text-xs">
-            <div className="text-slate-600 font-medium">
-              <strong>Cruce Órdenes × ATC Llamadas (DNI o Celular):</strong> Evalúa si enviar el link y lograr que el cliente ingrese reduce las llamadas entrantes al Call Center.
+          <div className="space-y-3 pt-3 border-t border-slate-100 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="text-slate-600 font-medium">
+                <strong>Cruce Órdenes × ATC Llamadas (DNI o Celular):</strong> Evalúa si enviar el link y lograr que el cliente ingrese reduce las llamadas entrantes al Call Center.
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 text-[11px] font-bold">
+                  Alcance: Solo Visitas Técnicas, Garantías y Reiteradas
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => setOnlyVtMotivos(!onlyVtMotivos)}
+                  className={`px-3 py-1.5 rounded-xl text-[11px] font-bold border transition cursor-pointer ${
+                    onlyVtMotivos
+                      ? 'bg-[#FFF0E5] text-[#FF5500] border-orange-300'
+                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  {onlyVtMotivos ? '✓ Solo motivos VT' : 'Todas las llamadas ATC'}
+                </button>
+              </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 text-[11px] font-bold">
-                Alcance: Solo Visitas Técnicas, Garantías y Reiteradas
-              </span>
-
-              <button
-                type="button"
-                onClick={() => setOnlyVtMotivos(!onlyVtMotivos)}
-                className={`px-3 py-1.5 rounded-xl text-[11px] font-bold border transition cursor-pointer ${
-                  onlyVtMotivos
-                    ? 'bg-[#FFF0E5] text-[#FF5500] border-orange-300'
-                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                }`}
-              >
-                {onlyVtMotivos ? '✓ Solo motivos VT' : 'Todas las llamadas ATC'}
-              </button>
+            <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-100">
+              <span className="text-[11px] font-bold text-slate-400 mr-1">Tramo Horario:</span>
+              {[
+                { id: 'TODOS' as const, label: 'Todos los tramos' },
+                { id: 'FRANJA_08' as const, label: '08:00 – 12:00 hrs' },
+                { id: 'FRANJA_12' as const, label: '12:00 – 16:00 hrs' },
+                { id: 'FRANJA_16' as const, label: '16:00 – 20:00 hrs' },
+              ].map((t) => {
+                const active = atcTramoFilter === t.id;
+                const count =
+                  t.id === 'TODOS'
+                    ? null
+                    : atcComputed.tramoCounts[t.id];
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setAtcTramoFilter(t.id)}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold border transition cursor-pointer ${
+                      active
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-indigo-50/70 text-indigo-800 border-indigo-200/80 hover:bg-indigo-100'
+                    }`}
+                  >
+                    <span>{t.label}</span>
+                    {count !== null && (
+                      <span className={active ? 'text-indigo-100' : 'text-indigo-500'}>
+                        ({fmt(count)})
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
@@ -1255,8 +1298,8 @@ export function CohortComparisonView({
             </div>
           ) : (
             <>
-              {/* 1. 4 TARJETAS EJECUTIVAS DE DEFLEXIÓN ATC */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* 1. 5 TARJETAS EJECUTIVAS DE DEFLEXIÓN ATC */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
                 {/* KPI 1: Tasa de Llamadas ATC (Todas las llamadas / Total OTs) */}
                 <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] flex flex-col justify-between">
                   <div className="flex items-center justify-between">
@@ -1298,7 +1341,7 @@ export function CohortComparisonView({
                     </div>
                     <div className="border-l border-slate-100 pl-3">
                       <div className="text-[10px] font-bold uppercase text-slate-400">
-                        {atcOnlyWspBase ? 'Con WSP • No Ingresó' : 'No Ingresó Total'} ({fmt(cNoIngreso.orders)})
+                        No Ingresó Total ({fmt(cNoIngreso.orders)})
                       </div>
                       <div className="text-2xl font-bold text-slate-500 tabular-nums mt-0.5">
                         {fmtPct(callsPer100No)}
@@ -1320,7 +1363,7 @@ export function CohortComparisonView({
                       <span className="text-xs font-bold text-slate-700">Volumen Total de Llamadas</span>
                     </div>
                     <span className="px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 text-[11px] font-extrabold tabular-nums">
-                      {fmt(totalCallsCompared)} {atcOnlyWspBase ? `con WSP (excl. ${fmt(totalCallsAll3 - totalCallsCompared)} sin WSP)` : 'con ticket'}
+                      {fmt(totalCallsCompared)} con ticket
                     </span>
                   </div>
 
@@ -1408,6 +1451,44 @@ export function CohortComparisonView({
                     </div>
                   </div>
                 </div>
+
+                {/* KPI 5: Sin Envío WhatsApp */}
+                <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] flex flex-col justify-between">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="p-2 rounded-xl bg-slate-100 text-slate-600">
+                        <MessageSquare size={18} />
+                      </div>
+                      <span className="text-xs font-bold text-slate-700">Sin Envío WhatsApp</span>
+                    </div>
+                    <span className="px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 text-[11px] font-extrabold tabular-nums">
+                      {fmt(cSinWsp.orders)} OTs
+                    </span>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-2 gap-3 pt-3 border-t border-slate-100">
+                    <div>
+                      <div className="text-[10px] font-extrabold uppercase text-slate-500">
+                        Llamadas
+                      </div>
+                      <div className="text-2xl font-black text-slate-900 tabular-nums mt-0.5">
+                        {fmt(cSinWsp.totalCalls)}
+                      </div>
+                      <div className="text-[11px] text-slate-500 font-medium">
+                        {fmtPct(shareCallsSinWsp)} del volumen
+                      </div>
+                    </div>
+                    <div className="border-l border-slate-100 pl-3">
+                      <div className="text-[10px] font-bold uppercase text-slate-400">Tasa / OTs</div>
+                      <div className="text-2xl font-bold text-slate-700 tabular-nums mt-0.5">
+                        {fmtPct(callsPer100SinWsp)}
+                      </div>
+                      <div className="text-[11px] text-slate-400 font-medium">
+                        cada 100 OTs
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {/* 2. ESCALERA DE 3 COHORTES: SIN WSP vs WSP SIN INGRESO vs INGRESÓ AL TRACKING */}
@@ -1447,11 +1528,11 @@ export function CohortComparisonView({
                       sub: 'Vio estado de cuadrilla / tracking web',
                       badge: 'bg-emerald-100 text-emerald-800',
                       bar: 'bg-[#FF5500]',
-                      data: cIngresoAll,
+                      data: cIngreso,
                     },
                   ].map((item, i) => {
                     const callsRate = calcPct(item.data.totalCalls, item.data.orders);
-                    const callsShare = calcPct(item.data.totalCalls, totalCallsAll3);
+                    const callsShare = calcPct(item.data.totalCalls, totalCallsCompared);
                     return (
                       <div
                         key={i}
@@ -1532,12 +1613,8 @@ export function CohortComparisonView({
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {atcComputed.byService.map((s) => {
-                          const noOrders = atcOnlyWspBase
-                            ? s.wspNoIngreso.orders
-                            : s.wspNoIngreso.orders + s.sinWsp.orders;
-                          const noTotalCalls = atcOnlyWspBase
-                            ? s.wspNoIngreso.totalCalls
-                            : s.wspNoIngreso.totalCalls + s.sinWsp.totalCalls;
+                          const noOrders = s.wspNoIngreso.orders + s.sinWsp.orders;
+                          const noTotalCalls = s.wspNoIngreso.totalCalls + s.sinWsp.totalCalls;
 
                           const rSi = calcPct(s.ingreso.totalCalls, s.ingreso.orders);
                           const rNo = calcPct(noTotalCalls, noOrders);
