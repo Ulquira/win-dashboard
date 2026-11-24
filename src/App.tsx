@@ -1014,11 +1014,13 @@ export default function App() {
             <AtcLlamadasView
               startDate={startDate}
               endDate={endDate}
+              service={service}
               globalSearch={globalSearch}
               ignoreDates={ignoreDates}
               consultTrigger={consultTrigger}
               isAdmin={authUser.permisos?.rolCodigo === 'ADMIN' || allowedViews.includes('*')}
               onEnableHistory={() => setIgnoreDates(true)}
+              onSelectOrder={setSelectedOrder}
             />
           )}
 

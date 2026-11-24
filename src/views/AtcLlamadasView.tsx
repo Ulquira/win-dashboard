@@ -4,26 +4,31 @@ import {
   UploadCloud,
   FileSpreadsheet,
   PhoneCall,
-  Users,
-  UserCheck,
-  Headphones,
   CheckCircle2,
   Trash2,
   RefreshCw,
   ChevronLeft,
   ChevronRight,
   AlertCircle,
+  Download,
+  Link2,
+  Link2Off,
+  Clock,
+  ExternalLink,
 } from 'lucide-react';
-import { apiFetch } from '../config/api';
+import { apiFetch, API_BASE_URL, AUTH_TOKEN_KEY } from '../config/api';
+import { RealOrder } from '../types/dashboard';
 
 interface AtcLlamadasViewProps {
   startDate: string;
   endDate: string;
+  service?: string;
   globalSearch: string;
   ignoreDates: boolean;
   consultTrigger?: number;
   isAdmin?: boolean;
   onEnableHistory?: () => void;
+  onSelectOrder?: (order: RealOrder) => void;
 }
 
 interface ParsedAtcRow {
@@ -40,6 +45,8 @@ interface ParsedAtcRow {
   motivo: string;
   comentario_llamada: string;
 }
+
+type MatchFilterType = 'TODOS' | 'EN_VENTANA' | 'FUERA_VENTANA' | 'SIN_ORDEN';
 
 function normalizeHeaderKey(raw: string): string {
   return String(raw || '')
@@ -331,34 +338,59 @@ async function parseXlsxBuffer(buffer: ArrayBuffer): Promise<ParsedAtcRow[]> {
 export function AtcLlamadasView({
   startDate,
   endDate,
+  service = 'Todos los servicios',
   globalSearch,
   ignoreDates,
   consultTrigger = 0,
   isAdmin = false,
   onEnableHistory,
+  onSelectOrder,
 }: AtcLlamadasViewProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [page, setPage] = useState(1);
+  const [matchFilter, setMatchFilter] = useState<MatchFilterType>('TODOS');
+  const [cohorteFilter, setCohorteFilter] = useState<string>('TODOS');
+  const [estadoOtFilter, setEstadoOtFilter] = useState<string>('TODOS');
+
   const [readingFile, setReadingFile] = useState(false);
   const [stagedRows, setStagedRows] = useState<ParsedAtcRow[]>([]);
   const [fileName, setFileName] = useState<string>('');
   const [parseError, setParseError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [progressPct, setProgressPct] = useState(0);
   const [uploadResult, setUploadResult] = useState<string | null>(null);
+  const [openingOrderId, setOpeningOrderId] = useState<number | null>(null);
 
   const {
     data: atcData,
     isFetching: loading,
     refetch,
   } = useQuery<any>({
-    queryKey: ['atcLlamadas', startDate, endDate, globalSearch, ignoreDates, page, consultTrigger],
+    queryKey: [
+      'atcLlamadas360',
+      startDate,
+      endDate,
+      service,
+      globalSearch,
+      ignoreDates,
+      matchFilter,
+      cohorteFilter,
+      estadoOtFilter,
+      page,
+      consultTrigger,
+    ],
     queryFn: ({ signal }) => {
       const params = new URLSearchParams({
         startDate,
         endDate,
+        service,
         q: globalSearch,
         ignoreDates: ignoreDates ? 'true' : 'false',
+        matchFilter,
+        cohorte: cohorteFilter,
+        estadoOt: estadoOtFilter,
         page: String(page),
         pageSize: '50',
       });
@@ -409,22 +441,32 @@ export function AtcLlamadasView({
     setProgressPct(0);
     setParseError(null);
 
-    // Lotes de 100 filas (~40 KB) para no exceder jamás el límite de payload de Express/Nginx
     const BATCH_SIZE = 100;
     let totalInserted = 0;
+    let finalStats: any = null;
 
     try {
       for (let i = 0; i < stagedRows.length; i += BATCH_SIZE) {
         const chunk = stagedRows.slice(i, i + BATCH_SIZE);
-        const res = await apiFetch<{ ok: boolean; processed: number }>('/api/atc-llamadas/import', {
-          method: 'POST',
-          body: JSON.stringify({ rows: chunk }),
-        });
+        const isLastBatch = i + BATCH_SIZE >= stagedRows.length;
+        const res = await apiFetch<{ ok: boolean; processed: number; syncStats?: any }>(
+          '/api/atc-llamadas/import',
+          {
+            method: 'POST',
+            body: JSON.stringify({ rows: chunk, isLastBatch }),
+          }
+        );
         totalInserted += Number(res?.processed || 0);
+        if (res?.syncStats) finalStats = res.syncStats;
         setProgressPct(Math.min(100, Math.round(((i + chunk.length) / stagedRows.length) * 100)));
       }
 
-      setUploadResult(`${totalInserted.toLocaleString('es-PE')} registros guardados en atc_llamadas.`);
+      const detailMsg = finalStats
+        ? ` (${finalStats.matchedInWindow} cruzadas en ventana, ${finalStats.matchedOutWindow} fuera de ventana, ${finalStats.unmatched} sin orden).`
+        : '.';
+      setUploadResult(
+        `${totalInserted.toLocaleString('es-PE')} llamadas importadas y materializadas en mat_atc_llamadas_360${detailMsg}`
+      );
       setStagedRows([]);
       if (onEnableHistory && !ignoreDates) {
         onEnableHistory();
@@ -438,11 +480,78 @@ export function AtcLlamadasView({
     }
   };
 
+  const handleManualSync = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    setParseError(null);
+    try {
+      const res = await apiFetch<any>('/api/atc-llamadas/sync', { method: 'POST' });
+      setUploadResult(
+        `Vista mat_atc_llamadas_360 actualizada: ${res.matchedInWindow} en ventana, ${res.matchedOutWindow} fuera de ventana y ${res.unmatched} sin orden.`
+      );
+      await refetch();
+    } catch (err: any) {
+      setParseError(err.message);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleExport360 = async () => {
+    try {
+      setExporting(true);
+      const params = new URLSearchParams({
+        startDate,
+        endDate,
+        service,
+        q: globalSearch,
+        ignoreDates: ignoreDates ? 'true' : 'false',
+        matchFilter,
+        cohorte: cohorteFilter,
+        estadoOt: estadoOtFilter,
+      });
+      const token = localStorage.getItem(AUTH_TOKEN_KEY);
+      const res = await fetch(`${API_BASE_URL}/api/atc-llamadas/export?${params.toString()}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error('No se pudo exportar Excel');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Auditoria_ATC_360_${startDate}_${endDate}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setParseError(err.message);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleOpenOrderDrawer = async (ordenId?: number | null) => {
+    if (!ordenId || !onSelectOrder) return;
+    setOpeningOrderId(ordenId);
+    try {
+      const res = await apiFetch<any>(
+        `/api/orders/search?orden=${ordenId}&ignoreDates=true&page=1&pageSize=10`
+      );
+      const found = (res?.orders || []).find((o: any) => Number(o.orden_id) === Number(ordenId));
+      if (found) onSelectOrder(found);
+    } catch {
+      // Ignorar error puntual
+    } finally {
+      setOpeningOrderId(null);
+    }
+  };
+
   const handleClearTable = async () => {
-    if (!window.confirm('¿Vaciar todos los registros de atc_llamadas?')) return;
+    if (!window.confirm('¿Vaciar todos los registros de atc_llamadas y mat_atc_llamadas_360?')) return;
     try {
       await apiFetch('/api/atc-llamadas', { method: 'DELETE' });
-      setUploadResult('Tabla atc_llamadas vaciada.');
+      setUploadResult('Tablas vaciadas correctamente.');
       await refetch();
     } catch (err: any) {
       setParseError(err.message);
@@ -451,13 +560,14 @@ export function AtcLlamadasView({
 
   const kpis = atcData?.kpis || {};
   const rows: any[] = atcData?.rows || [];
-  const byMotivo: any[] = atcData?.byMotivo || [];
+  const byEstadoOt: any[] = atcData?.byEstadoOt || [];
   const totalPages = Number(atcData?.totalPages || 1);
   const totalRecords = Number(atcData?.total || 0);
   const fmt = (n?: number) => Number(n || 0).toLocaleString('es-PE');
 
   return (
     <div className={`space-y-6 transition-opacity ${loading && !uploading ? 'opacity-75' : 'opacity-100'}`}>
+      {/* 1. CABECERA DE IMPORTACIÓN Y RECONSTRUCCIÓN DE MAT_ATC_LLAMADAS_360 */}
       <div className="bg-white border border-slate-100 rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
@@ -465,14 +575,16 @@ export function AtcLlamadasView({
               <UploadCloud size={18} />
             </div>
             <div>
-              <h3 className="font-bold text-sm text-slate-900">Importar Base ATC Llamadas</h3>
+              <h3 className="font-bold text-sm text-slate-900">
+                Vista Materializada <code className="text-[#FF5500]">mat_atc_llamadas_360</code>
+              </h3>
               <p className="text-[11px] text-slate-400">
-                Formatos admitidos: .xlsx, .csv o .txt
+                Cruza cada llamada con Cliente, Ticket, N° Orden, Estado de Solicitud, WhatsApp y Tracking para auditar datos exactos
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <input
               ref={fileInputRef}
               type="file"
@@ -483,6 +595,28 @@ export function AtcLlamadasView({
                 e.target.value = '';
               }}
             />
+
+            <button
+              type="button"
+              onClick={handleManualSync}
+              disabled={syncing || uploading}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition cursor-pointer"
+              title="Volver a cruzar atc_llamadas contra las órdenes más recientes de mat_funnel_casos_360"
+            >
+              <RefreshCw size={13} className={syncing ? 'animate-spin text-[#FF5500]' : ''} />
+              <span>{syncing ? 'Cruzando...' : 'Sincronizar Cruce 360'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleExport360}
+              disabled={exporting || totalRecords === 0}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold text-xs transition cursor-pointer"
+            >
+              <Download size={13} />
+              <span>{exporting ? 'Exportando...' : 'Exportar 360 (.xlsx)'}</span>
+            </button>
+
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -490,7 +624,7 @@ export function AtcLlamadasView({
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#FF5500] hover:bg-[#E04B00] disabled:opacity-50 text-white font-bold text-xs shadow-xs transition cursor-pointer"
             >
               {readingFile ? <RefreshCw size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />}
-              <span>{readingFile ? 'Leyendo archivo...' : 'Seleccionar Archivo'}</span>
+              <span>{readingFile ? 'Leyendo...' : 'Importar Excel / CSV'}</span>
             </button>
 
             {isAdmin && totalRecords > 0 && (
@@ -526,7 +660,7 @@ export function AtcLlamadasView({
               <div className="text-xs">
                 <span className="font-extrabold text-slate-900">{fileName}</span>{' '}
                 <span className="text-slate-500">
-                  • <strong>{fmt(stagedRows.length)}</strong> filas detectadas
+                  • <strong>{fmt(stagedRows.length)}</strong> filas listas para subir y cruzar
                 </span>
               </div>
 
@@ -548,8 +682,8 @@ export function AtcLlamadasView({
                   {uploading ? <RefreshCw size={13} className="animate-spin" /> : <UploadCloud size={13} />}
                   <span>
                     {uploading
-                      ? `Subiendo a BD (${progressPct}%)...`
-                      : `Subir a Base de Datos (${fmt(stagedRows.length)})`}
+                      ? `Subiendo y cruzando (${progressPct}%)...`
+                      : `Subir y Materializar (${fmt(stagedRows.length)})`}
                   </span>
                 </button>
               </div>
@@ -563,91 +697,161 @@ export function AtcLlamadasView({
                 />
               </div>
             )}
-
-            <div className="overflow-x-auto max-h-44 bg-white rounded-xl border border-slate-200">
-              <table className="w-full text-[11px]">
-                <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px] border-b border-slate-200">
-                  <tr>
-                    <th className="py-1.5 px-2.5 text-left">ID Reg</th>
-                    <th className="py-1.5 px-2.5 text-left">Fecha / Hora</th>
-                    <th className="py-1.5 px-2.5 text-left">Telf / DNI Cliente</th>
-                    <th className="py-1.5 px-2.5 text-left">Asesor / Medio</th>
-                    <th className="py-1.5 px-2.5 text-left">Tipo / Motivo</th>
-                    <th className="py-1.5 px-2.5 text-left">Comentario</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {stagedRows.slice(0, 5).map((r, i) => (
-                    <tr key={i}>
-                      <td className="py-1.5 px-2.5 font-mono font-bold text-slate-800">{r.id_reg || '-'}</td>
-                      <td className="py-1.5 px-2.5 whitespace-nowrap">{r.fecha} {r.hora}</td>
-                      <td className="py-1.5 px-2.5">{r.telf_cliente || '-'} • {r.dni_cliente || '-'}</td>
-                      <td className="py-1.5 px-2.5 truncate max-w-[160px]">{r.nom_ape || r.dni_asesor || '-'} ({r.medio || '-'})</td>
-                      <td className="py-1.5 px-2.5 truncate max-w-[160px]">{r.tipo} • {r.motivo}</td>
-                      <td className="py-1.5 px-2.5 truncate max-w-[220px] text-slate-500">{r.comentario_llamada || '-'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
           </div>
         )}
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)]">
-          <div className="flex items-center gap-2 text-slate-500 text-xs font-medium">
-            <div className="p-2 rounded-xl bg-orange-50 text-[#FF5500]"><PhoneCall size={16} /></div>
-            <span>Llamadas en Rango</span>
+      {/* 2. 4 TARJETAS DE DIAGNÓSTICO DE CALIDAD DEL CRUCE (CLICABLES PARA FILTRAR) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <button
+          type="button"
+          onClick={() => {
+            setMatchFilter('TODOS');
+            setPage(1);
+          }}
+          className={`text-left bg-white border rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] transition cursor-pointer ${
+            matchFilter === 'TODOS' ? 'border-[#FF5500] ring-2 ring-orange-100' : 'border-slate-100'
+          }`}
+        >
+          <div className="flex items-center justify-between text-xs text-slate-500 font-semibold">
+            <span>Total Llamadas Evaluadas</span>
+            <PhoneCall size={16} className="text-[#FF5500]" />
           </div>
-          <div className="text-2xl font-black text-slate-900 mt-3 tabular-nums">{fmt(kpis.total_llamadas)}</div>
-          {kpis.min_fecha && (
-            <div className="text-[10px] text-slate-400 mt-0.5">{kpis.min_fecha} al {kpis.max_fecha}</div>
-          )}
+          <div className="text-2xl font-black text-slate-900 mt-2 tabular-nums">
+            {fmt(kpis.total_llamadas)}
+          </div>
+          <div className="text-[11px] text-slate-400 mt-0.5">
+            {kpis.min_fecha ? `${kpis.min_fecha} al ${kpis.max_fecha}` : 'Universo filtrado'}
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setMatchFilter('EN_VENTANA');
+            setPage(1);
+          }}
+          className={`text-left bg-white border rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] transition cursor-pointer ${
+            matchFilter === 'EN_VENTANA'
+              ? 'border-emerald-500 ring-2 ring-emerald-100'
+              : 'border-slate-100'
+          }`}
+        >
+          <div className="flex items-center justify-between text-xs text-emerald-700 font-bold">
+            <span>Válidas con OT en Ventana (-1 a +5d)</span>
+            <Link2 size={16} className="text-emerald-600" />
+          </div>
+          <div className="text-2xl font-black text-emerald-700 mt-2 tabular-nums">
+            {fmt(kpis.cruzadas_en_ventana)}
+          </div>
+          <div className="text-[11px] text-slate-500 mt-0.5">
+            {fmt(kpis.llamadas_con_tracking)} con Tracking • {fmt(kpis.llamadas_sin_tracking)} sin Tracking
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setMatchFilter('FUERA_VENTANA');
+            setPage(1);
+          }}
+          className={`text-left bg-white border rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] transition cursor-pointer ${
+            matchFilter === 'FUERA_VENTANA'
+              ? 'border-amber-500 ring-2 ring-amber-100'
+              : 'border-slate-100'
+          }`}
+        >
+          <div className="flex items-center justify-between text-xs text-amber-700 font-bold">
+            <span>OT Antigua / Fuera de Ventana</span>
+            <Clock size={16} className="text-amber-600" />
+          </div>
+          <div className="text-2xl font-black text-amber-700 mt-2 tabular-nums">
+            {fmt(kpis.fuera_ventana)}
+          </div>
+          <div className="text-[11px] text-slate-400 mt-0.5">
+            Cliente existe pero su OT es de otra fecha lejana
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setMatchFilter('SIN_ORDEN');
+            setPage(1);
+          }}
+          className={`text-left bg-white border rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] transition cursor-pointer ${
+            matchFilter === 'SIN_ORDEN' ? 'border-rose-500 ring-2 ring-rose-100' : 'border-slate-100'
+          }`}
+        >
+          <div className="flex items-center justify-between text-xs text-rose-700 font-bold">
+            <span>Sin Orden en Funnel (Huérfanas)</span>
+            <Link2Off size={16} className="text-rose-600" />
+          </div>
+          <div className="text-2xl font-black text-rose-700 mt-2 tabular-nums">
+            {fmt(kpis.sin_orden)}
+          </div>
+          <div className="text-[11px] text-slate-400 mt-0.5">
+            Facturación, comercial o DNI/Telf sin OT técnica
+          </div>
+        </button>
+      </div>
+
+      {/* 3. FILTROS RÁPIDOS DE AUDITORÍA (ESTADO DE LA SOLICITUD Y COHORTE) */}
+      <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-bold text-slate-500">Cohorte:</span>
+          {[
+            { id: 'TODOS', label: 'Todas' },
+            { id: 'INGRESO_TRACKING', label: 'Ingresó Tracking' },
+            { id: 'WSP_SIN_INGRESO', label: 'Con WSP sin Ingreso' },
+            { id: 'SIN_WSP', label: 'Sin WSP' },
+            { id: 'SIN_ORDEN', label: 'Sin Orden' },
+          ].map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => {
+                setCohorteFilter(c.id);
+                setPage(1);
+              }}
+              className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition cursor-pointer ${
+                cohorteFilter === c.id
+                  ? 'bg-[#FF5500] text-white'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              {c.label}
+            </button>
+          ))}
         </div>
 
-        <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)]">
-          <div className="flex items-center gap-2 text-slate-500 text-xs font-medium">
-            <div className="p-2 rounded-xl bg-sky-50 text-sky-600"><Users size={16} /></div>
-            <span>DNIs Únicos</span>
-          </div>
-          <div className="text-2xl font-black text-slate-900 mt-3 tabular-nums">{fmt(kpis.clientes_dni)}</div>
-        </div>
-
-        <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)]">
-          <div className="flex items-center gap-2 text-slate-500 text-xs font-medium">
-            <div className="p-2 rounded-xl bg-emerald-50 text-emerald-600"><Headphones size={16} /></div>
-            <span>Teléfonos Únicos</span>
-          </div>
-          <div className="text-2xl font-black text-slate-900 mt-3 tabular-nums">{fmt(kpis.clientes_telf)}</div>
-        </div>
-
-        <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)]">
-          <div className="flex items-center gap-2 text-slate-500 text-xs font-medium">
-            <div className="p-2 rounded-xl bg-purple-50 text-purple-600"><UserCheck size={16} /></div>
-            <span>Asesores Activos</span>
-          </div>
-          <div className="text-2xl font-black text-slate-900 mt-3 tabular-nums">{fmt(kpis.asesores_activos)}</div>
+        <div className="flex items-center gap-2">
+          <span className="font-bold text-slate-500">Estado Solicitud (OT):</span>
+          <select
+            value={estadoOtFilter}
+            onChange={(e) => {
+              setEstadoOtFilter(e.target.value);
+              setPage(1);
+            }}
+            className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-700 focus:outline-none focus:border-[#FF5500]"
+          >
+            <option value="TODOS">Todos los estados</option>
+            {byEstadoOt
+              .filter((s) => s.estado_ot && s.estado_ot !== 'SIN ORDEN ASOCIADA')
+              .map((s) => (
+                <option key={s.estado_ot} value={s.estado_ot}>
+                  {s.estado_ot} ({s.total})
+                </option>
+              ))}
+          </select>
         </div>
       </div>
 
-      {byMotivo.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {byMotivo.map((m, idx) => (
-            <span
-              key={idx}
-              className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 shadow-2xs"
-            >
-              {m.label}: <strong className="text-[#FF5500]">{fmt(m.total)}</strong>
-            </span>
-          ))}
-        </div>
-      )}
-
+      {/* 4. SÁBANA DE AUDITORÍA FILA POR FILA */}
       <div className="bg-white border border-slate-100 rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] space-y-4">
         <div className="flex items-center justify-between border-b border-slate-100 pb-3">
           <span className="text-xs font-bold text-slate-800">
-            Registros en <code className="text-[#FF5500]">atc_llamadas</code> ({fmt(totalRecords)})
+            Detalle Cruzado <code className="text-[#FF5500]">mat_atc_llamadas_360</code> ({fmt(totalRecords)} registros)
           </span>
 
           <div className="flex items-center gap-2 text-xs">
@@ -673,57 +877,152 @@ export function AtcLlamadasView({
           </div>
         </div>
 
-        <div className="overflow-x-auto max-h-[480px]">
-          <table className="w-full text-xs min-w-[980px]">
-            <thead className="sticky top-0 bg-white border-b border-slate-100 text-[10px] font-bold uppercase text-slate-400">
+        <div className="overflow-x-auto max-h-[540px]">
+          <table className="w-full text-xs min-w-[1250px]">
+            <thead className="sticky top-0 bg-white border-b border-slate-100 text-[10px] font-bold uppercase text-slate-400 z-10">
               <tr>
-                <th className="py-2 text-left">ID / ID Reg</th>
-                <th className="py-2 text-left">Fecha / Hora</th>
-                <th className="py-2 text-left">Telf / DNI Cliente</th>
-                <th className="py-2 text-left">Asesor (DNI / Nombre)</th>
-                <th className="py-2 text-left">Medio / Tipo</th>
-                <th className="py-2 text-left">Motivo</th>
-                <th className="py-2 text-left">Comentario Llamada</th>
+                <th className="py-2.5 px-2 text-left">Llamada ATC</th>
+                <th className="py-2.5 px-2 text-left">Cruce / Dif.</th>
+                <th className="py-2.5 px-2 text-left">Orden / Ticket / Fecha OT</th>
+                <th className="py-2.5 px-2 text-left">Cliente / DNI / Telf</th>
+                <th className="py-2.5 px-2 text-left">Servicio / Partner</th>
+                <th className="py-2.5 px-2 text-center">Estado Solicitud</th>
+                <th className="py-2.5 px-2 text-center">WSP / Tracking</th>
+                <th className="py-2.5 px-2 text-left">Motivo ATC</th>
+                <th className="py-2.5 px-2 text-left">Comentario Llamada</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 tabular-nums">
               {rows.length > 0 ? (
-                rows.map((r) => (
-                  <tr key={r.id} className="hover:bg-slate-50/80 transition">
-                    <td className="py-2.5">
-                      <div className="font-extrabold text-[#FF5500]">#{r.id}</div>
-                      <div className="text-[10px] text-slate-400 font-mono">{r.id_reg || '-'}</div>
-                    </td>
-                    <td className="py-2.5 whitespace-nowrap">
-                      <div className="font-bold text-slate-800">{r.fecha_fmt || '-'}</div>
-                      <div className="text-[10px] text-slate-400">{r.hora || '-'}</div>
-                    </td>
-                    <td className="py-2.5">
-                      <div className="font-bold text-slate-900">{r.telf_cliente || '-'}</div>
-                      <div className="text-[10px] text-slate-500">DNI: {r.dni_cliente || '-'}</div>
-                    </td>
-                    <td className="py-2.5">
-                      <div className="font-semibold text-slate-800 truncate max-w-[170px]">{r.nom_ape || '-'}</div>
-                      <div className="text-[10px] text-slate-400">{r.dni_asesor || '-'}</div>
-                    </td>
-                    <td className="py-2.5">
-                      <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-bold text-[10px]">
-                        {r.medio || '-'}
-                      </span>
-                      <div className="text-[11px] font-semibold text-slate-700 mt-1">{r.tipo || '-'}</div>
-                    </td>
-                    <td className="py-2.5 font-bold text-slate-800 max-w-[180px] truncate" title={r.motivo}>
-                      {r.motivo || '-'}
-                    </td>
-                    <td className="py-2.5 text-slate-600 max-w-[280px] truncate" title={r.comentario_llamada}>
-                      {r.comentario_llamada || '-'}
-                    </td>
-                  </tr>
-                ))
+                rows.map((r) => {
+                  const matchBadge =
+                    r.en_ventana_operativa === 1
+                      ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                      : r.tipo_match === 'FUERA_DE_VENTANA'
+                        ? 'bg-amber-100 text-amber-800 border-amber-200'
+                        : 'bg-rose-100 text-rose-800 border-rose-200';
+
+                  return (
+                    <tr key={r.id} className="hover:bg-slate-50/80 transition">
+                      <td className="py-2.5 px-2 whitespace-nowrap">
+                        <div className="font-extrabold text-slate-900">{r.fecha_llamada_fmt || '-'}</div>
+                        <div className="text-[10px] text-slate-400 font-mono">
+                          {r.hora_fmt || '-'} • #{r.id_reg || r.id}
+                        </div>
+                      </td>
+
+                      <td className="py-2.5 px-2 whitespace-nowrap">
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${matchBadge}`}>
+                          {r.tipo_match}
+                        </span>
+                        {r.dias_diferencia !== null && r.dias_diferencia !== undefined && (
+                          <div className="text-[10px] text-slate-500 mt-0.5 font-semibold">
+                            {r.dias_diferencia >= 0 ? `+${r.dias_diferencia}` : r.dias_diferencia} días vs OT
+                          </div>
+                        )}
+                      </td>
+
+                      <td className="py-2.5 px-2 whitespace-nowrap">
+                        {r.orden_id ? (
+                          <div>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenOrderDrawer(r.orden_id)}
+                              className="inline-flex items-center gap-1 font-black text-[#FF5500] hover:underline cursor-pointer"
+                              title="Abrir ficha completa de la Orden"
+                            >
+                              <span>
+                                {openingOrderId === r.orden_id ? 'Cargando...' : `#${r.orden_id}`}
+                              </span>
+                              <ExternalLink size={11} />
+                            </button>
+                            <div className="text-[10px] text-slate-600 font-bold">{r.ticket || '-'}</div>
+                            <div className="text-[10px] text-slate-400">Sol: {r.fecha_sol_fmt || '-'}</div>
+                          </div>
+                        ) : (
+                          <span className="text-slate-300 font-semibold">Sin OT</span>
+                        )}
+                      </td>
+
+                      <td className="py-2.5 px-2">
+                        <div className="font-bold text-slate-900 truncate max-w-[185px]" title={r.cliente || ''}>
+                          {r.cliente || <span className="text-rose-500 italic">No identificado en OTs</span>}
+                        </div>
+                        <div className="text-[10px] text-slate-500">
+                          DNI: <strong>{r.dni_cliente || '-'}</strong> • Telf: <strong>{r.telf_cliente || '-'}</strong>
+                        </div>
+                      </td>
+
+                      <td className="py-2.5 px-2">
+                        {r.tipo_operacion ? (
+                          <>
+                            <span className="px-2 py-0.5 rounded-md bg-orange-50 text-[#FF5500] font-extrabold text-[10px]">
+                              {r.tipo_operacion}
+                            </span>
+                            <div className="text-[10px] text-slate-500 truncate max-w-[140px] mt-0.5">
+                              {r.partner || '-'}
+                            </div>
+                          </>
+                        ) : (
+                          <span className="text-slate-300">-</span>
+                        )}
+                      </td>
+
+                      <td className="py-2.5 px-2 text-center whitespace-nowrap">
+                        {r.estado_ot ? (
+                          <div>
+                            <span className="px-2 py-0.5 rounded-full bg-sky-50 text-sky-800 border border-sky-200 font-bold text-[10px]">
+                              {r.estado_ot}
+                            </span>
+                            {r.ops_motivo_fin && (
+                              <div className="text-[9.5px] text-slate-400 truncate max-w-[130px] mx-auto mt-0.5" title={r.ops_motivo_fin}>
+                                {r.ops_motivo_fin}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-300">-</span>
+                        )}
+                      </td>
+
+                      <td className="py-2.5 px-2 text-center whitespace-nowrap">
+                        {r.orden_id ? (
+                          <div className="space-y-0.5">
+                            <div className="text-[10px] font-bold text-slate-700">
+                              WSP: {r.se_envio_wsp === 'SI' ? `SÍ (${r.estado_wsp})` : 'NO'}
+                            </div>
+                            <span
+                              className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                                r.ingreso_tracking === 'SI'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-slate-100 text-slate-600'
+                              }`}
+                            >
+                              Trk: {r.ingreso_tracking === 'SI' ? 'SÍ INGRESÓ' : 'NO INGRESÓ'}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-300">-</span>
+                        )}
+                      </td>
+
+                      <td className="py-2.5 px-2 max-w-[190px]">
+                        <div className="text-[10px] font-bold text-slate-400">{r.tipo_llamada || '-'}</div>
+                        <div className="font-bold text-slate-800 truncate" title={r.motivo_llamada}>
+                          {r.motivo_llamada || '-'}
+                        </div>
+                      </td>
+
+                      <td className="py-2.5 px-2 text-slate-600 max-w-[260px] truncate" title={r.comentario_llamada}>
+                        {r.comentario_llamada || '-'}
+                      </td>
+                    </tr>
+                  );
+                })
               ) : (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-slate-400">
-                    Sin registros en este rango. Pulsa "Todo el Histórico" arriba o importa un archivo.
+                  <td colSpan={9} className="py-8 text-center text-slate-400">
+                    No hay registros para estos filtros. Pulsa "Todo el Histórico" arriba o "Sincronizar Cruce 360".
                   </td>
                 </tr>
               )}
