@@ -15,10 +15,13 @@ import {
   Link2Off,
   Clock,
   ExternalLink,
+  XCircle,
+  CalendarClock,
 } from 'lucide-react';
 import { apiFetch, API_BASE_URL, AUTH_TOKEN_KEY } from '../config/api';
 import { RealOrder } from '../types/dashboard';
 
+// === SEGMENTO: TIPOS Y PARSERS LOCALES DE ARCHIVOS EXCEL/CSV ===
 interface AtcLlamadasViewProps {
   startDate: string;
   endDate: string;
@@ -46,7 +49,13 @@ interface ParsedAtcRow {
   comentario_llamada: string;
 }
 
-type MatchFilterType = 'TODOS' | 'INGRESO_SI' | 'INGRESO_NO' | 'SIN_ORDEN';
+type MatchFilterType =
+  | 'TODOS'
+  | 'INGRESO_SI'
+  | 'WSP_SIN_INGRESO'
+  | 'SIN_WSP'
+  | 'INGRESO_NO'
+  | 'SIN_ORDEN';
 
 function normalizeHeaderKey(raw: string): string {
   return String(raw || '')
@@ -335,6 +344,7 @@ async function parseXlsxBuffer(buffer: ArrayBuffer): Promise<ParsedAtcRow[]> {
   return out;
 }
 
+// === SEGMENTO: COMPONENTE PRINCIPAL DE AUDITORÍA ATC LLAMADAS 360 ===
 export function AtcLlamadasView({
   startDate,
   endDate,
@@ -351,6 +361,7 @@ export function AtcLlamadasView({
   const [matchFilter, setMatchFilter] = useState<MatchFilterType>('TODOS');
   const [cohorteFilter, setCohorteFilter] = useState<string>('TODOS');
   const [estadoOtFilter, setEstadoOtFilter] = useState<string>('TODOS');
+  const [tramoFilter, setTramoFilter] = useState<string>('TODOS');
 
   const [readingFile, setReadingFile] = useState(false);
   const [stagedRows, setStagedRows] = useState<ParsedAtcRow[]>([]);
@@ -378,6 +389,7 @@ export function AtcLlamadasView({
       matchFilter,
       cohorteFilter,
       estadoOtFilter,
+      tramoFilter,
       page,
       consultTrigger,
     ],
@@ -391,6 +403,7 @@ export function AtcLlamadasView({
         matchFilter,
         cohorte: cohorteFilter,
         estadoOt: estadoOtFilter,
+        tramo: tramoFilter,
         page: String(page),
         pageSize: '50',
       });
@@ -462,7 +475,7 @@ export function AtcLlamadasView({
       }
 
       const detailMsg = finalStats
-        ? ` (${finalStats.matchedInWindow} cruzadas en ventana, ${finalStats.matchedOutWindow} fuera de ventana, ${finalStats.unmatched} sin orden).`
+        ? ` (${finalStats.matchedInWindow} cruzadas con ticket y ${finalStats.unmatched} sin ticket).`
         : '.';
       setUploadResult(
         `${totalInserted.toLocaleString('es-PE')} llamadas importadas y materializadas en mat_atc_llamadas_360${detailMsg}`
@@ -487,7 +500,7 @@ export function AtcLlamadasView({
     try {
       const res = await apiFetch<any>('/api/atc-llamadas/sync', { method: 'POST' });
       setUploadResult(
-        `Vista mat_atc_llamadas_360 actualizada: ${res.matchedInWindow} en ventana, ${res.matchedOutWindow} fuera de ventana y ${res.unmatched} sin orden.`
+        `Vista mat_atc_llamadas_360 actualizada con tramos: ${res.matchedInWindow} cruzadas con ticket y ${res.unmatched} sin ticket.`
       );
       await refetch();
     } catch (err: any) {
@@ -509,6 +522,7 @@ export function AtcLlamadasView({
         matchFilter,
         cohorte: cohorteFilter,
         estadoOt: estadoOtFilter,
+        tramo: tramoFilter,
       });
       const token = localStorage.getItem(AUTH_TOKEN_KEY);
       const res = await fetch(`${API_BASE_URL}/api/atc-llamadas/export?${params.toString()}`, {
@@ -561,13 +575,14 @@ export function AtcLlamadasView({
   const kpis = atcData?.kpis || {};
   const rows: any[] = atcData?.rows || [];
   const byEstadoOt: any[] = atcData?.byEstadoOt || [];
+  const byTramo: any[] = atcData?.byTramo || [];
   const totalPages = Number(atcData?.totalPages || 1);
   const totalRecords = Number(atcData?.total || 0);
   const fmt = (n?: number) => Number(n || 0).toLocaleString('es-PE');
 
   return (
     <div className={`space-y-6 transition-opacity ${loading && !uploading ? 'opacity-75' : 'opacity-100'}`}>
-      {/* 1. CABECERA DE IMPORTACIÓN Y RECONSTRUCCIÓN DE MAT_ATC_LLAMADAS_360 */}
+      {/* === SEGMENTO 1: CABECERA DE IMPORTACIÓN Y SINCRONIZACIÓN 360 === */}
       <div className="bg-white border border-slate-100 rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
@@ -579,7 +594,7 @@ export function AtcLlamadasView({
                 Vista Materializada <code className="text-[#FF5500]">mat_atc_llamadas_360</code>
               </h3>
               <p className="text-[11px] text-slate-400">
-                Cruza cada llamada con Cliente, Ticket, N° Orden, Estado de Solicitud, WhatsApp y Tracking para auditar datos exactos
+                Cruza cada llamada con Cliente, Ticket, N° Orden, Tramo Horario, Estado OT, WhatsApp y Tracking
               </p>
             </div>
           </div>
@@ -601,7 +616,7 @@ export function AtcLlamadasView({
               onClick={handleManualSync}
               disabled={syncing || uploading}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition cursor-pointer"
-              title="Volver a cruzar atc_llamadas contra las órdenes más recientes de mat_funnel_casos_360"
+              title="Volver a cruzar atc_llamadas contra las órdenes y tramos más recientes"
             >
               <RefreshCw size={13} className={syncing ? 'animate-spin text-[#FF5500]' : ''} />
               <span>{syncing ? 'Cruzando...' : 'Sincronizar Cruce 360'}</span>
@@ -610,7 +625,7 @@ export function AtcLlamadasView({
             <button
               type="button"
               onClick={handleExport360}
-              disabled={exporting || totalRecords === 0}
+              disabled={exporting || Number(kpis.total_llamadas || 0) === 0}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold text-xs transition cursor-pointer"
             >
               <Download size={13} />
@@ -627,7 +642,7 @@ export function AtcLlamadasView({
               <span>{readingFile ? 'Leyendo...' : 'Importar Excel / CSV'}</span>
             </button>
 
-            {isAdmin && totalRecords > 0 && (
+            {isAdmin && Number(kpis.total_llamadas || 0) > 0 && (
               <button
                 type="button"
                 onClick={handleClearTable}
@@ -701,27 +716,26 @@ export function AtcLlamadasView({
         )}
       </div>
 
-      {/* 2. 4 TARJETAS DE CRUCE (SOLO VISITAS TÉCNICAS, GARANTÍA Y REITERADA) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* === SEGMENTO 2: 5 TARJETAS EJECUTIVAS DE CRUCE (INCLUYE NO SE ENVIÓ MSJ) === */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
         <button
           type="button"
           onClick={() => {
             setMatchFilter('TODOS');
             setPage(1);
           }}
-          className={`text-left bg-white border rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] transition cursor-pointer ${
-            matchFilter === 'TODOS' ? 'border-[#FF5500] ring-2 ring-orange-100' : 'border-slate-100'
-          }`}
+          className={`text-left bg-white border rounded-2xl p-4 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] transition cursor-pointer ${matchFilter === 'TODOS' ? 'border-[#FF5500] ring-2 ring-orange-100' : 'border-slate-100'
+            }`}
         >
-          <div className="flex items-center justify-between text-xs text-slate-500 font-semibold">
+          <div className="flex items-center justify-between text-[11px] text-slate-500 font-semibold">
             <span>Total Llamadas Evaluadas</span>
-            <PhoneCall size={16} className="text-[#FF5500]" />
+            <PhoneCall size={15} className="text-[#FF5500] shrink-0" />
           </div>
           <div className="text-2xl font-black text-slate-900 mt-2 tabular-nums">
             {fmt(kpis.total_llamadas)}
           </div>
-          <div className="text-[11px] text-slate-400 mt-0.5">
-            {fmt(kpis.cruzadas_en_ventana)} cruzadas con ticket ({fmt(kpis.ordenes_unicas)} OTs)
+          <div className="text-[10.5px] text-slate-400 mt-0.5">
+            {fmt(kpis.cruzadas_en_ventana)} con ticket ({fmt(kpis.ordenes_unicas)} OTs)
           </div>
         </button>
 
@@ -731,45 +745,66 @@ export function AtcLlamadasView({
             setMatchFilter('INGRESO_SI');
             setPage(1);
           }}
-          className={`text-left bg-white border rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] transition cursor-pointer ${
-            matchFilter === 'INGRESO_SI'
+          className={`text-left bg-white border rounded-2xl p-4 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] transition cursor-pointer ${matchFilter === 'INGRESO_SI'
               ? 'border-emerald-500 ring-2 ring-emerald-100'
               : 'border-slate-100'
-          }`}
+            }`}
         >
-          <div className="flex items-center justify-between text-xs text-emerald-700 font-bold">
-            <span>Con Ticket • SÍ Ingresó al Link</span>
-            <Link2 size={16} className="text-emerald-600" />
+          <div className="flex items-center justify-between text-[11px] text-emerald-700 font-bold">
+            <span>Con Ticket • SÍ Ingresó Link</span>
+            <Link2 size={15} className="text-emerald-600 shrink-0" />
           </div>
           <div className="text-2xl font-black text-emerald-700 mt-2 tabular-nums">
             {fmt(kpis.llamadas_con_tracking)}
           </div>
-          <div className="text-[11px] text-slate-500 mt-0.5">
-            Llamaron aun habiendo abierto WIN en Ruta
+          <div className="text-[10.5px] text-slate-500 mt-0.5">
+            Llamaron habiendo abierto WIN en Ruta
           </div>
         </button>
 
         <button
           type="button"
           onClick={() => {
-            setMatchFilter('INGRESO_NO');
+            setMatchFilter('WSP_SIN_INGRESO');
             setPage(1);
           }}
-          className={`text-left bg-white border rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] transition cursor-pointer ${
-            matchFilter === 'INGRESO_NO'
+          className={`text-left bg-white border rounded-2xl p-4 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] transition cursor-pointer ${matchFilter === 'WSP_SIN_INGRESO'
               ? 'border-amber-500 ring-2 ring-amber-100'
               : 'border-slate-100'
-          }`}
+            }`}
         >
-          <div className="flex items-center justify-between text-xs text-amber-700 font-bold">
-            <span>Con Ticket • NO Ingresó al Link</span>
-            <Clock size={16} className="text-amber-600" />
+          <div className="flex items-center justify-between text-[11px] text-amber-700 font-bold">
+            <span>Con Msj • NO Ingresó Link</span>
+            <Clock size={15} className="text-amber-600 shrink-0" />
           </div>
           <div className="text-2xl font-black text-amber-700 mt-2 tabular-nums">
-            {fmt(kpis.llamadas_sin_tracking)}
+            {fmt(kpis.llamadas_wsp_sin_tracking)}
           </div>
-          <div className="text-[11px] text-slate-500 mt-0.5">
-            Llamaron sin haber ingresado al tracking web
+          <div className="text-[10.5px] text-slate-500 mt-0.5">
+            Se envió WSP pero no abrió el link
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setMatchFilter('SIN_WSP');
+            setPage(1);
+          }}
+          className={`text-left bg-white border rounded-2xl p-4 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] transition cursor-pointer ${matchFilter === 'SIN_WSP'
+              ? 'border-violet-500 ring-2 ring-violet-100'
+              : 'border-slate-100'
+            }`}
+        >
+          <div className="flex items-center justify-between text-[11px] text-violet-700 font-bold">
+            <span>Con Ticket • No se Envió Msj</span>
+            <XCircle size={15} className="text-violet-600 shrink-0" />
+          </div>
+          <div className="text-2xl font-black text-violet-700 mt-2 tabular-nums">
+            {fmt(kpis.llamadas_sin_wsp)}
+          </div>
+          <div className="text-[10.5px] text-slate-500 mt-0.5">
+            Orden sin envío de notificación WSP
           </div>
         </button>
 
@@ -779,75 +814,126 @@ export function AtcLlamadasView({
             setMatchFilter('SIN_ORDEN');
             setPage(1);
           }}
-          className={`text-left bg-white border rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] transition cursor-pointer ${
-            matchFilter === 'SIN_ORDEN' ? 'border-rose-500 ring-2 ring-rose-100' : 'border-slate-100'
-          }`}
+          className={`text-left bg-white border rounded-2xl p-4 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] transition cursor-pointer ${matchFilter === 'SIN_ORDEN' ? 'border-rose-500 ring-2 ring-rose-100' : 'border-slate-100'
+            }`}
         >
-          <div className="flex items-center justify-between text-xs text-rose-700 font-bold">
+          <div className="flex items-center justify-between text-[11px] text-rose-700 font-bold">
             <span>Sin Ticket VT / Gar. / Reit.</span>
-            <Link2Off size={16} className="text-rose-600" />
+            <Link2Off size={15} className="text-rose-600 shrink-0" />
           </div>
           <div className="text-2xl font-black text-rose-700 mt-2 tabular-nums">
             {fmt(kpis.sin_orden)}
           </div>
-          <div className="text-[11px] text-slate-400 mt-0.5">
-            Sin orden de visita técnica asociada (instalaciones excluidas)
+          <div className="text-[10.5px] text-slate-400 mt-0.5">
+            Sin OT asociada (instalaciones excluidas)
           </div>
         </button>
       </div>
 
-      {/* 3. FILTROS RÁPIDOS DE AUDITORÍA (ESTADO DE LA SOLICITUD Y COHORTE) */}
-      <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] flex flex-wrap items-center justify-between gap-3 text-xs">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-bold text-slate-500">Cohorte:</span>
-          {[
-            { id: 'TODOS', label: 'Todas' },
-            { id: 'INGRESO_TRACKING', label: 'Ingresó Tracking' },
-            { id: 'WSP_SIN_INGRESO', label: 'Con WSP sin Ingreso' },
-            { id: 'SIN_WSP', label: 'Sin WSP' },
-            { id: 'SIN_ORDEN', label: 'Sin Orden' },
-          ].map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              onClick={() => {
-                setCohorteFilter(c.id);
-                setPage(1);
-              }}
-              className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition cursor-pointer ${
-                cohorteFilter === c.id
-                  ? 'bg-[#FF5500] text-white'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              {c.label}
-            </button>
-          ))}
+      {/* === SEGMENTO 3: BARRA DE FILTROS DE COHORTE, TRAMO ORDEN Y ESTADO OT === */}
+      <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] space-y-3 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-bold text-slate-500 mr-1">Cohorte:</span>
+            {[
+              { id: 'TODOS', label: 'Todas' },
+              { id: 'INGRESO_TRACKING', label: 'Ingresó Tracking' },
+              { id: 'WSP_SIN_INGRESO', label: 'Con Msj sin Ingreso' },
+              { id: 'SIN_WSP', label: 'No se Envió Msj' },
+              { id: 'SIN_ORDEN', label: 'Sin Ticket' },
+            ].map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => {
+                  setCohorteFilter(c.id);
+                  setMatchFilter('TODOS');
+                  setPage(1);
+                }}
+                className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition cursor-pointer ${cohorteFilter === c.id
+                    ? 'bg-[#FF5500] text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+              >
+                {c.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-1.5">
+              <CalendarClock size={14} className="text-[#FF5500]" />
+              <span className="font-bold text-slate-500">Tramo Orden:</span>
+              <select
+                value={tramoFilter}
+                onChange={(e) => {
+                  setTramoFilter(e.target.value);
+                  setPage(1);
+                }}
+                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-700 focus:outline-none focus:border-[#FF5500]"
+              >
+                <option value="TODOS">Todos los tramos</option>
+                {byTramo.map((t) => (
+                  <option key={t.tramo_orden} value={t.tramo_orden}>
+                    {t.tramo_orden} ({t.total})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <span className="font-bold text-slate-500">Estado Solicitud (OT):</span>
+              <select
+                value={estadoOtFilter}
+                onChange={(e) => {
+                  setEstadoOtFilter(e.target.value);
+                  setPage(1);
+                }}
+                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-700 focus:outline-none focus:border-[#FF5500]"
+              >
+                <option value="TODOS">Todos los estados</option>
+                {byEstadoOt
+                  .filter((s) => s.estado_ot && s.estado_ot !== 'SIN ORDEN ASOCIADA')
+                  .map((s) => (
+                    <option key={s.estado_ot} value={s.estado_ot}>
+                      {s.estado_ot} ({s.total})
+                    </option>
+                  ))}
+              </select>
+            </div>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="font-bold text-slate-500">Estado Solicitud (OT):</span>
-          <select
-            value={estadoOtFilter}
-            onChange={(e) => {
-              setEstadoOtFilter(e.target.value);
-              setPage(1);
-            }}
-            className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-700 focus:outline-none focus:border-[#FF5500]"
-          >
-            <option value="TODOS">Todos los estados</option>
-            {byEstadoOt
-              .filter((s) => s.estado_ot && s.estado_ot !== 'SIN ORDEN ASOCIADA')
-              .map((s) => (
-                <option key={s.estado_ot} value={s.estado_ot}>
-                  {s.estado_ot} ({s.total})
-                </option>
-              ))}
-          </select>
-        </div>
+        {byTramo.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-100">
+            <span className="text-[11px] font-bold text-slate-400 mr-1">Distribución por Tramo:</span>
+            {byTramo.slice(0, 8).map((t) => {
+              const active = tramoFilter === t.tramo_orden;
+              return (
+                <button
+                  key={t.tramo_orden}
+                  type="button"
+                  onClick={() => {
+                    setTramoFilter(active ? 'TODOS' : t.tramo_orden);
+                    setPage(1);
+                  }}
+                  className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold border transition cursor-pointer ${active
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'bg-indigo-50/70 text-indigo-800 border-indigo-200/80 hover:bg-indigo-100'
+                    }`}
+                >
+                  <span>{t.tramo_orden}</span>
+                  <span className={active ? 'text-indigo-100' : 'text-indigo-500'}>
+                    ({fmt(t.total)})
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      {/* 4. SÁBANA DE AUDITORÍA FILA POR FILA */}
+      {/* === SEGMENTO 4: SÁBANA DE AUDITORÍA FILA POR FILA CON COLUMNA TRAMO === */}
       <div className="bg-white border border-slate-100 rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] space-y-4">
         <div className="flex items-center justify-between border-b border-slate-100 pb-3">
           <span className="text-xs font-bold text-slate-800">
@@ -878,12 +964,13 @@ export function AtcLlamadasView({
         </div>
 
         <div className="overflow-x-auto max-h-[540px]">
-          <table className="w-full text-xs min-w-[1250px]">
+          <table className="w-full text-xs min-w-[1380px]">
             <thead className="sticky top-0 bg-white border-b border-slate-100 text-[10px] font-bold uppercase text-slate-400 z-10">
               <tr>
                 <th className="py-2.5 px-2 text-left">Llamada ATC</th>
-                <th className="py-2.5 px-2 text-left">Cruce / Dif.</th>
+                <th className="py-2.5 px-2 text-left">Cruce</th>
                 <th className="py-2.5 px-2 text-left">Orden / Ticket / Fecha OT</th>
+                <th className="py-2.5 px-2 text-center">Tramo / Visita OT</th>
                 <th className="py-2.5 px-2 text-left">Cliente / DNI / Telf</th>
                 <th className="py-2.5 px-2 text-left">Servicio / Partner</th>
                 <th className="py-2.5 px-2 text-center">Estado Solicitud</th>
@@ -910,7 +997,9 @@ export function AtcLlamadasView({
                       </td>
 
                       <td className="py-2.5 px-2 whitespace-nowrap">
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${matchBadge}`}>
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${matchBadge}`}
+                        >
                           {r.tiene_orden === 1 ? r.tipo_match : 'SIN_TICKET'}
                         </span>
                       </td>
@@ -937,12 +1026,42 @@ export function AtcLlamadasView({
                         )}
                       </td>
 
+                      <td className="py-2.5 px-2 text-center whitespace-nowrap">
+                        {r.orden_id ? (
+                          <div>
+                            {r.tramo_orden ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-800 border border-indigo-200 font-extrabold text-[10px]">
+                                <CalendarClock size={10} className="shrink-0" />
+                                <span>{r.tramo_orden}</span>
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-semibold text-[10px]">
+                                Sin tramo
+                              </span>
+                            )}
+                            {r.fecha_visita && (
+                              <div className="text-[10px] text-slate-400 mt-0.5">
+                                Visita: {r.fecha_visita}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-300">-</span>
+                        )}
+                      </td>
+
                       <td className="py-2.5 px-2">
-                        <div className="font-bold text-slate-900 truncate max-w-[185px]" title={r.cliente || ''}>
-                          {r.cliente || <span className="text-rose-500 italic">No identificado en OTs</span>}
+                        <div
+                          className="font-bold text-slate-900 truncate max-w-[185px]"
+                          title={r.cliente || ''}
+                        >
+                          {r.cliente || (
+                            <span className="text-rose-500 italic">No identificado en OTs</span>
+                          )}
                         </div>
                         <div className="text-[10px] text-slate-500">
-                          DNI: <strong>{r.dni_cliente || '-'}</strong> • Telf: <strong>{r.telf_cliente || '-'}</strong>
+                          DNI: <strong>{r.dni_cliente || '-'}</strong> • Telf:{' '}
+                          <strong>{r.telf_cliente || '-'}</strong>
                         </div>
                       </td>
 
@@ -968,7 +1087,10 @@ export function AtcLlamadasView({
                               {r.estado_ot}
                             </span>
                             {r.ops_motivo_fin && (
-                              <div className="text-[9.5px] text-slate-400 truncate max-w-[130px] mx-auto mt-0.5" title={r.ops_motivo_fin}>
+                              <div
+                                className="text-[9.5px] text-slate-400 truncate max-w-[130px] mx-auto mt-0.5"
+                                title={r.ops_motivo_fin}
+                              >
                                 {r.ops_motivo_fin}
                               </div>
                             )}
@@ -981,15 +1103,19 @@ export function AtcLlamadasView({
                       <td className="py-2.5 px-2 text-center whitespace-nowrap">
                         {r.orden_id ? (
                           <div className="space-y-0.5">
-                            <div className="text-[10px] font-bold text-slate-700">
-                              WSP: {r.se_envio_wsp === 'SI' ? `SÍ (${r.estado_wsp})` : 'NO'}
+                            <div
+                              className={`text-[10px] font-bold ${r.se_envio_wsp === 'SI' ? 'text-slate-700' : 'text-violet-700'
+                                }`}
+                            >
+                              {r.se_envio_wsp === 'SI'
+                                ? `WSP: SÍ (${r.estado_wsp})`
+                                : 'WSP: NO ENVIADO'}
                             </div>
                             <span
-                              className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
-                                r.ingreso_tracking === 'SI'
+                              className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-extrabold ${r.ingreso_tracking === 'SI'
                                   ? 'bg-emerald-100 text-emerald-800'
                                   : 'bg-slate-100 text-slate-600'
-                              }`}
+                                }`}
                             >
                               Trk: {r.ingreso_tracking === 'SI' ? 'SÍ INGRESÓ' : 'NO INGRESÓ'}
                             </span>
@@ -1000,13 +1126,18 @@ export function AtcLlamadasView({
                       </td>
 
                       <td className="py-2.5 px-2 max-w-[190px]">
-                        <div className="text-[10px] font-bold text-slate-400">{r.tipo_llamada || '-'}</div>
+                        <div className="text-[10px] font-bold text-slate-400">
+                          {r.tipo_llamada || '-'}
+                        </div>
                         <div className="font-bold text-slate-800 truncate" title={r.motivo_llamada}>
                           {r.motivo_llamada || '-'}
                         </div>
                       </td>
 
-                      <td className="py-2.5 px-2 text-slate-600 max-w-[260px] truncate" title={r.comentario_llamada}>
+                      <td
+                        className="py-2.5 px-2 text-slate-600 max-w-[260px] truncate"
+                        title={r.comentario_llamada}
+                      >
                         {r.comentario_llamada || '-'}
                       </td>
                     </tr>
@@ -1014,7 +1145,7 @@ export function AtcLlamadasView({
                 })
               ) : (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-slate-400">
+                  <td colSpan={10} className="py-8 text-center text-slate-400">
                     No hay registros para estos filtros. Pulsa "Todo el Histórico" arriba o "Sincronizar Cruce 360".
                   </td>
                 </tr>
