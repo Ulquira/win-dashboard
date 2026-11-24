@@ -704,31 +704,10 @@ export function CohortComparisonView({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {/* Filtro de Ventana de Días */}
-              <div className="inline-flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/70 text-[11px]">
-                <span className="px-2 font-bold text-slate-500">Ventana:</span>
-                {[
-                  { d: 0, label: 'Mismo día (0d)' },
-                  { d: 2, label: '0 a +2d' },
-                  { d: 3, label: '0 a +3d' },
-                  { d: 7, label: '0 a +7d' },
-                ].map((opt) => (
-                  <button
-                    key={opt.d}
-                    type="button"
-                    onClick={() => setWindowDays(opt.d)}
-                    className={`px-2 py-0.5 rounded-lg font-bold transition cursor-pointer ${
-                      windowDays === opt.d
-                        ? 'bg-white text-[#FF5500] shadow-2xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
+              <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 text-[11px] font-bold">
+                Alcance: Solo Visitas Técnicas, Garantías y Reiteradas
+              </span>
 
-              {/* Switch Solo Motivos VT / Instalación */}
               <button
                 type="button"
                 onClick={() => setOnlyVtMotivos(!onlyVtMotivos)}
@@ -738,7 +717,7 @@ export function CohortComparisonView({
                     : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                 }`}
               >
-                {onlyVtMotivos ? '✓ Solo motivos VT / Instalación' : 'Todas las llamadas ATC'}
+                {onlyVtMotivos ? '✓ Solo motivos VT' : 'Todas las llamadas ATC'}
               </button>
             </div>
           </div>
@@ -1472,7 +1451,7 @@ export function CohortComparisonView({
                     </p>
                   </div>
                   <span className="text-[11px] font-bold text-slate-600 bg-orange-50 border border-orange-200 px-3 py-1 rounded-full">
-                    Periodo acotado ATC: {atcImpactData?.atcCoverageRange?.effStart} al {atcImpactData?.atcCoverageRange?.effEnd} • {fmt(atcComputed.totalAtcInPeriod)} llamadas (ventana -1 a +{windowDays}d)
+                    Periodo ATC: {atcImpactData?.atcCoverageRange?.effStart} al {atcImpactData?.atcCoverageRange?.effEnd} • {fmt(atcComputed.totalAtcInPeriod)} llamadas (solo VT / Garantía / Reiterada)
                   </span>
                 </div>
 

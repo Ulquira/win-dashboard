@@ -215,10 +215,11 @@ export async function rebuildMatAtcLlamadas360(): Promise<{
   }
 
   const virtualTipoSql = getVirtualTipoOperacionSql('v');
+  const allowedVtFilter = `(${virtualTipoSql}) IN ('AVER - LIMA', 'AVER - PROV', 'POSTVENTA', 'GARANTIA', 'REITERADA')`;
   const orderWhere =
     minCallDate <= maxCallDate
-      ? `WHERE v.fecha_solicitud_dia >= DATE_SUB(?, INTERVAL 45 DAY) AND v.fecha_solicitud_dia <= DATE_ADD(?, INTERVAL 15 DAY)`
-      : ``;
+      ? `WHERE ${allowedVtFilter} AND v.fecha_solicitud_dia >= DATE_SUB(?, INTERVAL 45 DAY) AND v.fecha_solicitud_dia <= DATE_ADD(?, INTERVAL 15 DAY)`
+      : `WHERE ${allowedVtFilter}`;
   const orderParams = minCallDate <= maxCallDate ? [minCallDate, maxCallDate] : [];
 
   const [ordersRes]: any = await pool.query(
@@ -342,7 +343,7 @@ export async function rebuildMatAtcLlamadas360(): Promise<{
       let diffDays: number | null = null;
       let inWindow = false;
 
-      // 1. Intentar match directo por número de Ticket mencionado en comentario_llamada (ej. VTEXT-49334835 / AT-46081794)
+      // 1. Match directo por número de Ticket en comentario_llamada
       const commentStr = String(c.comentario_llamada || '');
       const ticketMatches = commentStr.match(/\b(?:AT|GAR|VTEXT|VT|INC)[-\s]?(\d{7,10})\b/gi);
       if (ticketMatches) {
@@ -352,14 +353,14 @@ export async function rebuildMatAtcLlamadas360(): Promise<{
             chosenOrd = byTicketNum.get(digits);
             const d = !Number.isNaN(callDay) && !Number.isNaN(chosenOrd._day) ? callDay - chosenOrd._day : null;
             diffDays = d;
-            inWindow = d === null ? true : d >= -2 && d <= 10;
+            inWindow = true;
             tipoMatch = 'MATCH_TICKET';
             break;
           }
         }
       }
 
-      // 2. Match por DNI y/o Teléfono de 9 dígitos
+      // 2. Match por DNI y/o Teléfono de 9 dígitos (solo contra VT, Garantía o Reiterada)
       if (!chosenOrd) {
         const cands: { ord: any; via: 'DNI' | 'TELF' }[] = [];
         const seenOrd = new Set<number>();
@@ -385,12 +386,8 @@ export async function rebuildMatAtcLlamadas360(): Promise<{
         if (best) {
           chosenOrd = best.ord;
           diffDays = best.diffDays;
-          inWindow = best.inWindow;
-          tipoMatch = inWindow
-            ? best.via === 'DNI'
-              ? 'MATCH_DNI_VENTANA'
-              : 'MATCH_TELF_VENTANA'
-            : 'FUERA_DE_VENTANA';
+          inWindow = true;
+          tipoMatch = best.via === 'DNI' ? 'MATCH_DNI' : 'MATCH_TELF';
         }
       }
 
@@ -527,12 +524,12 @@ function buildAtc360Filters(query: Record<string, any>, serviceScope?: string) {
     params.push(startDate, endDate);
   }
 
-  if (matchFilter === 'EN_VENTANA') {
-    whereClauses.push(`m.en_ventana_operativa = 1`);
-  } else if (matchFilter === 'CON_ORDEN') {
+  if (matchFilter === 'CON_ORDEN' || matchFilter === 'EN_VENTANA') {
     whereClauses.push(`m.tiene_orden = 1`);
-  } else if (matchFilter === 'FUERA_VENTANA') {
-    whereClauses.push(`m.tipo_match = 'FUERA_DE_VENTANA'`);
+  } else if (matchFilter === 'INGRESO_SI') {
+    whereClauses.push(`m.tiene_orden = 1 AND m.ingreso_tracking = 'SI'`);
+  } else if (matchFilter === 'INGRESO_NO') {
+    whereClauses.push(`m.tiene_orden = 1 AND COALESCE(m.ingreso_tracking, 'NO') != 'SI'`);
   } else if (matchFilter === 'SIN_ORDEN') {
     whereClauses.push(`m.tiene_orden = 0`);
   }
@@ -547,7 +544,13 @@ function buildAtc360Filters(query: Record<string, any>, serviceScope?: string) {
     params.push(estadoOtFilter);
   }
 
-  if (serviceScope && serviceScope !== 'Todos los servicios' && serviceScope !== 'Todos') {
+  const isViewingOrphans = matchFilter === 'SIN_ORDEN' || cohorteFilter === 'SIN_ORDEN';
+  if (
+    !isViewingOrphans &&
+    serviceScope &&
+    serviceScope !== 'Todos los servicios' &&
+    serviceScope !== 'Todos'
+  ) {
     const srvs = serviceScope
       .split(',')
       .map((s) => s.trim().toUpperCase())
@@ -611,11 +614,11 @@ router.get('/atc-llamadas', async (req: Request, res: Response) => {
         `
         SELECT
           COUNT(*) AS total_llamadas,
-          COALESCE(SUM(m.en_ventana_operativa = 1), 0) AS cruzadas_en_ventana,
-          COALESCE(SUM(m.tipo_match = 'FUERA_DE_VENTANA'), 0) AS fuera_ventana,
+          COALESCE(SUM(m.tiene_orden = 1), 0) AS cruzadas_en_ventana,
+          0 AS fuera_ventana,
           COALESCE(SUM(m.tiene_orden = 0), 0) AS sin_orden,
-          COALESCE(SUM(m.en_ventana_operativa = 1 AND m.ingreso_tracking = 'SI'), 0) AS llamadas_con_tracking,
-          COALESCE(SUM(m.en_ventana_operativa = 1 AND m.ingreso_tracking != 'SI'), 0) AS llamadas_sin_tracking,
+          COALESCE(SUM(m.tiene_orden = 1 AND m.ingreso_tracking = 'SI'), 0) AS llamadas_con_tracking,
+          COALESCE(SUM(m.tiene_orden = 1 AND COALESCE(m.ingreso_tracking, 'NO') != 'SI'), 0) AS llamadas_sin_tracking,
           COUNT(DISTINCT m.orden_id) AS ordenes_unicas,
           MIN(DATE_FORMAT(m.fecha_llamada, '%Y-%m-%d')) AS min_fecha,
           MAX(DATE_FORMAT(m.fecha_llamada, '%Y-%m-%d')) AS max_fecha

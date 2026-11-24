@@ -46,7 +46,7 @@ interface ParsedAtcRow {
   comentario_llamada: string;
 }
 
-type MatchFilterType = 'TODOS' | 'EN_VENTANA' | 'FUERA_VENTANA' | 'SIN_ORDEN';
+type MatchFilterType = 'TODOS' | 'INGRESO_SI' | 'INGRESO_NO' | 'SIN_ORDEN';
 
 function normalizeHeaderKey(raw: string): string {
   return String(raw || '')
@@ -701,7 +701,7 @@ export function AtcLlamadasView({
         )}
       </div>
 
-      {/* 2. 4 TARJETAS DE DIAGNÓSTICO DE CALIDAD DEL CRUCE (CLICABLES PARA FILTRAR) */}
+      {/* 2. 4 TARJETAS DE CRUCE (SOLO VISITAS TÉCNICAS, GARANTÍA Y REITERADA) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <button
           type="button"
@@ -721,55 +721,55 @@ export function AtcLlamadasView({
             {fmt(kpis.total_llamadas)}
           </div>
           <div className="text-[11px] text-slate-400 mt-0.5">
-            {kpis.min_fecha ? `${kpis.min_fecha} al ${kpis.max_fecha}` : 'Universo filtrado'}
+            {fmt(kpis.cruzadas_en_ventana)} cruzadas con ticket ({fmt(kpis.ordenes_unicas)} OTs)
           </div>
         </button>
 
         <button
           type="button"
           onClick={() => {
-            setMatchFilter('EN_VENTANA');
+            setMatchFilter('INGRESO_SI');
             setPage(1);
           }}
           className={`text-left bg-white border rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] transition cursor-pointer ${
-            matchFilter === 'EN_VENTANA'
+            matchFilter === 'INGRESO_SI'
               ? 'border-emerald-500 ring-2 ring-emerald-100'
               : 'border-slate-100'
           }`}
         >
           <div className="flex items-center justify-between text-xs text-emerald-700 font-bold">
-            <span>Válidas con OT en Ventana (-1 a +5d)</span>
+            <span>Con Ticket • SÍ Ingresó al Link</span>
             <Link2 size={16} className="text-emerald-600" />
           </div>
           <div className="text-2xl font-black text-emerald-700 mt-2 tabular-nums">
-            {fmt(kpis.cruzadas_en_ventana)}
+            {fmt(kpis.llamadas_con_tracking)}
           </div>
           <div className="text-[11px] text-slate-500 mt-0.5">
-            {fmt(kpis.llamadas_con_tracking)} con Tracking • {fmt(kpis.llamadas_sin_tracking)} sin Tracking
+            Llamaron aun habiendo abierto WIN en Ruta
           </div>
         </button>
 
         <button
           type="button"
           onClick={() => {
-            setMatchFilter('FUERA_VENTANA');
+            setMatchFilter('INGRESO_NO');
             setPage(1);
           }}
           className={`text-left bg-white border rounded-2xl p-5 shadow-[0_4px_20px_-2px_rgba(17,24,39,0.05)] transition cursor-pointer ${
-            matchFilter === 'FUERA_VENTANA'
+            matchFilter === 'INGRESO_NO'
               ? 'border-amber-500 ring-2 ring-amber-100'
               : 'border-slate-100'
           }`}
         >
           <div className="flex items-center justify-between text-xs text-amber-700 font-bold">
-            <span>OT Antigua / Fuera de Ventana</span>
+            <span>Con Ticket • NO Ingresó al Link</span>
             <Clock size={16} className="text-amber-600" />
           </div>
           <div className="text-2xl font-black text-amber-700 mt-2 tabular-nums">
-            {fmt(kpis.fuera_ventana)}
+            {fmt(kpis.llamadas_sin_tracking)}
           </div>
-          <div className="text-[11px] text-slate-400 mt-0.5">
-            Cliente existe pero su OT es de otra fecha lejana
+          <div className="text-[11px] text-slate-500 mt-0.5">
+            Llamaron sin haber ingresado al tracking web
           </div>
         </button>
 
@@ -784,14 +784,14 @@ export function AtcLlamadasView({
           }`}
         >
           <div className="flex items-center justify-between text-xs text-rose-700 font-bold">
-            <span>Sin Orden en Funnel (Huérfanas)</span>
+            <span>Sin Ticket VT / Gar. / Reit.</span>
             <Link2Off size={16} className="text-rose-600" />
           </div>
           <div className="text-2xl font-black text-rose-700 mt-2 tabular-nums">
             {fmt(kpis.sin_orden)}
           </div>
           <div className="text-[11px] text-slate-400 mt-0.5">
-            Facturación, comercial o DNI/Telf sin OT técnica
+            Sin orden de visita técnica asociada (instalaciones excluidas)
           </div>
         </button>
       </div>
@@ -896,11 +896,9 @@ export function AtcLlamadasView({
               {rows.length > 0 ? (
                 rows.map((r) => {
                   const matchBadge =
-                    r.en_ventana_operativa === 1
+                    r.tiene_orden === 1
                       ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                      : r.tipo_match === 'FUERA_DE_VENTANA'
-                        ? 'bg-amber-100 text-amber-800 border-amber-200'
-                        : 'bg-rose-100 text-rose-800 border-rose-200';
+                      : 'bg-rose-100 text-rose-800 border-rose-200';
 
                   return (
                     <tr key={r.id} className="hover:bg-slate-50/80 transition">
@@ -913,13 +911,8 @@ export function AtcLlamadasView({
 
                       <td className="py-2.5 px-2 whitespace-nowrap">
                         <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${matchBadge}`}>
-                          {r.tipo_match}
+                          {r.tiene_orden === 1 ? r.tipo_match : 'SIN_TICKET'}
                         </span>
-                        {r.dias_diferencia !== null && r.dias_diferencia !== undefined && (
-                          <div className="text-[10px] text-slate-500 mt-0.5 font-semibold">
-                            {r.dias_diferencia >= 0 ? `+${r.dias_diferencia}` : r.dias_diferencia} días vs OT
-                          </div>
-                        )}
                       </td>
 
                       <td className="py-2.5 px-2 whitespace-nowrap">
