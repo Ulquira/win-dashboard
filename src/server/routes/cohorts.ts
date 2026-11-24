@@ -502,7 +502,7 @@ async function queryAtcCohortImpact(
   }
 
   const virtualTipoSql = getVirtualTipoOperacionSql('v');
-  const allowedVtSql = `(${virtualTipoSql}) IN ('AVER - LIMA', 'AVER - PROV', 'POSTVENTA', 'GARANTIA', 'REITERADA')`;
+  const allowedVtSql = `(${virtualTipoSql}) IN ('AVER - LIMA', 'AVER - PROV', 'GARANTIA', 'REITERADA')`;
   const extraWhereClauses: string[] = [];
   const extraWhereParams: any[] = [];
 
@@ -529,9 +529,23 @@ async function queryAtcCohortImpact(
   const extraWhereSql = extraWhereClauses.length > 0 ? `AND ${extraWhereClauses.join(' AND ')}` : '';
   const vtRegex = `VISITA|VT|INSTAL|TECNIC|TÉCNIC|AVERIA|AVERÍA|AGENDA|ORDEN|REPROGRAM`;
 
-  const callDateFilterM = isAllHistory ? '' : `AND m.fecha_llamada >= ? AND m.fecha_llamada <= ?`;
-  const callDateFilterM2 = isAllHistory ? '' : `AND m2.fecha_llamada >= ? AND m2.fecha_llamada <= ?`;
-  const callDateParams = isAllHistory ? [] : [effStart, effEnd];
+  // En Todo el Histórico incluye toda orden con llamada para cuadrar 1:1 con ATC Llamadas;
+  // en Rango de Fechas evalúa estrictamente las OTs solicitadas en esas fechas sin sesgo de días previos.
+  const orderScopeWhereSql = isAllHistory
+    ? `(
+        (v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?)
+        OR v.orden_id IN (
+          SELECT DISTINCT m2.orden_id
+          FROM mat_atc_llamadas_360 m2
+          WHERE m2.orden_id IS NOT NULL AND m2.tiene_orden = 1
+        )
+      )`
+    : `(v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?)`;
+
+  const motivoDateWhereSql = isAllHistory
+    ? ``
+    : `AND v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?`;
+  const motivoDateParams = isAllHistory ? [] : [effStart, effEnd];
 
   const [orderCellsRes, motivoCellsRes, atcPeriodCntRes]: any = await Promise.all([
     pool.query(
@@ -568,19 +582,9 @@ async function queryAtcCohortImpact(
         FROM mat_atc_llamadas_360 m
         WHERE m.orden_id IS NOT NULL
           AND m.tiene_orden = 1
-          ${callDateFilterM}
         GROUP BY m.orden_id
       ) a ON a.orden_id = v.orden_id
-      WHERE (
-        (v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?)
-        OR v.orden_id IN (
-          SELECT DISTINCT m2.orden_id
-          FROM mat_atc_llamadas_360 m2
-          WHERE m2.orden_id IS NOT NULL
-            AND m2.tiene_orden = 1
-            ${callDateFilterM2}
-        )
-      )
+      WHERE ${orderScopeWhereSql}
         AND ${allowedVtSql}
         ${extraWhereSql}
       GROUP BY
@@ -590,7 +594,7 @@ async function queryAtcCohortImpact(
         con_wsp_flag,
         cohorte_3
       `,
-      [...callDateParams, effStart, effEnd, ...callDateParams, ...extraWhereParams]
+      [effStart, effEnd, ...extraWhereParams]
     ),
     pool.query(
       `
@@ -611,7 +615,7 @@ async function queryAtcCohortImpact(
       FROM mat_atc_llamadas_360 m
       INNER JOIN mat_funnel_casos_360 v ON v.orden_id = m.orden_id
       WHERE m.tiene_orden = 1
-        ${callDateFilterM}
+        ${motivoDateWhereSql}
         AND ${allowedVtSql}
         ${extraWhereSql}
       GROUP BY
@@ -621,13 +625,19 @@ async function queryAtcCohortImpact(
         motivo_clean,
         is_vt_flag
       `,
-      [...callDateParams, ...extraWhereParams]
+      [...motivoDateParams, ...extraWhereParams]
     ),
     pool.query(
-      isAllHistory
-        ? `SELECT COUNT(*) AS cnt FROM mat_atc_llamadas_360`
-        : `SELECT COUNT(*) AS cnt FROM mat_atc_llamadas_360 WHERE fecha_llamada >= ? AND fecha_llamada <= ?`,
-      callDateParams
+      `
+      SELECT COUNT(*) AS cnt
+      FROM mat_atc_llamadas_360 m
+      INNER JOIN mat_funnel_casos_360 v ON v.orden_id = m.orden_id
+      WHERE m.tiene_orden = 1
+        ${motivoDateWhereSql}
+        AND ${allowedVtSql}
+        ${extraWhereSql}
+      `,
+      [...motivoDateParams, ...extraWhereParams]
     ),
   ]);
 
@@ -1175,7 +1185,7 @@ router.get('/cohorts/atc-impact', async (req: Request, res: Response) => {
 
   const service = enforceRoleServiceScope(req, rawService);
   const searchQ = String(q || '').trim();
-  const cacheKey = `cohorts_atc_v6_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
+  const cacheKey = `cohorts_atc_v7_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
 
   try {
     await loadTipoServicioCacheIfNeeded();
