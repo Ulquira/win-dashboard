@@ -438,13 +438,15 @@ async function queryCohortDataset(
   };
 }
 
+// ============================================================================
+// SEGMENTO: MOTOR SQL DE DEFLEXIÓN ATC RECONCILIADO CON mat_atc_llamadas_360
+// ============================================================================
 async function queryAtcCohortImpact(
   startDate: string,
   endDate: string,
   service: string,
   searchQ: string,
-  ignoreDates: string,
-  windowDays: number = 3
+  ignoreDates: string
 ) {
   let atcMinDate: string | null = null;
   let atcMaxDate: string | null = null;
@@ -457,7 +459,6 @@ async function queryAtcCohortImpact(
         MAX(DATE_FORMAT(fecha_llamada, '%Y-%m-%d')) AS max_d,
         COUNT(*) AS total_atc
       FROM mat_atc_llamadas_360
-      WHERE fecha_llamada IS NOT NULL
     `);
     const b = boundsRows?.[0];
     atcMinDate = b?.min_d || null;
@@ -467,7 +468,6 @@ async function queryAtcCohortImpact(
     return {
       ok: true,
       hasAtcData: false,
-      windowDays,
       totalAtcInPeriod: 0,
       atcCoverageRange: null,
       orderCells: [],
@@ -479,7 +479,6 @@ async function queryAtcCohortImpact(
     return {
       ok: true,
       hasAtcData: false,
-      windowDays,
       totalAtcInPeriod: 0,
       atcCoverageRange: null,
       orderCells: [],
@@ -487,15 +486,14 @@ async function queryAtcCohortImpact(
     };
   }
 
-  // Acotar el universo de órdenes al periodo real donde existe data en mat_atc_llamadas_360
-  let effStart = ignoreDates === 'true' ? atcMinDate : startDate < atcMinDate ? atcMinDate : startDate;
-  let effEnd = ignoreDates === 'true' ? atcMaxDate : endDate > atcMaxDate ? atcMaxDate : endDate;
+  const isAllHistory = ignoreDates === 'true';
+  const effStart = isAllHistory ? atcMinDate : startDate < atcMinDate ? atcMinDate : startDate;
+  const effEnd = isAllHistory ? atcMaxDate : endDate > atcMaxDate ? atcMaxDate : endDate;
 
   if (effStart > effEnd) {
     return {
       ok: true,
       hasAtcData: false,
-      windowDays,
       totalAtcInPeriod: 0,
       atcCoverageRange: { minDate: atcMinDate, maxDate: atcMaxDate, effStart, effEnd },
       orderCells: [],
@@ -504,6 +502,7 @@ async function queryAtcCohortImpact(
   }
 
   const virtualTipoSql = getVirtualTipoOperacionSql('v');
+  const allowedVtSql = `(${virtualTipoSql}) IN ('AVER - LIMA', 'AVER - PROV', 'POSTVENTA', 'GARANTIA', 'REITERADA')`;
   const extraWhereClauses: string[] = [];
   const extraWhereParams: any[] = [];
 
@@ -530,6 +529,10 @@ async function queryAtcCohortImpact(
   const extraWhereSql = extraWhereClauses.length > 0 ? `AND ${extraWhereClauses.join(' AND ')}` : '';
   const vtRegex = `VISITA|VT|INSTAL|TECNIC|TÉCNIC|AVERIA|AVERÍA|AGENDA|ORDEN|REPROGRAM`;
 
+  const callDateFilterM = isAllHistory ? '' : `AND m.fecha_llamada >= ? AND m.fecha_llamada <= ?`;
+  const callDateFilterM2 = isAllHistory ? '' : `AND m2.fecha_llamada >= ? AND m2.fecha_llamada <= ?`;
+  const callDateParams = isAllHistory ? [] : [effStart, effEnd];
+
   const [orderCellsRes, motivoCellsRes, atcPeriodCntRes]: any = await Promise.all([
     pool.query(
       `
@@ -540,6 +543,7 @@ async function queryAtcCohortImpact(
         YEARWEEK(v.fecha_solicitud_dia, 1) AS yw,
         ${virtualTipoSql} AS tipo_operacion_virtual,
         COALESCE(NULLIF(TRIM(v.ambito), ''), IF(UPPER(TRIM(COALESCE(v.sector_operativo, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(v.region, ''))) = 'LIMA', 'LIMA', 'PROVINCIA')) AS ambito_clean,
+        CASE WHEN v.se_envio_wsp = 'SI' THEN 1 ELSE 0 END AS con_wsp_flag,
         CASE
           WHEN v.ingreso_tracking = 'SI' THEN 'INGRESO'
           WHEN v.se_envio_wsp = 'SI' THEN 'WSP_SIN_INGRESO'
@@ -564,8 +568,7 @@ async function queryAtcCohortImpact(
         FROM mat_atc_llamadas_360 m
         WHERE m.orden_id IS NOT NULL
           AND m.tiene_orden = 1
-          AND m.fecha_llamada >= ?
-          AND m.fecha_llamada <= ?
+          ${callDateFilterM}
         GROUP BY m.orden_id
       ) a ON a.orden_id = v.orden_id
       WHERE (
@@ -575,24 +578,25 @@ async function queryAtcCohortImpact(
           FROM mat_atc_llamadas_360 m2
           WHERE m2.orden_id IS NOT NULL
             AND m2.tiene_orden = 1
-            AND m2.fecha_llamada >= ?
-            AND m2.fecha_llamada <= ?
+            ${callDateFilterM2}
         )
       )
-        AND (${virtualTipoSql}) IN ('AVER - LIMA', 'AVER - PROV', 'POSTVENTA', 'GARANTIA', 'REITERADA')
+        AND ${allowedVtSql}
         ${extraWhereSql}
       GROUP BY
         v.fecha_solicitud_dia,
         tipo_operacion_virtual,
         ambito_clean,
+        con_wsp_flag,
         cohorte_3
       `,
-      [effStart, effEnd, effStart, effEnd, effStart, effEnd, ...extraWhereParams]
+      [...callDateParams, effStart, effEnd, ...callDateParams, ...extraWhereParams]
     ),
     pool.query(
       `
       SELECT
         ${virtualTipoSql} AS tipo_operacion_virtual,
+        CASE WHEN v.se_envio_wsp = 'SI' THEN 1 ELSE 0 END AS con_wsp_flag,
         CASE
           WHEN v.ingreso_tracking = 'SI' THEN 'INGRESO'
           WHEN v.se_envio_wsp = 'SI' THEN 'WSP_SIN_INGRESO'
@@ -607,32 +611,29 @@ async function queryAtcCohortImpact(
       FROM mat_atc_llamadas_360 m
       INNER JOIN mat_funnel_casos_360 v ON v.orden_id = m.orden_id
       WHERE m.tiene_orden = 1
-        AND m.fecha_llamada >= ?
-        AND m.fecha_llamada <= ?
-        AND (${virtualTipoSql}) IN ('AVER - LIMA', 'AVER - PROV', 'POSTVENTA', 'GARANTIA', 'REITERADA')
+        ${callDateFilterM}
+        AND ${allowedVtSql}
         ${extraWhereSql}
       GROUP BY
         tipo_operacion_virtual,
+        con_wsp_flag,
         cohorte_3,
         motivo_clean,
         is_vt_flag
       `,
-      [effStart, effEnd, ...extraWhereParams]
+      [...callDateParams, ...extraWhereParams]
     ),
     pool.query(
-      `
-      SELECT COUNT(*) AS cnt
-      FROM mat_atc_llamadas_360
-      WHERE fecha_llamada >= ? AND fecha_llamada <= ?
-      `,
-      [effStart, effEnd]
+      isAllHistory
+        ? `SELECT COUNT(*) AS cnt FROM mat_atc_llamadas_360`
+        : `SELECT COUNT(*) AS cnt FROM mat_atc_llamadas_360 WHERE fecha_llamada >= ? AND fecha_llamada <= ?`,
+      callDateParams
     ),
   ]);
 
   return {
     ok: true,
     hasAtcData: true,
-    windowDays,
     totalAtcInPeriod: Number(atcPeriodCntRes?.[0]?.[0]?.cnt || 0),
     atcCoverageRange: {
       minDate: atcMinDate,
@@ -647,6 +648,7 @@ async function queryAtcCohortImpact(
       yw: Number(r.yw || 0),
       tipo_operacion: String(r.tipo_operacion_virtual || 'OTROS'),
       ambito: String(r.ambito_clean || 'LIMA'),
+      con_wsp: Number(r.con_wsp_flag) === 1,
       cohorte_3: String(r.cohorte_3 || 'SIN_WSP'),
       total_ordenes: Number(r.total_ordenes || 0),
       ordenes_llamaron_all: Number(r.ordenes_llamaron_all || 0),
@@ -656,6 +658,7 @@ async function queryAtcCohortImpact(
     })),
     motivoCells: (motivoCellsRes?.[0] || []).map((r: any) => ({
       tipo_operacion: String(r.tipo_operacion_virtual || 'OTROS'),
+      con_wsp: Number(r.con_wsp_flag) === 1,
       cohorte_3: String(r.cohorte_3 || 'SIN_WSP'),
       motivo: String(r.motivo_clean || 'SIN MOTIVO'),
       is_vt: Number(r.is_vt_flag) === 1,
@@ -1070,7 +1073,7 @@ router.get('/cohorts/export', async (req: Request, res: Response) => {
         ]);
       });
 
-    const atcImpact = await queryAtcCohortImpact(startDate, endDate, service, searchQ, ignoreDates, 3);
+    const atcImpact = await queryAtcCohortImpact(startDate, endDate, service, searchQ, ignoreDates);
     const atcAggMap = new Map<string, any>();
     for (const ac of atcImpact.orderCells || []) {
       const k = `${ac.mes}|${ac.tipo_operacion}|${ac.cohorte_3}`;
@@ -1167,14 +1170,12 @@ router.get('/cohorts/atc-impact', async (req: Request, res: Response) => {
     service: rawService = 'Todos los servicios',
     q = '',
     ignoreDates = 'false',
-    windowDays: rawWindow = '3',
     refresh = 'false',
   } = req.query as Record<string, string>;
 
   const service = enforceRoleServiceScope(req, rawService);
   const searchQ = String(q || '').trim();
-  const windowDays = Math.min(15, Math.max(0, Number(rawWindow) || 3));
-  const cacheKey = `cohorts_atc_v5_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
+  const cacheKey = `cohorts_atc_v6_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}`;
 
   try {
     await loadTipoServicioCacheIfNeeded();
@@ -1183,7 +1184,7 @@ router.get('/cohorts/atc-impact', async (req: Request, res: Response) => {
       cacheKey,
       120,
       refresh === 'true',
-      () => queryAtcCohortImpact(startDate, endDate, service, searchQ, ignoreDates, windowDays)
+      () => queryAtcCohortImpact(startDate, endDate, service, searchQ, ignoreDates)
     );
 
     console.log(`✅ /api/cohorts/atc-impact completado en ${Date.now() - startTime}ms`);
