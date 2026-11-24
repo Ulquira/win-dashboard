@@ -57,4 +57,5 @@ export function inFlightDelete(key: string): void {
 
 export function cacheFlushAll(): void {
   queryCache.flushAll();
+  swrMemoryCache.flushAll();
 }

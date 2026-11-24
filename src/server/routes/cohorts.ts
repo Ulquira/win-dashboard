@@ -451,7 +451,7 @@ async function queryAtcCohortImpact(
   let totalAtcInTable = 0;
 
   try {
-    const [boundsRes]: any = await pool.query(`
+    const [boundsRows]: any = await pool.query(`
       SELECT
         MIN(DATE_FORMAT(fecha_llamada, '%Y-%m-%d')) AS min_d,
         MAX(DATE_FORMAT(fecha_llamada, '%Y-%m-%d')) AS max_d,
@@ -459,7 +459,7 @@ async function queryAtcCohortImpact(
       FROM mat_atc_llamadas_360
       WHERE fecha_llamada IS NOT NULL
     `);
-    const b = boundsRes?.[0]?.[0];
+    const b = boundsRows?.[0];
     atcMinDate = b?.min_d || null;
     atcMaxDate = b?.max_d || null;
     totalAtcInTable = Number(b?.total_atc || 0);
@@ -1078,7 +1078,8 @@ router.get('/cohorts/export', async (req: Request, res: Response) => {
       cur.total_llamadas_all += ac.total_llamadas_all;
       cur.ordenes_llamaron_vt += ac.ordenes_llamaron_vt;
       cur.total_llamadas_vt += ac.total_llamadas_vt;
-      atcAggMap.set(k, cur);
+      atcAggMap.set(k, cur);// NUEVO CÓDIGO A REEMPLAZAR:
+      
     }
 
     const sheet6Rows: (string | number)[][] = [
@@ -1162,7 +1163,7 @@ router.get('/cohorts/atc-impact', async (req: Request, res: Response) => {
   const service = enforceRoleServiceScope(req, rawService);
   const searchQ = String(q || '').trim();
   const windowDays = Math.min(15, Math.max(0, Number(rawWindow) || 3));
-  const cacheKey = `cohorts_atc_v2_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}_${windowDays}`;
+  const cacheKey = `cohorts_atc_v3_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}_${windowDays}`;
 
   try {
     await loadTipoServicioCacheIfNeeded();
