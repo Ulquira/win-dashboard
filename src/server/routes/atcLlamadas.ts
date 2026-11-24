@@ -215,7 +215,7 @@ export async function rebuildMatAtcLlamadas360(): Promise<{
   }
 
   const virtualTipoSql = getVirtualTipoOperacionSql('v');
-  const allowedVtFilter = `(${virtualTipoSql}) IN ('AVER - LIMA', 'AVER - PROV', 'GARANTIA', 'REITERADA')`;
+  const allowedVtFilter = `(${virtualTipoSql}) IN ('AVER - LIMA', 'AVER - PROV', 'POSTVENTA', 'GARANTIA', 'REITERADA')`;
   const orderWhere =
     minCallDate <= maxCallDate
       ? `WHERE ${allowedVtFilter} AND v.fecha_solicitud_dia >= DATE_SUB(?, INTERVAL 45 DAY) AND v.fecha_solicitud_dia <= DATE_ADD(?, INTERVAL 15 DAY)`
