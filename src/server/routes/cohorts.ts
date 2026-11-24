@@ -446,33 +446,70 @@ async function queryAtcCohortImpact(
   ignoreDates: string,
   windowDays: number = 3
 ) {
-  // Verificar si existe atc_llamadas antes de cruzar
+  let atcMinDate: string | null = null;
+  let atcMaxDate: string | null = null;
+  let totalAtcInTable = 0;
+
   try {
-    await pool.query(`SELECT 1 FROM atc_llamadas LIMIT 1`);
+    const [boundsRes]: any = await pool.query(`
+      SELECT
+        MIN(DATE_FORMAT(fecha_llamada, '%Y-%m-%d')) AS min_d,
+        MAX(DATE_FORMAT(fecha_llamada, '%Y-%m-%d')) AS max_d,
+        COUNT(*) AS total_atc
+      FROM mat_atc_llamadas_360
+      WHERE fecha_llamada IS NOT NULL
+    `);
+    const b = boundsRes?.[0]?.[0];
+    atcMinDate = b?.min_d || null;
+    atcMaxDate = b?.max_d || null;
+    totalAtcInTable = Number(b?.total_atc || 0);
   } catch {
     return {
       ok: true,
       hasAtcData: false,
       windowDays,
+      totalAtcInPeriod: 0,
+      atcCoverageRange: null,
       orderCells: [],
       motivoCells: [],
     };
   }
 
-  const whereClauses: string[] = [];
-  const queryParams: any[] = [];
-
-  if (ignoreDates !== 'true') {
-    whereClauses.push(`v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?`);
-    queryParams.push(startDate, endDate);
-  } else {
-    whereClauses.push(`v.fecha_solicitud_dia IS NOT NULL`);
+  if (!atcMinDate || !atcMaxDate || totalAtcInTable === 0) {
+    return {
+      ok: true,
+      hasAtcData: false,
+      windowDays,
+      totalAtcInPeriod: 0,
+      atcCoverageRange: null,
+      orderCells: [],
+      motivoCells: [],
+    };
   }
+
+  // Acotar el universo de órdenes al periodo real donde existe data en mat_atc_llamadas_360
+  let effStart = ignoreDates === 'true' ? atcMinDate : startDate < atcMinDate ? atcMinDate : startDate;
+  let effEnd = ignoreDates === 'true' ? atcMaxDate : endDate > atcMaxDate ? atcMaxDate : endDate;
+
+  if (effStart > effEnd) {
+    return {
+      ok: true,
+      hasAtcData: false,
+      windowDays,
+      totalAtcInPeriod: 0,
+      atcCoverageRange: { minDate: atcMinDate, maxDate: atcMaxDate, effStart, effEnd },
+      orderCells: [],
+      motivoCells: [],
+    };
+  }
+
+  const whereClauses: string[] = [`v.fecha_solicitud_dia >= ? AND v.fecha_solicitud_dia <= ?`];
+  const whereParams: any[] = [effStart, effEnd];
 
   const srvFilter = buildStrictOrderTypeSql(service, getServicioToTipoMap(), 'v.tipo_operacion');
   if (srvFilter.params.length > 0) {
     whereClauses.push(srvFilter.sql);
-    queryParams.push(...srvFilter.params);
+    whereParams.push(...srvFilter.params);
   }
 
   if (searchQ) {
@@ -486,228 +523,133 @@ async function queryAtcCohortImpact(
       v.ops_cuadrilla LIKE ? OR
       v.ops_partner LIKE ?
     )`);
-    queryParams.push(likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ);
+    whereParams.push(likeQ, likeQ, likeQ, likeQ, likeQ, likeQ, likeQ);
   }
 
-  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+  const whereSql = `WHERE ${whereClauses.join(' AND ')}`;
   const virtualTipoSql = getVirtualTipoOperacionSql('v');
+  const vtRegex = `VISITA|VT|INSTAL|TECNIC|TÉCNIC|AVERIA|AVERÍA|AGENDA|ORDEN|REPROGRAM`;
 
-  const callWhereSql =
-    ignoreDates !== 'true'
-      ? `WHERE a.fecha >= ? AND a.fecha <= DATE_ADD(?, INTERVAL ? DAY)`
-      : `WHERE a.fecha IS NOT NULL`;
-  const callParams = ignoreDates !== 'true' ? [startDate, endDate, windowDays] : [];
-
-  const [ordersRes, callsRes]: any = await Promise.all([
+  const [orderCellsRes, motivoCellsRes, atcPeriodCntRes]: any = await Promise.all([
     pool.query(
       `
       SELECT
-        v.orden_id,
         DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m-%d') AS raw_date,
         DATE_FORMAT(v.fecha_solicitud_dia, '%d/%m') AS fecha_corta,
         DATE_FORMAT(v.fecha_solicitud_dia, '%Y-%m') AS mes,
         YEARWEEK(v.fecha_solicitud_dia, 1) AS yw,
-        ${virtualTipoSql} AS tipo_operacion,
-        COALESCE(NULLIF(TRIM(v.ambito), ''), IF(UPPER(TRIM(COALESCE(v.sector_operativo, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(v.region, ''))) = 'LIMA', 'LIMA', 'PROVINCIA')) AS ambito,
+        ${virtualTipoSql} AS tipo_operacion_virtual,
+        COALESCE(NULLIF(TRIM(v.ambito), ''), IF(UPPER(TRIM(COALESCE(v.sector_operativo, ''))) LIKE 'LIMA%' OR UPPER(TRIM(COALESCE(v.region, ''))) = 'LIMA', 'LIMA', 'PROVINCIA')) AS ambito_clean,
         CASE
           WHEN v.ingreso_tracking = 'SI' THEN 'INGRESO'
           WHEN v.se_envio_wsp = 'SI' THEN 'WSP_SIN_INGRESO'
           ELSE 'SIN_WSP'
         END AS cohorte_3,
-        TRIM(COALESCE(v.ops_num_doc, '')) AS dni,
-        RIGHT(REPLACE(REPLACE(TRIM(COALESCE(v.telefono, '')), ' ', ''), '+', ''), 9) AS phone9
+        COUNT(*) AS total_ordenes,
+        COALESCE(SUM(CASE WHEN a.calls_all > 0 THEN 1 ELSE 0 END), 0) AS ordenes_llamaron_all,
+        COALESCE(SUM(COALESCE(a.calls_all, 0)), 0) AS total_llamadas_all,
+        COALESCE(SUM(CASE WHEN a.calls_vt > 0 THEN 1 ELSE 0 END), 0) AS ordenes_llamaron_vt,
+        COALESCE(SUM(COALESCE(a.calls_vt, 0)), 0) AS total_llamadas_vt
       FROM mat_funnel_casos_360 v
+      LEFT JOIN (
+        SELECT
+          m.orden_id,
+          COUNT(*) AS calls_all,
+          SUM(
+            CASE
+              WHEN UPPER(CONCAT(COALESCE(m.tipo_llamada, ''), ' ', COALESCE(m.motivo_llamada, ''))) REGEXP '${vtRegex}'
+              THEN 1 ELSE 0
+            END
+          ) AS calls_vt
+        FROM mat_atc_llamadas_360 m
+        WHERE m.orden_id IS NOT NULL
+          AND m.tiene_orden = 1
+          AND (m.dias_diferencia IS NULL OR (m.dias_diferencia >= -1 AND m.dias_diferencia <= ?))
+          AND m.fecha_llamada >= DATE_SUB(?, INTERVAL 1 DAY)
+          AND m.fecha_llamada <= DATE_ADD(?, INTERVAL ? DAY)
+        GROUP BY m.orden_id
+      ) a ON a.orden_id = v.orden_id
       ${whereSql}
+      GROUP BY
+        v.fecha_solicitud_dia,
+        tipo_operacion_virtual,
+        ambito_clean,
+        cohorte_3
       `,
-      queryParams
+      [windowDays, effStart, effEnd, windowDays, ...whereParams]
     ),
     pool.query(
       `
       SELECT
-        a.id,
-        DATE_FORMAT(a.fecha, '%Y-%m-%d') AS call_date,
-        TRIM(COALESCE(a.dni_cliente, '')) AS dni,
-        RIGHT(REPLACE(REPLACE(TRIM(COALESCE(a.telf_cliente, '')), ' ', ''), '+', ''), 9) AS phone9,
-        COALESCE(NULLIF(TRIM(a.tipo), ''), 'SIN TIPO') AS tipo,
-        COALESCE(NULLIF(TRIM(a.motivo), ''), 'SIN MOTIVO') AS motivo
-      FROM atc_llamadas a
-      ${callWhereSql}
+        ${virtualTipoSql} AS tipo_operacion_virtual,
+        CASE
+          WHEN v.ingreso_tracking = 'SI' THEN 'INGRESO'
+          WHEN v.se_envio_wsp = 'SI' THEN 'WSP_SIN_INGRESO'
+          ELSE 'SIN_WSP'
+        END AS cohorte_3,
+        COALESCE(NULLIF(TRIM(m.motivo_llamada), ''), 'SIN MOTIVO') AS motivo_clean,
+        CASE
+          WHEN UPPER(CONCAT(COALESCE(m.tipo_llamada, ''), ' ', COALESCE(m.motivo_llamada, ''))) REGEXP '${vtRegex}'
+          THEN 1 ELSE 0
+        END AS is_vt_flag,
+        COUNT(*) AS llamadas
+      FROM mat_atc_llamadas_360 m
+      INNER JOIN mat_funnel_casos_360 v ON v.orden_id = m.orden_id
+      ${whereSql}
+        AND m.tiene_orden = 1
+        AND (m.dias_diferencia IS NULL OR (m.dias_diferencia >= -1 AND m.dias_diferencia <= ?))
+        AND m.fecha_llamada >= DATE_SUB(?, INTERVAL 1 DAY)
+        AND m.fecha_llamada <= DATE_ADD(?, INTERVAL ? DAY)
+      GROUP BY
+        tipo_operacion_virtual,
+        cohorte_3,
+        motivo_clean,
+        is_vt_flag
       `,
-      callParams
+      [...whereParams, windowDays, effStart, effEnd, windowDays]
+    ),
+    pool.query(
+      `
+      SELECT COUNT(*) AS cnt
+      FROM mat_atc_llamadas_360
+      WHERE fecha_llamada >= ? AND fecha_llamada <= ?
+      `,
+      [effStart, effEnd]
     ),
   ]);
-
-  const orders: any[] = ordersRes?.[0] || [];
-  const calls: any[] = callsRes?.[0] || [];
-
-  if (calls.length === 0) {
-    return {
-      ok: true,
-      hasAtcData: false,
-      windowDays,
-      totalAtcInPeriod: 0,
-      orderCells: [],
-      motivoCells: [],
-    };
-  }
-
-  const parseDayEpoch = (ymd: string): number => {
-    if (!ymd || ymd.length < 10) return NaN;
-    return Math.floor(Date.parse(`${ymd}T00:00:00Z`) / 86400000);
-  };
-
-  interface CallItem {
-    id: number;
-    dayNum: number;
-    motivo: string;
-    tipo: string;
-    isVtMotivo: boolean;
-  }
-
-  const byDni = new Map<string, CallItem[]>();
-  const byPhone = new Map<string, CallItem[]>();
-
-  for (const c of calls) {
-    const dayNum = parseDayEpoch(c.call_date);
-    if (Number.isNaN(dayNum)) continue;
-
-    const motUpper = `${c.tipo} ${c.motivo}`.toUpperCase();
-    const isVtMotivo =
-      motUpper.includes('VISITA') ||
-      motUpper.includes('VT') ||
-      motUpper.includes('INSTAL') ||
-      motUpper.includes('TECNIC') ||
-      motUpper.includes('TÉCNIC') ||
-      motUpper.includes('AVERIA') ||
-      motUpper.includes('AVERÍA') ||
-      motUpper.includes('AGENDA') ||
-      motUpper.includes('ORDEN') ||
-      motUpper.includes('REPROGRAM');
-
-    const item: CallItem = {
-      id: Number(c.id),
-      dayNum,
-      motivo: c.motivo,
-      tipo: c.tipo,
-      isVtMotivo,
-    };
-
-    const cleanDni = String(c.dni || '').replace(/^0+/, '');
-    if (cleanDni.length >= 6) {
-      let arr = byDni.get(cleanDni);
-      if (!arr) {
-        arr = [];
-        byDni.set(cleanDni, arr);
-      }
-      arr.push(item);
-    }
-
-    const p9 = String(c.phone9 || '').replace(/\D/g, '');
-    if (p9.length === 9) {
-      let arr = byPhone.get(p9);
-      if (!arr) {
-        arr = [];
-        byPhone.set(p9, arr);
-      }
-      arr.push(item);
-    }
-  }
-
-  const cellMap = new Map<string, any>();
-  const motivoMap = new Map<string, any>();
-
-  for (const o of orders) {
-    const ordDay = parseDayEpoch(o.raw_date);
-    if (Number.isNaN(ordDay)) continue;
-
-    const matchedMap = new Map<number, CallItem>();
-    const cleanDni = String(o.dni || '').replace(/^0+/, '');
-    const p9 = String(o.phone9 || '').replace(/\D/g, '');
-
-    if (cleanDni.length >= 6) {
-      const list = byDni.get(cleanDni);
-      if (list) {
-        for (const cl of list) {
-          if (cl.dayNum >= ordDay && cl.dayNum <= ordDay + windowDays) {
-            matchedMap.set(cl.id, cl);
-          }
-        }
-      }
-    }
-
-    if (p9.length === 9) {
-      const list = byPhone.get(p9);
-      if (list) {
-        for (const cl of list) {
-          if (cl.dayNum >= ordDay && cl.dayNum <= ordDay + windowDays) {
-            matchedMap.set(cl.id, cl);
-          }
-        }
-      }
-    }
-
-    let callsAll = 0;
-    let callsVt = 0;
-
-    if (matchedMap.size > 0) {
-      for (const cl of matchedMap.values()) {
-        callsAll++;
-        if (cl.isVtMotivo) callsVt++;
-
-        const mKey = `${o.tipo_operacion}|${o.cohorte_3}|${cl.motivo}|${cl.isVtMotivo ? 1 : 0}`;
-        let mNode = motivoMap.get(mKey);
-        if (!mNode) {
-          mNode = {
-            tipo_operacion: o.tipo_operacion,
-            cohorte_3: o.cohorte_3,
-            motivo: cl.motivo,
-            is_vt: cl.isVtMotivo,
-            llamadas: 0,
-          };
-          motivoMap.set(mKey, mNode);
-        }
-        mNode.llamadas++;
-      }
-    }
-
-    const cKey = `${o.raw_date}|${o.tipo_operacion}|${o.ambito}|${o.cohorte_3}`;
-    let cell = cellMap.get(cKey);
-    if (!cell) {
-      cell = {
-        raw_date: o.raw_date,
-        fecha_corta: o.fecha_corta,
-        mes: o.mes,
-        yw: Number(o.yw || 0),
-        tipo_operacion: o.tipo_operacion,
-        ambito: o.ambito,
-        cohorte_3: o.cohorte_3,
-        total_ordenes: 0,
-        ordenes_llamaron_all: 0,
-        total_llamadas_all: 0,
-        ordenes_llamaron_vt: 0,
-        total_llamadas_vt: 0,
-      };
-      cellMap.set(cKey, cell);
-    }
-
-    cell.total_ordenes++;
-    if (callsAll > 0) {
-      cell.ordenes_llamaron_all++;
-      cell.total_llamadas_all += callsAll;
-    }
-    if (callsVt > 0) {
-      cell.ordenes_llamaron_vt++;
-      cell.total_llamadas_vt += callsVt;
-    }
-  }
 
   return {
     ok: true,
     hasAtcData: true,
     windowDays,
-    totalAtcInPeriod: calls.length,
-    orderCells: Array.from(cellMap.values()),
-    motivoCells: Array.from(motivoMap.values()),
+    totalAtcInPeriod: Number(atcPeriodCntRes?.[0]?.[0]?.cnt || 0),
+    atcCoverageRange: {
+      minDate: atcMinDate,
+      maxDate: atcMaxDate,
+      effStart,
+      effEnd,
+    },
+    orderCells: (orderCellsRes?.[0] || []).map((r: any) => ({
+      raw_date: r.raw_date,
+      fecha_corta: r.fecha_corta,
+      mes: r.mes,
+      yw: Number(r.yw || 0),
+      tipo_operacion: String(r.tipo_operacion_virtual || 'OTROS'),
+      ambito: String(r.ambito_clean || 'LIMA'),
+      cohorte_3: String(r.cohorte_3 || 'SIN_WSP'),
+      total_ordenes: Number(r.total_ordenes || 0),
+      ordenes_llamaron_all: Number(r.ordenes_llamaron_all || 0),
+      total_llamadas_all: Number(r.total_llamadas_all || 0),
+      ordenes_llamaron_vt: Number(r.ordenes_llamaron_vt || 0),
+      total_llamadas_vt: Number(r.total_llamadas_vt || 0),
+    })),
+    motivoCells: (motivoCellsRes?.[0] || []).map((r: any) => ({
+      tipo_operacion: String(r.tipo_operacion_virtual || 'OTROS'),
+      cohorte_3: String(r.cohorte_3 || 'SIN_WSP'),
+      motivo: String(r.motivo_clean || 'SIN MOTIVO'),
+      is_vt: Number(r.is_vt_flag) === 1,
+      llamadas: Number(r.llamadas || 0),
+    })),
   };
 }
 
@@ -1220,7 +1162,7 @@ router.get('/cohorts/atc-impact', async (req: Request, res: Response) => {
   const service = enforceRoleServiceScope(req, rawService);
   const searchQ = String(q || '').trim();
   const windowDays = Math.min(15, Math.max(0, Number(rawWindow) || 3));
-  const cacheKey = `cohorts_atc_v1_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}_${windowDays}`;
+  const cacheKey = `cohorts_atc_v2_${startDate}_${endDate}_${service}_${searchQ}_${ignoreDates}_${windowDays}`;
 
   try {
     await loadTipoServicioCacheIfNeeded();

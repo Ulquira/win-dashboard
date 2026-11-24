@@ -1472,8 +1472,8 @@ export function CohortComparisonView({
                       Separa cuánto reduce llamadas el simple mensaje proactivo de WhatsApp frente a cuando el cliente abre e interactúa con el link de seguimiento
                     </p>
                   </div>
-                  <span className="text-[11px] font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
-                    {fmt(atcComputed.totalAtcInPeriod)} registros ATC evaluados en ventana 0 a +{windowDays}d
+                  <span className="text-[11px] font-bold text-slate-600 bg-orange-50 border border-orange-200 px-3 py-1 rounded-full">
+                    Periodo acotado ATC: {atcImpactData?.atcCoverageRange?.effStart} al {atcImpactData?.atcCoverageRange?.effEnd} • {fmt(atcComputed.totalAtcInPeriod)} llamadas (ventana -1 a +{windowDays}d)
                   </span>
                 </div>
 
